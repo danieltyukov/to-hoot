@@ -7,3 +7,4 @@ export * from './replay.js';
 export * from './tick.js';
 export * from './idle.js';
 export * from './tracking.js';
+export * from './selectors.js';
