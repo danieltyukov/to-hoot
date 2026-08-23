@@ -31,7 +31,7 @@ export class Tracker {
   private readonly idleThresholdMs: number;
   private readonly newId: () => string;
   private current: string | null = null;
-  private gap: IdleGap | null = null;
+  private gaps: IdleGap[] = [];
 
   constructor(opts: TrackerOptions) {
     this.deviceId = opts.deviceId;
@@ -77,10 +77,13 @@ export class Tracker {
    * user may return to a different task than the one that was running.
    */
   detectIdle(delta: number): IdleGap | null {
-    const gap = detectIdleGap(delta, this.idleThresholdMs, this.current);
+    const gap = detectIdleGap(delta, this.idleThresholdMs, this.current, this.today());
     if (gap === null) return null;
     this.ticker.reset();
-    this.gap = null;
+    // An explicit signal (the desktop's OS idle report) covers the same stretch
+    // of wall clock the ticker was inferring from, so its gaps are superseded
+    // rather than credited twice.
+    this.gaps = [];
     return gap;
   }
 
@@ -90,9 +93,7 @@ export class Tracker {
    * `onTick` routes it here instead of banking it.
    */
   takeGap(): IdleGap | null {
-    const gap = this.gap;
-    this.gap = null;
-    return gap;
+    return this.gaps.shift() ?? null;
   }
 
   /**
@@ -104,7 +105,28 @@ export class Tracker {
     if (taskId === null) return [];
     const target = taskId ?? gap.taskId;
     if (!target || !Number.isFinite(gap.ms) || gap.ms <= 0) return [];
-    return [this.timeDelta(target, this.ticker.dayOf(this.nowFn()), gap.ms)];
+    return [this.timeDelta(target, gap.day, gap.ms)];
+  }
+
+  /**
+   * Holds a gap for the caller to ask about. A second unanswered gap on the
+   * same task and day extends the first rather than replacing it: replacing
+   * would drop the earlier stretch, which is the same silent loss the whole
+   * idle path exists to prevent. Gaps on different tasks stay separate, because
+   * merging them would credit one task's time to another.
+   */
+  private recordGap(gap: IdleGap | null): void {
+    if (gap === null) return;
+    const last = this.gaps[this.gaps.length - 1];
+    if (last !== undefined && last.taskId === gap.taskId && last.day === gap.day) {
+      last.ms += gap.ms;
+      return;
+    }
+    this.gaps.push(gap);
+  }
+
+  private today(): string {
+    return this.ticker.dayOf(this.nowFn());
   }
 
   private flush(): Event[] {
@@ -113,7 +135,7 @@ export class Tracker {
     if (tick.delta >= this.idleThresholdMs) {
       // Not work: the machine slept or the app was suspended. Hold it as a gap
       // for the caller to ask about rather than banking it silently.
-      this.gap = detectIdleGap(tick.delta, this.idleThresholdMs, this.current);
+      this.recordGap(detectIdleGap(tick.delta, this.idleThresholdMs, this.current, tick.day));
       return [];
     }
     return [this.timeDelta(this.current, tick.day, tick.delta)];

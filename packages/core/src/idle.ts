@@ -9,6 +9,12 @@ export interface IdleGap {
   ms: number;
   /** Captured when the gap was detected, not when it is answered. */
   taskId: string;
+  /**
+   * The logical day the gap was detected on. Captured for the same reason as
+   * the task id: the user may answer the question after midnight, and the time
+   * belongs to the day it was spent.
+   */
+  day: string;
 }
 
 /**
@@ -23,10 +29,11 @@ export function detectIdleGap(
   deltaMs: number,
   thresholdMs: number,
   taskId: string | null,
+  day: string,
 ): IdleGap | null {
   if (taskId === null) return null;
   if (!Number.isFinite(deltaMs) || deltaMs <= 0) return null;
   if (!Number.isFinite(thresholdMs) || thresholdMs <= 0) return null;
   if (deltaMs < thresholdMs) return null;
-  return { ms: deltaMs, taskId };
+  return { ms: deltaMs, taskId, day };
 }

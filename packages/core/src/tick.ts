@@ -5,7 +5,10 @@ export interface Tick {
   delta: number;
   /** The logical day the tick landed in, "YYYY-MM-DD". */
   day: string;
-  /** The clock reading the tick was taken at. */
+  /**
+   * The clock reading the tick was taken at, always finite: a bad reading
+   * reports the last good one, and 0 if there has never been one.
+   */
   now: number;
 }
 
@@ -30,7 +33,8 @@ export class Ticker {
     /** Shifts the day boundary, so a late night still counts as the day before. */
     private dayOffsetMs = 0,
   ) {
-    this.last = nowFn();
+    const first = nowFn();
+    this.last = Number.isFinite(first) ? first : 0;
   }
 
   consume(): Tick {
@@ -39,7 +43,7 @@ export class Ticker {
     if (!Number.isFinite(delta) || delta < 0) delta = 0;
     const stamp = Number.isFinite(now) ? now : this.last;
     this.last = stamp;
-    return { delta, day: dayStr(stamp, this.dayOffsetMs), now };
+    return { delta, day: dayStr(stamp, this.dayOffsetMs), now: stamp };
   }
 
   /** The logical day a clock reading falls in, under this ticker's offset. */

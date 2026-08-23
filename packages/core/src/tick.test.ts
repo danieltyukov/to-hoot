@@ -40,3 +40,23 @@ describe('Ticker', () => {
     expect(t.consume().delta).toBe(1_000);
   });
 });
+
+describe('Ticker non-finite clock', () => {
+  it('never reports a non-finite now, because a NaN that reaches storage zeroes a day', () => {
+    const broken = new Ticker(() => NaN);
+    const tick = broken.consume();
+    expect(tick.delta).toBe(0);
+    expect(Number.isFinite(tick.now)).toBe(true);
+    expect(tick.day).not.toContain('NaN');
+  });
+
+  it('reports the last good reading when the clock goes bad mid-run', () => {
+    let now: number = 1_000_000;
+    const t = new Ticker(() => now);
+    t.consume();
+    now = NaN;
+    const tick = t.consume();
+    expect(tick.delta).toBe(0);
+    expect(tick.now).toBe(1_000_000);
+  });
+});

@@ -79,7 +79,7 @@ describe('Tracker', () => {
     const evs: Event[] = [...h.tracker.start('t1')];
     h.advance(20 * 60_000);
     const gap = h.tracker.detectIdle(20 * 60_000);
-    expect(gap).toEqual({ ms: 20 * 60_000, taskId: 't1' });
+    expect(gap).toEqual({ ms: 20 * 60_000, taskId: 't1', day: '2026-08-23' });
     expect(h.tracker.onTick()).toEqual([]);   // nothing was silently banked
     expect(h.state(evs).tasks.t1.timeSpent).toBe(0);
   });
@@ -89,7 +89,7 @@ describe('Tracker', () => {
     h.tracker.start('t1');
     h.advance(45 * 60_000);                   // the machine was asleep
     expect(h.tracker.onTick()).toEqual([]);
-    expect(h.tracker.takeGap()).toEqual({ ms: 45 * 60_000, taskId: 't1' });
+    expect(h.tracker.takeGap()).toEqual({ ms: 45 * 60_000, taskId: 't1', day: '2026-08-23' });
     expect(h.tracker.takeGap()).toBeNull();   // a gap is reported once
   });
 
@@ -122,5 +122,43 @@ describe('Tracker', () => {
     const gap = h.tracker.detectIdle(20 * 60_000)!;
     expect(h.state(h.tracker.resolveIdle(gap, 't2')).tasks.t2.timeSpent).toBe(20 * 60_000);
     expect(h.tracker.resolveIdle(gap, null)).toEqual([]);
+  });
+});
+
+describe('Tracker idle bookkeeping', () => {
+  it('accumulates a second unanswered gap rather than replacing the first', () => {
+    const h = harness();
+    h.tracker.start('t1');
+    h.advance(30 * 60_000);
+    expect(h.tracker.onTick()).toEqual([]);
+    h.advance(40 * 60_000);
+    expect(h.tracker.onTick()).toEqual([]);
+    // Reporting only the 40 would quietly lose the first half hour.
+    expect(h.tracker.takeGap()).toEqual({ ms: 70 * 60_000, taskId: 't1', day: '2026-08-23' });
+    expect(h.tracker.takeGap()).toBeNull();
+  });
+
+  it('keeps gaps for different tasks apart instead of merging them', () => {
+    const h = harness();
+    h.tracker.start('t1');
+    h.advance(30 * 60_000);
+    h.tracker.start('t2');          // the flush attributes the gap to t1
+    h.advance(40 * 60_000);
+    h.tracker.onTick();
+    expect(h.tracker.takeGap()).toEqual({ ms: 30 * 60_000, taskId: 't1', day: '2026-08-23' });
+    expect(h.tracker.takeGap()).toEqual({ ms: 40 * 60_000, taskId: 't2', day: '2026-08-23' });
+    expect(h.tracker.takeGap()).toBeNull();
+  });
+
+  it('credits a resolved gap to the day it was detected, not the day it was answered', () => {
+    let now = new Date(2026, 7, 23, 23, 30).getTime();
+    const tracker = new Tracker({ deviceId: 'dev-1', now: () => now, idleThresholdMs: 10 * 60_000 });
+    tracker.start('t1');
+    now += 20 * 60_000;                              // 23:50, still the 23rd
+    const gap = tracker.detectIdle(20 * 60_000)!;
+    expect(gap.day).toBe('2026-08-23');
+    now = new Date(2026, 7, 24, 0, 30).getTime();    // answered after midnight
+    const evs = tracker.resolveIdle(gap);
+    expect(evs[0].payload).toEqual({ day: '2026-08-23', ms: 20 * 60_000 });
   });
 });
