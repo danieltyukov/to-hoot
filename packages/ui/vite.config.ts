@@ -19,6 +19,7 @@ export default defineConfig({
     name: 'ui',
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    css: true,
     // Only src. The Playwright specs under e2e/ match vitest's default spec
     // glob, and vitest cannot run them.
     include: ['src/**/*.test.{ts,tsx}'],

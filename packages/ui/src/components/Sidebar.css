@@ -1,0 +1,131 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: var(--sidebar-min);
+  max-width: var(--sidebar-max);
+  width: var(--sidebar-w);
+  padding: 10px 8px 8px;
+  background: var(--bg);
+  border-inline-end: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px 12px;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.brand-word {
+  font-size: var(--fs-large);
+  letter-spacing: var(--ls-h2);
+  font-weight: 600;
+}
+
+.nav-head {
+  padding: 14px 8px 4px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding-inline: 8px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-small);
+  color: var(--muted);
+  text-align: start;
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.nav-item:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+/* One of the three places the accent is allowed. It marks the current view with
+   a tint and the text colour, not with a filled block. */
+.nav-item[aria-current='page'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.nav-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.nav-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-count {
+  flex: 0 0 auto;
+  font-size: var(--fs-mini);
+  color: var(--faint);
+}
+
+.nav-tags {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-inline: 8px;
+}
+
+/* Tags are the one pill in the interface, which is what makes them read as
+   labels rather than as another row of navigation. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding-inline: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  border-color: var(--tag-color, var(--border-strong));
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.tag:hover,
+.tag[aria-current='page'] {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  padding: 14px 8px 4px;
+}
+
+@media (pointer: coarse) {
+  .nav-item {
+    min-height: 40px;
+  }
+
+  .tag {
+    min-height: 30px;
+  }
+}

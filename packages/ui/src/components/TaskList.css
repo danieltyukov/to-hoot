@@ -1,0 +1,46 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 10px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.list-group {
+  padding: 16px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer {
+  border-bottom: 1px solid var(--border);
+}
+
+.composer-input {
+  width: 100%;
+  min-height: var(--row-h);
+  padding-inline: 10px;
+  border: 0;
+  background: none;
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+
+.composer-input::placeholder {
+  color: var(--faint);
+}
+
+/* The field is the only thing in the composer, so its own focus ring would sit
+   inside a bar that is already the target. Underline the bar instead. */
+.composer-input:focus {
+  outline: none;
+  box-shadow: inset 0 -1px 0 0 var(--accent);
+}
