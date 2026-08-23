@@ -70,9 +70,10 @@ place.
 `sudo apt install ./to-hoot_amd64.deb`. Both are built on Ubuntu 22.04 so they
 run on older systems as well as newer ones.
 
-If the desktop window opens blank on NVIDIA hardware, export
-`__NV_DISABLE_EXPLICIT_SYNC=1` before launching. The installed `.desktop` entry
-already sets it; running the binary directly does not.
+If the desktop window opens blank on NVIDIA hardware, the app already sets
+`__NV_DISABLE_EXPLICIT_SYNC=1` for itself, however it was launched. Try
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` as well; setting either by hand overrides
+what the app would have chosen.
 
 Everything works with no accounts at all. Sync, calendar and Claude are added
 later from Settings, and each one is optional. `docs/SETUP.md` is the long-form
