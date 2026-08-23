@@ -1,12 +1,18 @@
 import {
   DEFAULT_PROJECT_ID,
+  DEFAULT_SETTINGS,
   Tracker,
+  cloneSettings,
   dayStr,
   newEvent,
   replay,
   taskTotalTime,
+  toSyncable,
   ulid,
+  validateSettings,
   type Event,
+  type KeyValueStore,
+  type Settings,
   type State,
   type Theme,
 } from '@to-hoot/core';
@@ -30,6 +36,19 @@ import {
 
 const DEVICE_KEY = 'to-hoot:device';
 const THEME_KEY = 'to-hoot:theme';
+
+/**
+ * Where the full settings live, secrets included.
+ *
+ * The platform key-value store, never the event log. A token written to the log
+ * is a token pushed to the data repository and pulled down by every other
+ * device, which turns one leaked credential into a permanent one in a git
+ * history. `toSyncable` is what decides which fields are allowed to travel.
+ */
+const SETTINGS_KEY = 'settings';
+
+/** Set once the wizard has been finished or dismissed. */
+const SETUP_KEY = 'setup-done';
 
 /**
  * How often accrued time is written to the log while a timer runs.
@@ -66,6 +85,10 @@ function nextColor(index: number): string {
 
 export interface Snapshot {
   state: State;
+  /** The full settings, secrets included. Local only; see SETTINGS_KEY. */
+  settings: Settings;
+  /** False until the wizard has been finished or dismissed. */
+  setupDone: boolean;
   events: readonly Event[];
   runningTaskId: string | null;
   /** The clock reading this snapshot was taken at. Advances every display tick. */
@@ -81,6 +104,8 @@ export interface StoreOptions {
   now?: () => number;
   /** Injected so tests are not writing to a shared browser store. */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Where settings and secrets are kept. Absent means they are not persisted. */
+  vault?: KeyValueStore | undefined;
   seed?: readonly Event[];
 }
 
@@ -106,9 +131,18 @@ function isTheme(v: unknown): v is Theme {
   return v === 'light' || v === 'dark' || v === 'system';
 }
 
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 export class Store {
   private readonly nowFn: () => number;
   private readonly storage: StoreOptions['storage'];
+  private readonly vault: KeyValueStore | undefined;
   private readonly deviceId: string;
   private readonly tracker: Tracker;
   private readonly listeners = new Set<() => void>();
@@ -126,6 +160,8 @@ export class Store {
           : localStorage
         : opts.storage;
 
+    this.vault = opts.vault;
+
     const stored = readStorage(this.storage, DEVICE_KEY);
     this.deviceId = stored ?? ulid();
     if (stored === null) writeStorage(this.storage, DEVICE_KEY, this.deviceId);
@@ -135,8 +171,13 @@ export class Store {
 
     const savedTheme = readStorage(this.storage, THEME_KEY);
     const state = replay(this.log);
+    const settings = cloneSettings(DEFAULT_SETTINGS);
+    settings.deviceId = this.deviceId;
+    settings.deviceName = this.deviceId;
     this.snapshot = {
       state,
+      settings,
+      setupDone: false,
       events: this.log,
       runningTaskId: null,
       now: this.nowFn(),
@@ -144,6 +185,100 @@ export class Store {
       pendingMs: 0,
       pendingSince: null,
     };
+  }
+
+  /**
+   * Reads settings out of the platform store.
+   *
+   * Separate from the constructor because it is asynchronous and the app has to
+   * render before it finishes. Until it does, the defaults apply, which is the
+   * same thing a first run looks like.
+   */
+  async load(): Promise<void> {
+    if (this.vault === undefined) return;
+    const [raw, setup] = await Promise.all([
+      this.vault.get(SETTINGS_KEY),
+      this.vault.get(SETUP_KEY),
+    ]);
+    const patch: Partial<Snapshot> = { setupDone: setup === 'true' };
+    if (raw !== null) {
+      const parsed = safeJson(raw);
+      const result = validateSettings(parsed);
+      // A settings file that fails validation is kept out rather than partly
+      // applied. Half-loading it is how a bad value ends up written back over
+      // a good one.
+      if (result.ok) {
+        patch.settings = result.value;
+        if (isTheme(result.value.theme)) patch.theme = result.value.theme;
+      }
+    }
+    this.publish(patch);
+  }
+
+  /**
+   * Merges a settings patch, persists all of it locally, and syncs the part
+   * that is allowed to travel.
+   *
+   * The split is the whole point. `toSyncable` drops the GitHub token, the
+   * calendar secret, the worker URL (it carries a path secret) and the device
+   * identity, and only what survives that goes into the event log.
+   */
+  saveSettings(patch: Partial<Settings>): void {
+    const merged: Settings = {
+      ...this.snapshot.settings,
+      ...patch,
+      github: { ...this.snapshot.settings.github, ...patch.github },
+      calendar: { ...this.snapshot.settings.calendar, ...patch.calendar },
+      worker: { ...this.snapshot.settings.worker, ...patch.worker },
+    };
+    void this.vault?.set(SETTINGS_KEY, JSON.stringify(merged));
+    if (patch.theme !== undefined) writeStorage(this.storage, THEME_KEY, patch.theme);
+
+    const syncable = toSyncable(merged);
+    this.commit(
+      [
+        this.event('update', 'settings', 'app', {
+          theme: syncable.theme,
+          dayStartOffsetMs: syncable.dayStartOffsetMs,
+          idleThresholdMs: syncable.idleThresholdMs,
+          workdayStart: syncable.workdayStart,
+          workdayEnd: syncable.workdayEnd,
+          github: syncable.github,
+          calendar: syncable.calendar,
+        }),
+      ],
+      { settings: merged, theme: merged.theme },
+    );
+  }
+
+  /** Records that the wizard is done, so it does not open again. */
+  finishSetup(): void {
+    void this.vault?.set(SETUP_KEY, 'true');
+    this.publish({ setupDone: true });
+  }
+
+  /** The whole log, for the export button. */
+  exportJson(): string {
+    return JSON.stringify({ version: 1, exported: this.nowFn(), events: this.log }, null, 2);
+  }
+
+  /**
+   * Merges an exported log back in.
+   *
+   * Merged rather than replaced, and replay dedupes by event id, so importing
+   * the same file twice is harmless and importing another device's export is a
+   * merge rather than an overwrite.
+   */
+  importJson(text: string): { ok: true; added: number } | { ok: false; error: string } {
+    const parsed = safeJson(text);
+    const events = (parsed as { events?: unknown } | undefined)?.events;
+    if (!Array.isArray(events)) return { ok: false, error: 'That file has no events in it.' };
+    const known = new Set(this.log.map(e => e.id));
+    const fresh = events.filter(
+      (e): e is Event => typeof (e as Event | null)?.id === 'string' && !known.has((e as Event).id),
+    );
+    this.commit(fresh);
+    return { ok: true, added: fresh.length };
   }
 
   subscribe = (listener: () => void): (() => void) => {

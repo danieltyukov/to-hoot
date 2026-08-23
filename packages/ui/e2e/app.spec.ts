@@ -11,7 +11,15 @@ async function addTask(page: Page, title: string): Promise<void> {
   await page.getByLabel('New task').press('Enter');
 }
 
+/*
+ * Past the first-run wizard.
+ *
+ * Written before the page loads, because the app reads it while it is starting:
+ * setting it afterwards would race the first render. The wizard itself is
+ * covered by the spec at the bottom of this file, which does not use this.
+ */
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('to-hoot:setup-done', 'true'));
   await page.goto('/');
   await expect(page.getByLabel('New task')).toBeVisible();
 });
@@ -220,3 +228,4 @@ test('every control the mobile suite has to address carries a name', async ({ pa
   });
   expect(unnamed).toEqual([]);
 });
+

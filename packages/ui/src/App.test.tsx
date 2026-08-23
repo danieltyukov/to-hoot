@@ -26,6 +26,8 @@ function setup() {
       setItem: (key, value) => void storage.set(key, value),
     },
   });
+  // Past the wizard. First run is covered separately, below.
+  store.finishSetup();
   const utils = render(<App store={store} />);
 
   const advance = (ms: number): void => {

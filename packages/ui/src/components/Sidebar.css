@@ -161,6 +161,13 @@
   color: var(--text);
 }
 
+.sidebar-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
 .sidebar-foot {
   margin-top: auto;
   padding: 14px 8px 4px;

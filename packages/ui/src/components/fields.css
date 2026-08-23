@@ -1,0 +1,135 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field-row {
+  display: flex;
+  gap: 6px;
+}
+
+.field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-small);
+  transition: border-color var(--dur-quick) var(--ease);
+}
+
+.field-input:hover {
+  border-color: var(--muted);
+}
+
+.field-input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.field-input[readonly] {
+  color: var(--muted);
+}
+
+.field-hint {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.field-button,
+.copy,
+.button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding-inline: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition:
+    color var(--dur-quick) var(--ease),
+    background-color var(--dur-quick) var(--ease);
+}
+
+.field-button:hover,
+.copy:hover,
+.button:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.button {
+  color: var(--text);
+}
+
+.button:disabled {
+  color: var(--faint);
+  cursor: default;
+  background: none;
+}
+
+.copyable {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* A script or a command: preformatted, scrolling sideways rather than wrapping,
+   because a wrapped shell line is a line someone pastes wrong. */
+.copyable-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  font-size: var(--fs-mini);
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.copyable-text[data-wrap] {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.test {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.test-result {
+  min-width: 0;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+/* Only beside a button. A bare result is a block in a flex column, and growing
+   it there pushed everything below it to the bottom of the pane. */
+.test > .test-result {
+  flex: 1 1 200px;
+}
+
+.test-result[data-status='ok'] {
+  color: var(--success);
+}
+
+.test-result[data-status='error'] {
+  color: var(--danger);
+}
+
+/* The hint is the part that says what to do about it, so it sits on its own
+   line in the ordinary text colour rather than shouting alongside the error. */
+.test-hint {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}

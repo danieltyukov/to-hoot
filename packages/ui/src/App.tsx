@@ -19,7 +19,11 @@ import { TaskDetail } from './components/TaskDetail.js';
 import { TaskList } from './components/TaskList.js';
 import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
+import { Settings } from './components/Settings/Settings.js';
+import { Wizard } from './components/Wizard/Wizard.js';
+import { browserHttp, browserStore } from './platform/browser.js';
 import type { Span, TimelineEvent } from './components/timeline-layout.js';
+import type { Http } from '@to-hoot/core';
 import { formatDuration } from './format.js';
 import { Store } from './store.js';
 import './App.css';
@@ -42,6 +46,10 @@ export type Pane = 'lists' | 'tasks' | 'day';
 
 export interface AppProps {
   store?: Store;
+  /** The shell's transport. Defaults to fetch, which the browser build uses. */
+  http?: Http;
+  /** Absolute path to the built MCP server, for the command the wizard prints. */
+  mcpServerPath?: string;
 }
 
 /** "09:00" to 9. Anything unparseable falls back, rather than rendering NaN rows. */
@@ -62,16 +70,25 @@ function startOfDay(now: number, offsetMs: number): number {
  * shown one at a time, which is what keeps a fix in the task list from having to
  * be made twice.
  */
-export default function App({ store: injected }: AppProps = {}) {
-  const store = useMemo(() => injected ?? new Store(), [injected]);
+export default function App({ store: injected, http = browserHttp, mcpServerPath }: AppProps = {}) {
+  // The vault is where settings, secrets and the setup flag live. Without one
+  // the wizard would have nowhere to record that it had been finished, and
+  // would open again on every start.
+  const store = useMemo(() => injected ?? new Store({ vault: browserStore() }), [injected]);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const [view, setView] = useState<View>('today');
   const [pane, setPane] = useState<Pane>('tasks');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => store.tick(), TICK_MS);
     return () => clearInterval(id);
+  }, [store]);
+
+  // Settings and the setup flag live in the platform store, which is async.
+  useEffect(() => {
+    void store.load();
   }, [store]);
 
   // The document element carries the theme, so the choice reaches the tokens
@@ -146,6 +163,18 @@ export default function App({ store: injected }: AppProps = {}) {
     setPane('tasks');
   };
 
+  if (!snapshot.setupDone) {
+    return (
+      <Wizard
+        http={http}
+        settings={snapshot.settings}
+        onSave={patch => store.saveSettings(patch)}
+        onDone={() => store.finishSetup()}
+        mcpServerPath={mcpServerPath}
+      />
+    );
+  }
+
   return (
     <div className="app" data-pane={pane}>
       <div className="pane pane-lists">
@@ -161,7 +190,23 @@ export default function App({ store: injected }: AppProps = {}) {
           counts={counts}
           onAddProject={title => setView(`project:${store.addProject(title)}`)}
           onAddTag={title => store.addTag(title)}
-          footer={<ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />}
+          footer={
+            <div className="sidebar-tools">
+              <ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />
+              <button
+                type="button"
+                className="theme-toggle"
+                aria-pressed={showSettings}
+                onClick={() => {
+                  setShowSettings(true);
+                  setSelectedId(null);
+                  setPane('tasks');
+                }}
+              >
+                Settings
+              </button>
+            </div>
+          }
         />
       </div>
 
@@ -169,7 +214,20 @@ export default function App({ store: injected }: AppProps = {}) {
           implementation for the desktop and the phone, and on a desktop the day
           timeline stays visible while a task is being planned. */}
       <div className="pane pane-tasks">
-        {selected === undefined ? (
+        {showSettings ? (
+          <Settings
+            http={http}
+            settings={snapshot.settings}
+            theme={snapshot.theme}
+            eventCount={snapshot.events.length}
+            onSave={patch => store.saveSettings(patch)}
+            onSetTheme={t => store.setTheme(t)}
+            onExport={() => store.exportJson()}
+            onImport={text => store.importJson(text)}
+            onClose={() => setShowSettings(false)}
+            mcpServerPath={mcpServerPath}
+          />
+        ) : selected === undefined ? (
           <TaskList
             heading={heading}
             tasks={visible}
