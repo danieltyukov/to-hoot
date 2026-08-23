@@ -109,6 +109,26 @@ and is removed in an `always()` step. It is not in the repository and never has
 been. If it is ever lost, updates can no longer install over an existing
 installation, and recovering means uninstalling, which destroys local app data.
 
+## Known advisories
+
+Two moderate advisories are open against transitive dependencies and neither is
+fixable from this repository today. They are listed here rather than left for a
+reader to find in the Dependabot tab and wonder about.
+
+**`uuid` 7.0.3, missing buffer bounds check in v3/v5/v6 when `buf` is provided.**
+It arrives as `@capacitor/cli` -> `xcode` -> `uuid`. `@capacitor/cli` is a dev
+dependency, `xcode` is the iOS project manipulator, and this project builds only
+for Android, so the package is never loaded by anything that runs. It is not in
+the shipped app. Removing it means Capacitor dropping `xcode` from its CLI.
+
+**`glib` 0.18.5, unsoundness in the `Iterator` and `DoubleEndedIterator` impls
+for `VariantStrIter`.** It arrives through Tauri's GTK stack. `cargo update -p
+glib` finds nothing newer within the range Tauri 2.11 accepts, so the fix has to
+come from a Tauri release rather than from here. The affected iterators are not
+reachable from any code in this repository.
+
+Both are re-checked whenever Tauri or Capacitor is upgraded.
+
 ## Scope
 
 Out of scope for a report: anything that requires an attacker to already have
