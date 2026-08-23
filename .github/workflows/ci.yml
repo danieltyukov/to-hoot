@@ -35,7 +35,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # No build step first: vitest aliases @to-hoot/core to its source, which is
+      # Nothing else in CI covers the Apps Script bundle, and clasp v3 no longer
+      # transpiles TypeScript, so what reaches Google has to build here or a
+      # broken bridge ships unnoticed.
+      #
+      # It runs before the unit tests for a second reason, which is a coupling
+      # worth removing rather than relying on: the wizard reads this bundle
+      # through a virtual module, and Wizard.test.tsx asserts on the real
+      # source, so without this step that one test fails on a fresh clone. The
+      # plugin's whole point is that a clean checkout still works, and the test
+      # should accept the placeholder it substitutes.
+      - name: Build the Apps Script bundle
+        run: npm run build -w @to-hoot/apps-script
+
+      # Core needs no build: vitest aliases @to-hoot/core to its source, which is
       # what lets a fresh clone run green. TypeScript still resolves it through
       # the export map, so `npm run typecheck` above is what keeps the published
       # entry points honest.
