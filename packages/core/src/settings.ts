@@ -7,7 +7,7 @@
 //   - Device identity. Two devices sharing a deviceId would write the same
 //     event paths, and the whole merge model rests on them never colliding.
 
-import { DEFAULT_SETTINGS, type Settings, type Theme } from './models.js';
+import { DEVICE_ID_RULE, DEFAULT_SETTINGS, isValidDeviceId, type Settings, type Theme } from './models.js';
 
 export { DEFAULT_SETTINGS };
 export type { Settings, Theme };
@@ -134,7 +134,20 @@ export function validateSettings(input: unknown): Result<Settings> {
     str(worker['url'], 'worker.url', v => { out.worker.url = v; });
   }
 
-  str(input['deviceId'], 'deviceId', v => { out.deviceId = v; });
+  /*
+   * The device id is checked here as well as where it is typed, because this is
+   * the other way a value reaches the app: a settings file edited by hand, or
+   * carried over from a build that did not check. An id that is not a path
+   * segment writes events where no reader looks, so the failure is silent data
+   * loss rather than an error anyone sees.
+   *
+   * Empty is allowed and means "the wizard has not run yet". A non-empty value
+   * that breaks the rule is a corrupt file, not a default to fall back on.
+   */
+  if (input['deviceId'] !== undefined) {
+    if (isValidDeviceId(input['deviceId'], true)) out.deviceId = input['deviceId'];
+    else bad.push(`deviceId (${DEVICE_ID_RULE})`);
+  }
   str(input['deviceName'], 'deviceName', v => { out.deviceName = v; });
 
   const theme = input['theme'];

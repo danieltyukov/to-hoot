@@ -20,7 +20,7 @@
 //      a loser re-reads and rebuilds its write against the winner's commit.
 
 import { SCHEMA_VERSION, type Event } from '../events.js';
-import { DEFAULT_PROJECT_ID, newTask, ulid, type Project, type Tag, type Task } from '../models.js';
+import { DEVICE_ID_RULE, isValidDeviceId, DEFAULT_PROJECT_ID, newTask, ulid, type Project, type Tag, type Task } from '../models.js';
 import { replay } from '../replay.js';
 import { emptyState, type State } from '../state.js';
 import { toSyncable, validateSettings, type SyncableSettings } from '../settings.js';
@@ -33,8 +33,6 @@ export const EVENTS_PREFIX = 'events/';
 export const DEFAULT_COMPACT_THRESHOLD = 500;
 /** Ref-update attempts before a push reports a conflict instead of retrying. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
-/** A deviceId is one path segment: no slash, no leading dot, nothing exotic. */
-const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Every attempt lost the ref race. Retrying later is the caller's decision. */
 export class SyncConflictError extends Error {
@@ -143,9 +141,9 @@ export class SyncEngine {
     // The deviceId is a path segment. A slash in it writes files under a path no
     // reader recognises, so they are pushed, never read back, and never
     // compacted: work that looks synced and is not.
-    if (!DEVICE_ID.test(options.deviceId)) {
+    if (!isValidDeviceId(options.deviceId)) {
       throw new Error(
-        `deviceId ${JSON.stringify(options.deviceId)} is not a single path segment; expected ${String(DEVICE_ID)}`,
+        `deviceId ${JSON.stringify(options.deviceId)} is not a single path segment. ${DEVICE_ID_RULE}`,
       );
     }
     this.client = options.client;

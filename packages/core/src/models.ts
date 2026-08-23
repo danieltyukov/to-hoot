@@ -95,6 +95,35 @@ export interface Settings {
 
 export const DEFAULT_PROJECT_ID = 'inbox';
 
+/**
+ * A device id is one path segment: no slash, no leading dot, nothing exotic.
+ *
+ * This is a data-integrity rule, not a style one. Sync writes each device's
+ * events to `events/<deviceId>/<ulid>.json`, and every reader looks for exactly
+ * that shape. A slash in the value writes files under a path no reader matches,
+ * so the events are pushed, stored, and then ignored forever: the device appears
+ * to sync and its work quietly never arrives anywhere.
+ */
+const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Whether a device id is safe to use as a path segment.
+ *
+ * Empty is allowed only where `allowUnset` is set, which is the difference
+ * between "not configured yet" and "configured wrongly". Settings loaded from
+ * disk may legitimately carry an empty id before the wizard has run; the sync
+ * engine may not accept one.
+ */
+export function isValidDeviceId(value: unknown, allowUnset = false): value is string {
+  if (typeof value !== 'string') return false;
+  if (value === '') return allowUnset;
+  return DEVICE_ID.test(value);
+}
+
+/** The rule, in words, for a message shown to whoever typed the bad value. */
+export const DEVICE_ID_RULE =
+  'Letters, numbers, dots, dashes and underscores, starting with a letter or number.';
+
 /** Field defaults for a new task. Callers supply id, title, created, updated. */
 export const DEFAULT_TASK: Omit<Task, 'id' | 'created' | 'updated'> = {
   title: '',

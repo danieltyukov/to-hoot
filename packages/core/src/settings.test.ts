@@ -128,6 +128,7 @@ describe('Platform', () => {
   it('is implementable by a plain in-memory adapter', async () => {
     const store = new Map<string, string>();
     const requests: HttpRequest[] = [];
+    const files = new Map<string, string>();
     const platform: Platform = {
       async http(req: HttpRequest): Promise<HttpResponse> {
         requests.push(req);
@@ -139,7 +140,13 @@ describe('Platform', () => {
         remove: async key => { store.delete(key); },
         keys: async () => [...store.keys()],
       },
-      notify: async () => {},
+      files: {
+        read: async name => files.get(name) ?? null,
+        write: async (name, contents) => { files.set(name, contents); },
+        remove: async name => { files.delete(name); },
+      },
+      notify: async () => 1,
+      cancelNotification: async () => {},
       onResume: () => () => {},
     };
 
@@ -158,4 +165,27 @@ describe('Platform', () => {
     // Desktop supplies an OS idle signal; mobile and browser do not.
     expect(platform.idleSeconds).toBeUndefined();
   });
+});
+
+describe('deviceId validation at the settings boundary', () => {
+  it('accepts an unset id, which is what an install before the wizard looks like', () => {
+    const result = validateSettings({ deviceId: '' });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a path-safe id', () => {
+    const result = validateSettings({ deviceId: 'daniel-laptop' });
+    expect(result.ok && result.value.deviceId).toBe('daniel-laptop');
+  });
+
+  it.each(['has/slash', '../escape', '.leading-dot', 'has space', 'has:colon'])(
+    'refuses %s rather than writing events where no reader looks',
+    bad => {
+      // The engine rejects these too, but by then the value is already stored.
+      // A settings file edited by hand reaches the app through here.
+      const result = validateSettings({ deviceId: bad });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toContain('deviceId');
+    },
+  );
 });
