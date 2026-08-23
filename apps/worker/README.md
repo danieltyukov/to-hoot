@@ -7,11 +7,11 @@ yourself; nothing here is tied to one account.
 
 | Binding | Required | Meaning |
 | --- | --- | --- |
-| `MCP_PATH_SECRET` | yes | 32 or more random characters. The endpoint is `/mcp/<secret>`. |
+| `MCP_PATH_SECRET` | yes | 32 or more characters from `A-Za-z0-9._~-`. The endpoint is `/mcp/<secret>`. |
 | `GITHUB_OWNER` | yes | Owner of the data repository. |
 | `GITHUB_REPO` | yes | The data repository. |
 | `GITHUB_TOKEN` | yes | Fine-grained token, Contents read and write on that repository alone. |
-| `GITHUB_BRANCH` | no | Defaults to `main`. |
+| `GITHUB_BRANCH` | no | Unset means whatever the repository's default branch is. |
 | `GITHUB_API_BASE` | no | For GitHub Enterprise. |
 | `DEVICE_ID` | no | One path segment. Defaults to `worker`. |
 | `ALLOWED_HOSTNAMES` | no | Comma separated. Defaults to the request's own host. |
@@ -40,13 +40,25 @@ of it. With no `ALLOWED_HOSTNAMES` set the Host check is a no-op, since
 Cloudflare only routes a hostname to a Worker configured for it, but the Origin
 check still refuses a page on another origin.
 
-One conditional GET per tool call once the isolate is warm. A cold client also
-resolves the repository's default branch, once, unless `GITHUB_BRANCH` is set.
-The Worker reads the prebuilt snapshot and
-never replays the event log: the free tier allows 10ms of CPU per request, and
-awaiting a fetch costs none of it while folding hundreds of events costs real
-CPU. It never compacts either, because compaction reads everything and the
-devices already do it on their own schedule.
+What a tool call costs, against the 50 subrequests the free tier allows:
+
+| | configured branch | unset branch |
+| --- | --- | --- |
+| read, warm isolate | 1 | 1 |
+| read, cold isolate | 3 | 4 |
+| write | 8 | 9 |
+
+A warm read is a single conditional GET that answers 304. A cold one adds the
+tree and the snapshot blob; a write adds four more for the commit, which is
+four however many files it carries. Leaving `GITHUB_BRANCH` unset costs one
+extra request to read the repository's default branch, and only once per
+isolate, because the answer is cached on the client.
+
+The Worker reads the prebuilt snapshot and never replays the event log: the free
+tier allows 10ms of CPU per request, and awaiting a fetch costs none of it while
+folding hundreds of events costs real CPU. It never compacts either, because
+compaction reads everything and the devices already do it on their own
+schedule.
 
 Two consequences worth knowing:
 

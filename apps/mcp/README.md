@@ -11,7 +11,7 @@ the environment.
 | `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository. |
 | `TO_HOOT_GITHUB_REPO` | yes | The data repository. |
 | `TO_HOOT_GITHUB_TOKEN` | yes | Fine-grained token with Contents read and write on that repository alone. |
-| `TO_HOOT_GITHUB_BRANCH` | no | Defaults to `main`. |
+| `TO_HOOT_GITHUB_BRANCH` | no | Unset means whatever the repository's default branch is. |
 | `TO_HOOT_GITHUB_API_BASE` | no | For GitHub Enterprise. Defaults to the public API. |
 | `TO_HOOT_DEVICE_ID` | no | One path segment, unique per device. Defaults to `mcp-<hostname>`. |
 | `TO_HOOT_STATE_DIR` | no | Where the running timer is kept. Defaults to `~/.to-hoot`. |
