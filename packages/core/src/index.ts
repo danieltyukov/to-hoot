@@ -12,3 +12,7 @@ export * from './platform.js';
 export * from './settings.js';
 export * from './github/client.js';
 export * from './github/sync.js';
+export * from './calendar/bridge.js';
+export * from './calendar/client.js';
+export * from './calendar/queue.js';
+export * from './calendar/writeback.js';
