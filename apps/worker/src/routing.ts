@@ -15,6 +15,29 @@ export const MCP_PREFIX = '/mcp/';
  */
 export const MIN_SECRET_LENGTH = 32;
 
+/**
+ * The characters a path secret may use: the URL unreserved set.
+ *
+ * Anything outside it survives configuration and then fails forever at request
+ * time in a way nobody would connect to the secret. A `#` truncates the path in
+ * the client, a `?` starts a query string (which is exactly where this must
+ * never be), a space or a slash re-splits the path, and each of those produces
+ * a 404 from an endpoint whose configuration looks correct.
+ */
+export const SECRET_CHARSET = /^[A-Za-z0-9._~-]+$/;
+
+/** Why this secret cannot be used, or null when it can. */
+export function secretProblem(secret: string): string | null {
+  if (secret === '') return 'set MCP_PATH_SECRET on this Worker';
+  if (secret.length < MIN_SECRET_LENGTH) {
+    return `MCP_PATH_SECRET must be at least ${MIN_SECRET_LENGTH} characters`;
+  }
+  if (!SECRET_CHARSET.test(secret)) {
+    return 'MCP_PATH_SECRET must use only letters, digits, dot, dash, underscore or tilde';
+  }
+  return null;
+}
+
 /** The full path an endpoint is reachable at. */
 export function mcpPath(secret: string): string {
   return `${MCP_PREFIX}${secret}`;

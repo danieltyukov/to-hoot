@@ -29,7 +29,7 @@ import {
   type ToolContext,
 } from '@to-hoot/core/tools';
 
-import { MIN_SECRET_LENGTH, allowedHostnames, matchesMcpPath } from './routing.js';
+import { allowedHostnames, matchesMcpPath, secretProblem } from './routing.js';
 
 export interface Env {
   GITHUB_OWNER: string;
@@ -58,10 +58,8 @@ function configError(env: Env): string | null {
     blank(env[key]),
   );
   if (missing.length > 0) return `set ${missing.join(', ')} on this Worker`;
-  if (blank(env.MCP_PATH_SECRET)) return 'set MCP_PATH_SECRET on this Worker';
-  if (env.MCP_PATH_SECRET.trim().length < MIN_SECRET_LENGTH) {
-    return `MCP_PATH_SECRET must be at least ${MIN_SECRET_LENGTH} characters`;
-  }
+  const secret = secretProblem((env.MCP_PATH_SECRET ?? '').trim());
+  if (secret !== null) return secret;
   const deviceId = env.DEVICE_ID ?? 'worker';
   if (!DEVICE_ID.test(deviceId)) return 'DEVICE_ID must be a single path segment';
   return null;
@@ -102,6 +100,20 @@ function buildContext(env: Env): ToolContext {
   });
 }
 
+/**
+ * FNV-1a over the token, so a rotated token changes the cache key without the
+ * token itself sitting in a module-scope string that some future log line might
+ * print. It is not a security boundary, only a change detector.
+ */
+function fingerprint(value: string | undefined): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < (value ?? '').length; i++) {
+    hash ^= (value ?? '').charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
 function handlerFor(env: Env): McpHttpHandler {
   const key = JSON.stringify([
     env.GITHUB_OWNER,
@@ -109,6 +121,10 @@ function handlerFor(env: Env): McpHttpHandler {
     env.GITHUB_BRANCH,
     env.GITHUB_API_BASE,
     env.DEVICE_ID,
+    // The token is part of the configuration this was built from: a rotated
+    // token must rebuild the client, or the isolate keeps using the old one
+    // until it is recycled.
+    fingerprint(env.GITHUB_TOKEN),
   ]);
   if (wiring?.key !== key) {
     const ctx = buildContext(env);
