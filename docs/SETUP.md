@@ -117,8 +117,10 @@ tracked on both at once adds up instead of one overwriting the other.
 ### When it syncs
 
 On its own, and opportunistically: once the log has loaded, on a timer, when the
-app comes back to the foreground, and shortly after anything changes. There is
-no sync button to remember.
+app comes back to the foreground, and shortly after anything changes. You never
+have to press anything. There is a **Sync now** button in Settings, Sync, beside
+the status line, and it is there for reassurance rather than because sync needs
+it.
 
 Nothing fights the platform for background execution, because it does not have
 to. Every event carries its own timestamp and device, and tracked time carries an
@@ -265,6 +267,14 @@ same commit that writes the snapshot, so there is never a moment where the two
 disagree. A local button would either do nothing or fold away a log that no other
 device had read yet. The Data screen says how many events the log holds and
 leaves it at that.
+
+If the log file on disk is ever unreadable, Data says so: its summary reads "not
+saving" rather than an event count, and the only way forward is a **Start a new
+log** button, which keeps the unreadable file beside the new one rather than
+deleting it. The app would rather stop saving than write over the only copy of
+work that has not synced, so it keeps running from memory until you decide. Both
+shells write to a temporary file and rename over the target, which is atomic
+within a directory, so this should stay hypothetical.
 
 To leave entirely: export, revoke the GitHub token, delete the data repository,
 delete the Apps Script deployment, delete the Worker, uninstall. Nothing survives
