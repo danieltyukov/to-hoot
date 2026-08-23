@@ -40,10 +40,16 @@ export function TodayState({ open, done }: { open: number; done: number }) {
   return message === null ? null : <EmptyState>{message}</EmptyState>;
 }
 
-/** The other places a list can be empty. Sentences, in one file, so they stay in one voice. */
+/**
+ * The other places a list can be empty. Sentences, in one file, so they stay in
+ * one voice.
+ *
+ * Only what is rendered. Lines for the timeline and for search used to sit here
+ * and were tested but never shown: an empty day already reads as an empty day,
+ * and there is no search to be empty yet. Copy written ahead of the screen it
+ * belongs on is copy nobody has read in place.
+ */
 export const EMPTY_COPY = {
   project: 'This project has no tasks.',
   tag: 'Nothing carries this tag.',
-  timeline: 'Nothing is scheduled for today.',
-  search: 'No tasks match.',
 } as const;

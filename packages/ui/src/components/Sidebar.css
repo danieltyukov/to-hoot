@@ -14,8 +14,8 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 4px 8px 12px;
+  gap: 8px;
+  padding: 6px 8px 14px;
 }
 
 .brand-mark {
@@ -23,9 +23,7 @@
 }
 
 .brand-word {
-  font-size: var(--fs-large);
-  letter-spacing: var(--ls-h2);
-  font-weight: 600;
+  color: var(--text);
 }
 
 .nav-head {

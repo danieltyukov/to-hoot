@@ -141,15 +141,31 @@ export function layoutSpans<T extends Span>(spans: readonly T[], originMs: numbe
   return placed;
 }
 
-/** The hour numbers a grid covers, widened to hold every span it is given. */
+/**
+ * The hour numbers a grid covers, widened to hold every span it is given and
+ * the moment it is being viewed at.
+ *
+ * `now` is part of that on purpose. The range starts as the workday, so without
+ * it the current-time line simply disappears at 17:01 and does not come back
+ * until the next morning: the one hour a day view most needs to show is the one
+ * you are in.
+ */
 export function hourRange(
   spans: readonly Span[],
   dayStartMs: number,
   startHour: number,
   endHour: number,
+  now?: number | null,
 ): { startHour: number; endHour: number } {
   let first = startHour;
   let last = endHour;
+  if (now !== undefined && now !== null && Number.isFinite(now)) {
+    const hour = (now - dayStartMs) / HOUR_MS;
+    if (hour >= 0 && hour <= 24) {
+      first = Math.min(first, Math.floor(hour));
+      last = Math.max(last, Math.ceil(hour));
+    }
+  }
   for (const span of spans) {
     const from = Math.floor((span.startMs - dayStartMs) / HOUR_MS);
     // An event ending exactly on the hour does not need the hour after it.

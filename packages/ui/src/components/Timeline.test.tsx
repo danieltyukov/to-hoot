@@ -117,6 +117,15 @@ describe('Timeline', () => {
     expect(getComputedStyle(chip).getPropertyValue('inset-inline-end')).toBe('8px');
   });
 
+  it('widens the grid to hold the current hour, whatever the workday says', () => {
+    // Otherwise the current-time line disappears at 17:01 and does not return
+    // until morning, which is the one hour a day view most needs to show.
+    render(<Timeline dayStartMs={DAY_START} startHour={9} endHour={17} now={at(20, 25)} />);
+    expect(document.querySelector('[data-hour="21"]')).not.toBeNull();
+    expect(document.querySelector('.now')).not.toBeNull();
+    expect(px(document.querySelector<HTMLElement>('.now')!, 'top')).toBe((20 - 9 + 25 / 60) * HOUR_HEIGHT);
+  });
+
   it('hides the current-time marker on a day that is not today', () => {
     render(<Timeline dayStartMs={DAY_START} now={at(14, 30) - 86_400_000} />);
     expect(document.querySelector('.now')).toBeNull();

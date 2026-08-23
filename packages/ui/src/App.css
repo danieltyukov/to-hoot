@@ -45,11 +45,30 @@
 .app-foot {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 24px;
   grid-column: 1 / -1;
   grid-row: 2;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-top: 1px solid var(--border);
+}
+
+.foot-block {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* Label over value, so each block stays narrow enough that the pair fits a
+   360px phone on one row instead of stacking into a second. */
+.foot-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.foot-value {
+  font-size: var(--fs-mini);
+  color: var(--text);
 }
 
 .tabs {

@@ -57,9 +57,21 @@ describe('Sidebar', () => {
 
   it('keeps the mark out of the reading order beside the word it repeats', () => {
     const { container } = setup();
-    expect(screen.getByText('to-hoot')).toBeInTheDocument();
     expect(container.querySelector('.brand-mark')).toHaveAttribute('aria-hidden', 'true');
     expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('spells the wordmark out of real characters, pupils and all', () => {
+    // The two `o`s are split into their own elements so a pupil has something
+    // to sit in. The word still has to be one word to anything that reads it:
+    // selection, search, and the accessible name are all textContent.
+    const { container } = setup();
+    const wordmark = container.querySelector('.wordmark')!;
+    expect(wordmark.textContent).toBe('to-hoot');
+    expect(wordmark.querySelectorAll('.wordmark-eye')).toHaveLength(2);
+    for (const eye of wordmark.querySelectorAll('.wordmark-eye')) {
+      expect(eye.textContent).toBe('o');
+    }
   });
 
   it('gives every control an accessible name', () => {

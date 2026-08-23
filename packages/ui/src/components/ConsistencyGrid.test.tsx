@@ -83,10 +83,22 @@ describe('ProgressRing', () => {
   it('draws only the track when nothing is planned', () => {
     const { container } = render(<ProgressRing tracked={0} planned={0} />);
     expect(container.querySelector('.ring-value')).toBeNull();
-    expect(screen.getByRole('progressbar')).toHaveAttribute(
-      'aria-valuetext',
-      '0m tracked, nothing planned',
-    );
+  });
+
+  it('stops being a progressbar when there is no scale to be a fraction of', () => {
+    // valuemin and valuemax both 0 is a degenerate range: Chrome drops
+    // valuenow and reports valuetext as empty, so the label never arrives.
+    // Until estimates can be entered, this is the ring's every state.
+    render(<ProgressRing tracked={90 * 60_000} planned={0} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByRole('img')).toHaveAccessibleName('1h 30m tracked, nothing planned');
+  });
+
+  it('names itself the same way in both roles', () => {
+    render(<ProgressRing tracked={HOUR} planned={2 * HOUR} />);
+    const ring = screen.getByRole('progressbar');
+    expect(ring).toHaveAccessibleName('1h 0m tracked of 2h 0m planned');
+    expect(ring).toHaveAttribute('aria-valuenow', String(HOUR));
   });
 });
 

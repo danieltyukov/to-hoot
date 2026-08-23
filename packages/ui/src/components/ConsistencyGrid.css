@@ -4,29 +4,41 @@
   gap: 6px;
 }
 
-/* Capped rather than fluid: fourteen cells that grow to fill a wide footer stop
-   reading as a small ambient thing and start reading as a chart. */
 .grid {
   display: grid;
-  grid-template-columns: repeat(var(--days, 14), minmax(0, 16px));
+  grid-template-columns: repeat(var(--days, 14), 11px);
   gap: 3px;
 }
 
+/*
+ * 2px on an 11px cell, which is the one radius in the app that is neither of
+ * the two design radii. 6px here would be 55% of the side and the cell would
+ * read as a dot; these have to read as squares, because a row of squares is a
+ * calendar and a row of dots is a loading state. The exception is asserted to
+ * this one selector in styles.test.ts.
+ */
 .grid-cell {
   aspect-ratio: 1;
-  border-radius: var(--r-control);
+  border-radius: 2px;
   background: var(--accent);
 }
 
 /* A missed day is a lighter cell. It is never removed, and nothing resets. */
 .grid-cell[data-level='0'] {
-  background: var(--border);
+  background: var(--border-strong);
 }
 
 .grid-cell[data-level='1'] {
-  opacity: 0.35;
+  opacity: 0.4;
 }
 
 .grid-cell[data-level='2'] {
-  opacity: 0.65;
+  opacity: 0.7;
+}
+
+/* Today. Without it the row is fourteen squares with no anchor and no
+   direction; with it, it is a record that ends here. */
+.grid-cell[data-today] {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 1.5px;
 }

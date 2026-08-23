@@ -4,9 +4,11 @@
   transform: rotate(-90deg);
 }
 
+/* border-strong, not border: at zero the track is the whole mark, and a
+   hairline that faint reads as a shape still loading rather than a gauge. */
 .ring-track {
   fill: none;
-  stroke: var(--border);
+  stroke: var(--border-strong);
 }
 
 .ring-value {

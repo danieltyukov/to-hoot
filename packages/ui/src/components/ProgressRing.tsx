@@ -13,23 +13,37 @@ export interface ProgressRingProps {
 /*
  * Tracked against planned, as a ring.
  *
- * One of the three places the accent appears, and the only one that carries a
- * number. It is a progressbar rather than an image so the value travels: a ring
- * with an alt text of "63%" tells a screen reader the shape, not the day.
+ * One of the three places the accent appears, and the only one carrying a
+ * number. The ring fills and stops: it does not turn red, it does not wrap round
+ * a second time, and going over plan is not a failure state, because the
+ * estimate was a guess and the tracker is the measurement.
  *
- * The ring fills and stops. It does not turn red, it does not wrap round a
- * second time, and going over plan is not a failure state: the estimate was a
- * guess and the tracker is the measurement.
+ * The role changes with the data, which is not a style choice. With nothing
+ * planned there is no scale to be a fraction of, and a progressbar with
+ * `valuemin` and `valuemax` both 0 is a degenerate range: Chrome drops
+ * `valuenow` and reports `valuetext` as empty, so the label never arrives. An
+ * image with a label is what this actually is when there is no target, and it
+ * reads correctly. Until estimates can be entered, that is its every state.
  */
 export function ProgressRing({ tracked, planned, size = 40, strokeWidth = 3 }: ProgressRingProps) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const ratio = planned > 0 ? Math.min(1, Math.max(0, tracked / planned)) : 0;
+  const hasTarget = planned > 0;
+  const ratio = hasTarget ? Math.min(1, Math.max(0, tracked / planned)) : 0;
 
-  const label =
-    planned > 0
-      ? `${formatDuration(tracked)} tracked of ${formatDuration(planned)} planned`
-      : `${formatDuration(tracked)} tracked, nothing planned`;
+  const label = hasTarget
+    ? `${formatDuration(tracked)} tracked of ${formatDuration(planned)} planned`
+    : `${formatDuration(tracked)} tracked, nothing planned`;
+
+  const semantics = hasTarget
+    ? {
+        role: 'progressbar',
+        'aria-valuemin': 0,
+        'aria-valuemax': planned,
+        'aria-valuenow': Math.min(tracked, planned),
+        'aria-valuetext': label,
+      }
+    : { role: 'img' };
 
   return (
     <svg
@@ -37,12 +51,8 @@ export function ProgressRing({ tracked, planned, size = 40, strokeWidth = 3 }: P
       width={size}
       height={size}
       viewBox={`0 0 ${size} ${size}`}
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={Math.max(planned, 0)}
-      aria-valuenow={Math.min(tracked, Math.max(planned, tracked))}
-      aria-valuetext={label}
-      aria-label="Tracked against planned"
+      aria-label={label}
+      {...semantics}
     >
       <circle
         className="ring-track"

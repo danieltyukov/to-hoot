@@ -48,11 +48,14 @@ describe.each(FILES)('$name', ({ name, css }) => {
   const decls = declarations(css);
   const isTokens = name === TOKENS;
 
-  it('uses only the two radii, plus a full round for pills and dots', () => {
-    // 50% is a dot or an avatar and 999px is a tag. Everything with corners
-    // takes one of the two tokens, which is what keeps controls and panels
-    // reading as two families rather than eleven.
-    const allowed = new Set(['var(--r-control)', 'var(--r-panel)', '50%', '999px', '6px', '10px']);
+  it('uses only the radius token, plus a full round for pills and dots', () => {
+    // 50% is a dot and 999px is a pill; everything with corners takes the
+    // token. A literal 6px is rejected even though it is the same number today,
+    // because a literal is a value nobody has to keep in step with the token.
+    const allowed = new Set(['var(--r-control)', '50%', '999px']);
+    // One exception, and it is scoped to the single file that earns it: the
+    // consistency cell is 11px, and 6px on an 11px square is a dot.
+    if (name.endsWith('ConsistencyGrid.css')) allowed.add('2px');
     for (const [prop, value] of decls) {
       if (!prop.startsWith('border') || !prop.includes('radius')) continue;
       expect(allowed.has(value), `${prop}: ${value}`).toBe(true);
@@ -124,6 +127,14 @@ describe.each(FILES)('$name', ({ name, css }) => {
   it('contains no emoji', () => {
     expect(css).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/u);
   });
+});
+
+it('grants the 11px grid cell its radius exception and nothing else', () => {
+  // The allowance above is per file; this pins it to the one selector, so the
+  // exception cannot quietly spread through the sheet that holds it.
+  const grid = FILES.find(f => f.name.endsWith('ConsistencyGrid.css'))!.css;
+  const exceptions = [...grid.matchAll(/([^{}]+)\{[^{}]*border-radius:\s*2px/g)];
+  expect(exceptions.map(m => m[1]!.trim().split('\n').pop()!.trim())).toEqual(['.grid-cell']);
 });
 
 describe('the rules the component tests lean on', () => {

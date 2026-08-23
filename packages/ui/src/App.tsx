@@ -16,6 +16,7 @@ import { Sidebar, type View } from './components/Sidebar.js';
 import { TaskList } from './components/TaskList.js';
 import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
+import { formatDuration } from './format.js';
 import { trackedSpans } from './trackedSpans.js';
 import { Store } from './store.js';
 import './App.css';
@@ -148,14 +149,31 @@ export default function App({ store: injected }: AppProps = {}) {
         />
       </div>
 
+      {/* Both halves are labelled and both carry a number. Unlabelled, a ring
+          at zero beside fourteen pale cells reads as a skeleton that never
+          finished loading, which is what it looked like before. */}
       <footer className="app-foot">
-        <ProgressRing tracked={tracked + snapshot.pendingMs} planned={planned} />
-        <ConsistencyGrid
-          tracked={consistency(state, GRID_DAYS, now)}
-          completed={completedPerDay(state, GRID_DAYS, now)}
-          now={now}
-          dayOffsetMs={offsetMs}
-        />
+        <div className="foot-block">
+          <ProgressRing tracked={tracked + snapshot.pendingMs} planned={planned} size={34} />
+          <div className="foot-lines">
+            <span className="micro">today</span>
+            <span className="foot-value tabular">
+              {planned > 0
+                ? `${formatDuration(tracked + snapshot.pendingMs)} of ${formatDuration(planned)}`
+                : `${formatDuration(tracked + snapshot.pendingMs)} tracked`}
+            </span>
+          </div>
+        </div>
+
+        <div className="foot-lines">
+          <span className="micro">last {GRID_DAYS} days</span>
+          <ConsistencyGrid
+            tracked={consistency(state, GRID_DAYS, now)}
+            completed={completedPerDay(state, GRID_DAYS, now)}
+            now={now}
+            dayOffsetMs={offsetMs}
+          />
+        </div>
       </footer>
 
       <nav className="tabs" aria-label="Panes">

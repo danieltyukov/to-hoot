@@ -97,6 +97,60 @@ test('the page never scrolls horizontally at 360px', async ({ page }) => {
   }
 });
 
+test('the day opens on now, not on the small hours', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.locator('[data-tab="day"]').click();
+
+  // The chip rather than the .now wrapper: the wrapper is a zero-height anchor
+  // for three absolutely positioned children, so it has no box to be visible.
+  const marker = page.locator('.now-chip');
+  await expect(marker).toBeVisible();
+
+  // Visible is not enough: the grid is up to 24 hours tall, and the complaint
+  // was that the line sits behind the footer with only the small hours on
+  // screen. Assert the marker is inside the grid's own viewport.
+  const [line, grid] = await Promise.all([
+    marker.boundingBox(),
+    page.locator('.timeline-grid').boundingBox(),
+  ]);
+  expect(line!.y).toBeGreaterThanOrEqual(grid!.y);
+  expect(line!.y + line!.height).toBeLessThanOrEqual(grid!.y + grid!.height);
+});
+
+test('the wordmark is still one word to anything that reads it', async ({ page }) => {
+  // It is assembled from spans so the two `o`s can hold a pupil. Selection,
+  // search and the accessible name all come from textContent, so the word has
+  // to survive being cut up.
+  await page.setViewportSize(DESKTOP);
+  await expect(page.getByText('to-hoot', { exact: true })).toBeVisible();
+});
+
+test('the accent is never used as a text colour', async ({ page }) => {
+  // The token sheet holds --accent to 3:1, which is the non-text threshold and
+  // is only honest while nothing sets words in it. Words take --accent-hover,
+  // which clears 4.5:1 in both themes.
+  await addTask(page, 'Rewire the bench');
+  await page.getByRole('button', { name: 'Start timer for Rewire the bench' }).click();
+
+  const offenders = await page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    document.body.append(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+
+    return [...document.querySelectorAll<HTMLElement>('body *')]
+      .filter(el => {
+        const ownText = [...el.childNodes].some(
+          n => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim() !== '',
+        );
+        return ownText && getComputedStyle(el).color === accent;
+      })
+      .map(el => el.outerHTML.slice(0, 120));
+  });
+  expect(offenders).toEqual([]);
+});
+
 test('every control the mobile suite has to address carries a name', async ({ page }) => {
   // Maestro drives the Android build through the accessibility tree and matches
   // on nothing else. An unnamed control is not awkward there, it is unreachable.

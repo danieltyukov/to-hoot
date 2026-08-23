@@ -228,10 +228,19 @@ describe('App', () => {
     await addTask(user, 'Rewire the bench');
     expect(screen.getByText('tracked')).toBeInTheDocument();
     expect(screen.getByText('planned')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute(
-      'aria-valuetext',
+    expect(screen.getByRole('img', { name: /tracked/ })).toHaveAccessibleName(
       '0m tracked, nothing planned',
     );
+  });
+
+  it('labels both halves of the footer and gives each a visible number', () => {
+    // Unlabelled, a ring at zero beside fourteen pale cells reads as a
+    // skeleton that never finished loading.
+    const { container } = setup();
+    expect(screen.getByText('today')).toBeInTheDocument();
+    expect(screen.getByText('last 14 days')).toBeInTheDocument();
+    expect(container.querySelector('.foot-value')).toHaveTextContent('0m tracked');
+    expect(container.querySelectorAll('[data-today]')).toHaveLength(1);
   });
 
   it('gives every control in the shell an accessible name', () => {

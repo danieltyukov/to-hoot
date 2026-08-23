@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 import { formatDuration, formatHour, formatTimeOfDay, isoDuration } from '../format.js';
 import {
@@ -51,7 +51,7 @@ export function Timeline({
   plannedTotal = 0,
   heading = 'Today',
 }: TimelineProps) {
-  const range = hourRange([...events, ...tracked], dayStartMs, startHour, endHour);
+  const range = hourRange([...events, ...tracked], dayStartMs, startHour, endHour, now);
   const originMs = dayStartMs + range.startHour * 3_600_000;
   const bodyHeight = (range.endHour - range.startHour) * HOUR_HEIGHT;
 
@@ -60,6 +60,23 @@ export function Timeline({
 
   const nowTop = now === null ? null : offsetFor(now, originMs);
   const showNow = nowTop !== null && nowTop >= 0 && nowTop <= bodyHeight;
+
+  const gridRef = useRef<HTMLDivElement>(null);
+  const openAt = useRef(showNow ? nowTop : null);
+  openAt.current = showNow ? nowTop : null;
+
+  // Mount only, deliberately. The grid is up to 24 hours tall and opens at the
+  // top, which on a phone puts the current-time line behind the footer with
+  // nothing on screen but the small hours. Re-running this on every tick would
+  // drag the view back every second and fight anyone trying to scroll.
+  useEffect(() => {
+    const grid = gridRef.current;
+    const top = openAt.current;
+    if (grid === null || top === null) return;
+    // A third down, so the rest of the day is what fills the screen rather than
+    // the part of it that has already gone.
+    grid.scrollTop = Math.max(0, top + GRID_PAD_TOP - grid.clientHeight / 3);
+  }, []);
 
   const hours: ReactNode[] = [];
   for (let hour = range.startHour; hour <= range.endHour; hour++) {
@@ -103,7 +120,7 @@ export function Timeline({
         </p>
       </header>
 
-      <div className="timeline-grid" style={{ paddingTop: GRID_PAD_TOP }}>
+      <div className="timeline-grid" ref={gridRef} style={{ paddingTop: GRID_PAD_TOP }}>
         <div className="timeline-body" style={{ height: bodyHeight }}>
           {hours}
 

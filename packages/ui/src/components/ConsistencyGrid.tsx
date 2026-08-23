@@ -62,6 +62,7 @@ export function ConsistencyGrid({
               className="grid-cell"
               data-day={day}
               data-level={level(ms, done)}
+              data-today={i === days - 1 ? '' : undefined}
               title={`${day}: ${formatDuration(ms)} tracked, ${done} done`}
             />
           );
