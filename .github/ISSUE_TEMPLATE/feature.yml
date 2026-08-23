@@ -1,0 +1,56 @@
+name: Feature request
+description: Something the app should do and does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a small, opinionated app with a short list of non-goals: no
+        hosted service, no accounts, no team features, and no data leaving the
+        accounts of the person running it. A request that needs any of those is
+        not going to happen, and saying so early is more useful than a slow no.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where this would apply.
+      multiple: true
+      options:
+        - All platforms
+        - Linux desktop
+        - Android
+        - MCP (Claude Code, Claude web or Cowork)
+        - Calendar bridge
+        - Sync
+        - The project site
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What you were trying to do, and what made it awkward. Describe the
+        situation rather than the feature; the situation is the part that cannot
+        be guessed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >
+        Including workarounds that nearly worked. If an existing feature comes
+        close and misses, say which one and by how much.
+    validations:
+      required: false

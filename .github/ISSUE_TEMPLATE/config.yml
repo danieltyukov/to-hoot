@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup help
+    url: https://github.com/danieltyukov/to-hoot/blob/main/docs/SETUP.md
+    about: Connecting sync, the calendar bridge or Claude to your own accounts.
+  - name: Security report
+    url: https://github.com/danieltyukov/to-hoot/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue for one.
