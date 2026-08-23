@@ -138,6 +138,13 @@ interface RawResponse {
   text: string;
 }
 
+/**
+ * The sha of an empty tree, which is the same in every Git repository because
+ * it is the hash of nothing. GitHub has no object to serve for it and answers
+ * 404.
+ */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
 export class GitHubClient implements RepoClient {
   private readonly http: Http;
   private readonly config: GitHubRepoConfig;
@@ -273,8 +280,30 @@ export class GitHubClient implements RepoClient {
    * log it never saw.
    */
   async listTree(sha: string): Promise<TreeEntry[]> {
+    if (sha === EMPTY_TREE) return [];
     const path = `${this.repoPath}/git/trees/${sha}`;
-    const res = await this.send('GET', `${path}?recursive=1`);
+    // `request` rather than `send`, because `send` turns a 404 into a throw and
+    // here the 404 is the answer being looked for.
+    const res = await this.request('GET', `${path}?recursive=1`);
+    /*
+     * A 404 is an empty tree, not a missing repository.
+     *
+     * GitHub answers 404 for the empty tree, including when the sha given is a
+     * commit it resolved to that tree, which is how this arrives in practice:
+     * the sha in the error is the commit and looks nothing like `EMPTY_TREE`,
+     * so the check above cannot catch it.
+     *
+     * Safe because of where the sha came from. Callers pass one they have just
+     * read off a ref, so the repository is reachable and the commit exists; the
+     * only thing left for a 404 to mean is that nothing is stored under it. A
+     * data repository is in exactly that state from the moment its last file is
+     * removed until its first event lands.
+     */
+    if (res.status === 404) return [];
+    // Every other failure is still a failure. Without this a 500 falls through
+    // to the shape check below and is reported as "no tree in the response",
+    // which reads as a malformed reply rather than as the outage it is.
+    this.checkOk(res, 'GET', path);
     const body = parseJson(res, 'GET', path);
     if (isRecord(body) && body['truncated'] === true) {
       throw new GitHubError(res.status, 'GET', path, 'tree is truncated, refusing a partial repository');

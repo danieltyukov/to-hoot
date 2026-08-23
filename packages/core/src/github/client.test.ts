@@ -366,6 +366,52 @@ describe('GitHubClient', () => {
     expect(new URL(http.calls[0]!.url).searchParams.get('recursive')).toBe('1');
   });
 
+  it('reads the empty tree without asking, because the API answers 404 for it', async () => {
+    /*
+     * `4b825dc...` is the sha every Git repository gives an empty tree, and
+     * GitHub's REST API returns 404 for it rather than an empty list. A data
+     * repository reaches that state the moment its last file is removed, and
+     * without this the whole repository reads as missing: not "no events yet"
+     * but a hard failure on every sync, for a repository that is merely empty.
+     */
+    http.replyOnce('GET', 404, { message: 'Not Found' });
+    await expect(client.listTree('4b825dc642cb6eb9a060e54bf8d69288fbee4904')).resolves.toEqual([]);
+    // And it never went to the network to find that out.
+    expect(http.calls).toHaveLength(0);
+  });
+
+  it('reads a commit whose tree is empty as no files, not as a missing repository', async () => {
+    /*
+     * The case the constant above does not catch, and the one that actually
+     * happens: the caller passes a *commit* sha, GitHub resolves it to the tree
+     * itself, and answers 404 because that tree is empty. The sha in the error
+     * is the commit, which looks nothing like the empty tree, so this cannot be
+     * spotted by inspecting the argument.
+     *
+     * Safe to read as empty because the sha did not come from nowhere: the
+     * caller has just read it off a ref, so the repository is reachable and the
+     * commit exists. The only remaining reading of a 404 here is that the tree
+     * under it holds nothing.
+     */
+    http.replyOnce('GET', 404, { message: 'Not Found' });
+    await expect(client.listTree('7f73b9929f0b214b5f6fc5390644f6a131f65a2f')).resolves.toEqual([]);
+  });
+
+  it('still throws for a tree failure that is not a 404', async () => {
+    // The 404 above is read as an answer, which means this path no longer goes
+    // through the shared error check by default. A 500 must not become "no
+    // files": that would report an outage as an empty repository.
+    http.replyOnce('GET', 500, { message: 'boom' });
+    const err = await client.listTree('commit-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitHubError);
+    expect((err as GitHubError).status).toBe(500);
+    // Specifically NOT the shape complaint. Both paths throw a GitHubError
+    // carrying 500, so type and status alone would pass with the error check
+    // removed and prove nothing; "no tree in the response" is what a 500
+    // degrades into once the status stops being checked.
+    expect((err as GitHubError).message).not.toMatch(/no tree/);
+  });
+
   it('refuses a truncated tree rather than reporting a partial repository', async () => {
     http.truncated = true;
     await expect(client.listTree('commit-1')).rejects.toThrow(/truncat/i);
