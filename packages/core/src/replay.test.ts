@@ -1,0 +1,167 @@
+import { describe, it, expect } from 'vitest';
+import { replay } from './replay.js';
+import type { Event } from './events.js';
+
+const ev = (o: Partial<Event>): Event => ({
+  id: o.id!, deviceId: o.deviceId ?? 'a', ts: o.ts ?? 0,
+  type: o.type ?? 'update', entity: 'task', entityId: o.entityId ?? 't1',
+  payload: o.payload ?? {}, schemaVersion: 1,
+});
+
+describe('replay', () => {
+  it('is order-independent: any shuffle of the same events yields the same state', () => {
+    const evs = [
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 2, payload: { title: 'b' } }),
+      ev({ id: '3', ts: 3, payload: { notes: 'n' } }),
+    ];
+    const forward = replay(evs);
+    const backward = replay([...evs].reverse());
+    expect(backward).toEqual(forward);
+  });
+
+  it('sums concurrent timeDelta events rather than overwriting', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 5, deviceId: 'a', type: 'timeDelta', payload: { day: '2026-08-23', ms: 1000 } }),
+      ev({ id: '3', ts: 5, deviceId: 'b', type: 'timeDelta', payload: { day: '2026-08-23', ms: 2000 } }),
+    ]);
+    expect(s.tasks.t1.timeSpentOnDay['2026-08-23']).toBe(3000);
+    expect(s.tasks.t1.timeSpent).toBe(3000);
+  });
+
+  it('merges updates that touch disjoint fields', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 5, deviceId: 'a', payload: { title: 'from-a' } }),
+      ev({ id: '3', ts: 5, deviceId: 'b', payload: { notes: 'from-b' } }),
+    ]);
+    expect(s.tasks.t1.title).toBe('from-a');
+    expect(s.tasks.t1.notes).toBe('from-b');
+  });
+
+  it('lets delete win over a concurrent update regardless of timestamp', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 9, type: 'update', payload: { title: 'late' } }),
+      ev({ id: '3', ts: 5, type: 'delete', payload: {} }),
+    ]);
+    expect(s.tasks.t1).toBeUndefined();
+  });
+
+  it('breaks same-timestamp ties by deviceId, stably', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 5, deviceId: 'zzz', payload: { title: 'z' } }),
+      ev({ id: '3', ts: 5, deviceId: 'aaa', payload: { title: 'a' } }),
+    ]);
+    expect(s.tasks.t1.title).toBe('z');
+  });
+
+  it('mutual exclusion: setting dueWithTime clears dueDay', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox', dueDay: '2026-08-23' } }),
+      ev({ id: '2', ts: 2, payload: { dueWithTime: 1755950000000 } }),
+    ]);
+    expect(s.tasks.t1.dueDay).toBeUndefined();
+    expect(s.tasks.t1.dueWithTime).toBe(1755950000000);
+  });
+});
+
+// A seeded generator, so a failure is reproducible rather than a one-off that
+// nobody can bring back.
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffle(items: Event[], seed: number): Event[] {
+  const rand = rng(seed);
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+function buildRandomLog(count: number, seed = 20260823): Event[] {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
+  const devices = ['alpha', 'beta', 'gamma'];
+  const taskIds = ['t1', 't2', 't3', 't4', 't5'];
+  const projectIds = ['inbox', 'work'];
+  const days = ['2026-08-21', '2026-08-22', '2026-08-23'];
+  const out: Event[] = [];
+
+  for (let i = 0; i < count; i++) {
+    // A small timestamp range on purpose: collisions are what exercise the
+    // deviceId and id tiebreakers.
+    const ts = 1 + Math.floor(rand() * 12);
+    const deviceId = pick(devices);
+    const id = `e${String(i).padStart(3, '0')}`;
+    const roll = rand();
+
+    if (roll < 0.2) {
+      out.push({
+        id, deviceId, ts, type: 'create', entity: 'task', entityId: pick(taskIds),
+        payload: { title: `t${i}`, projectId: pick(projectIds), timeEstimate: Math.floor(rand() * 5) * 60_000 },
+        schemaVersion: 1,
+      });
+    } else if (roll < 0.4) {
+      const payload: Record<string, unknown> = {};
+      const field = pick(['title', 'notes', 'isDone', 'dueDay', 'dueWithTime', 'parentId', 'tagIds']);
+      if (field === 'title') payload['title'] = `title-${i}`;
+      else if (field === 'notes') payload['notes'] = `notes-${i}`;
+      else if (field === 'isDone') payload['isDone'] = rand() < 0.5;
+      else if (field === 'dueDay') payload['dueDay'] = pick(days);
+      else if (field === 'dueWithTime') payload['dueWithTime'] = 1_755_000_000_000 + i;
+      else if (field === 'parentId') payload['parentId'] = pick(taskIds);
+      else payload['tagIds'] = [pick(['home', 'deep'])];
+      out.push({ id, deviceId, ts, type: 'update', entity: 'task', entityId: pick(taskIds), payload, schemaVersion: 1 });
+    } else if (roll < 0.75) {
+      out.push({
+        id, deviceId, ts, type: 'timeDelta', entity: 'task', entityId: pick(taskIds),
+        payload: { day: pick(days), ms: Math.floor(rand() * 60_000) }, schemaVersion: 1,
+      });
+    } else if (roll < 0.85) {
+      out.push({ id, deviceId, ts, type: 'delete', entity: 'task', entityId: pick(taskIds), payload: {}, schemaVersion: 1 });
+    } else if (roll < 0.95) {
+      out.push({
+        id, deviceId, ts, type: 'create', entity: 'project', entityId: pick(projectIds),
+        payload: { title: `p${i}`, color: '#123456' }, schemaVersion: 1,
+      });
+    } else {
+      out.push({
+        id, deviceId, ts, type: 'update', entity: 'settings', entityId: 'settings',
+        payload: { theme: pick(['light', 'dark', 'system']), idleThresholdMs: 60_000 * (i + 1) },
+        schemaVersion: 1,
+      });
+    }
+  }
+  return out;
+}
+
+describe('replay determinism', () => {
+  it('any permutation of a 40-event log converges to the same state', () => {
+    const evs = buildRandomLog(40);
+    const reference = replay(evs);
+    for (let i = 0; i < 25; i++) {
+      expect(replay(shuffle(evs, 1000 + i))).toEqual(reference);
+    }
+  });
+
+  it('the generated log is not trivially small', () => {
+    const evs = buildRandomLog(40);
+    const state = replay(evs);
+    expect(evs).toHaveLength(40);
+    expect(Object.keys(state.tasks).length).toBeGreaterThan(0);
+    const tracked = Object.values(state.tasks).reduce((sum, t) => sum + t.timeSpent, 0);
+    expect(tracked).toBeGreaterThan(0);
+  });
+});

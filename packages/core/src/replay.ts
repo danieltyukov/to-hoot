@@ -1,0 +1,369 @@
+// Replay folds an event log into state.
+//
+// The whole design rests on one property: replaying the same events in any
+// arrival order produces the same state. That is why events are sorted into a
+// total order first, and why every merge rule below is a pure function of the
+// sorted log rather than of the order events happened to arrive in.
+//
+// Merge rules, in the order they resolve:
+//   1. timeDelta events carry increments, so concurrent tracking sums instead of
+//      one device overwriting the other.
+//   2. Updates that touch different fields both apply.
+//   3. Otherwise last write wins per field, by (ts, deviceId, id).
+//   4. Delete beats a concurrent update whatever the timestamps say, or a late
+//      update resurrects a deleted task.
+//
+// Applying the sorted events in order is exactly a per-field last-write-wins
+// frontier: for any field, the value that survives is the one carried by the
+// greatest event under that ordering. Keeping a separate stamp per field would
+// store the same answer twice.
+
+import type { Event } from './events.js';
+import { compareEvents, isWellFormed } from './events.js';
+import { newTask, type Project, type Tag, type Task } from './models.js';
+import { cloneState, emptyState, type State } from './state.js';
+
+type Record_ = Record<string, unknown>;
+
+interface FieldSpec {
+  check: (v: unknown) => boolean;
+  /** Optional fields accept null as "clear this field". */
+  optional?: boolean;
+}
+type FieldTable = Record<string, FieldSpec>;
+
+const isString = (v: unknown): boolean => typeof v === 'string';
+const isNumber = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v);
+const isBoolean = (v: unknown): boolean => typeof v === 'boolean';
+const isStringArray = (v: unknown): boolean => Array.isArray(v) && v.every(isString);
+const isNumberMap = (v: unknown): boolean => isPlainObject(v) && Object.values(v).every(isNumber);
+const isTheme = (v: unknown): boolean => v === 'light' || v === 'dark' || v === 'system';
+
+function isPlainObject(v: unknown): v is Record_ {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function asRecord(v: unknown): Record_ {
+  return isPlainObject(v) ? v : {};
+}
+
+function has(payload: Record_, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+/** Copies one level deep so a payload object is never aliased into state. */
+function cloneValue(v: unknown): unknown {
+  if (Array.isArray(v)) return [...v];
+  if (isPlainObject(v)) return { ...v };
+  return v;
+}
+
+// Fields an event payload may write. Anything absent here is ignored, which is
+// how a malformed or newer-schema event from another device stays harmless.
+// `timeSpent` is derived and `timeSpentOnDay` is written only by timeDelta, so
+// neither is listed: an update can never set a total.
+const TASK_FIELDS: FieldTable = {
+  title: { check: isString },
+  notes: { check: isString, optional: true },
+  isDone: { check: isBoolean },
+  doneOn: { check: isNumber, optional: true },
+  projectId: { check: isString },
+  tagIds: { check: isStringArray },
+  parentId: { check: isString, optional: true },
+  subTaskIds: { check: isStringArray },
+  timeEstimate: { check: isNumber },
+  dueDay: { check: isString, optional: true },
+  dueWithTime: { check: isNumber, optional: true },
+  calendarEventId: { check: isString, optional: true },
+  calendarWritten: { check: isNumberMap },
+};
+
+const PROJECT_FIELDS: FieldTable = {
+  title: { check: isString },
+  color: { check: isString },
+  taskIds: { check: isStringArray },
+  isArchived: { check: isBoolean },
+};
+
+const TAG_FIELDS: FieldTable = {
+  title: { check: isString },
+  color: { check: isString },
+  taskIds: { check: isStringArray },
+};
+
+// Settings that travel between devices. Secrets and device-local identity are
+// absent on purpose: a synced token lands in the data repo, and a synced
+// deviceId would make two devices write the same event path.
+const SETTINGS_FIELDS: FieldTable = {
+  theme: { check: isTheme },
+  dayStartOffsetMs: { check: isNumber },
+  idleThresholdMs: { check: isNumber },
+  workdayStart: { check: isString },
+  workdayEnd: { check: isString },
+};
+
+const SETTINGS_GITHUB_FIELDS: FieldTable = {
+  owner: { check: isString },
+  repo: { check: isString },
+};
+
+const SETTINGS_CALENDAR_FIELDS: FieldTable = {
+  execUrl: { check: isString },
+  icsUrl: { check: isString },
+};
+
+function applyFields(target: Record_, payload: Record_, table: FieldTable): void {
+  for (const [key, spec] of Object.entries(table)) {
+    if (!has(payload, key)) continue;
+    const value = payload[key];
+    if (value === null || value === undefined) {
+      if (spec.optional) delete target[key];
+      continue;
+    }
+    if (!spec.check(value)) continue;
+    target[key] = cloneValue(value);
+  }
+}
+
+function entityKey(e: Event): string {
+  return `${e.entity}:${e.entityId}`;
+}
+
+function tsOf(e: Event): number {
+  return Number.isFinite(e.ts) ? e.ts : 0;
+}
+
+/**
+ * Replays an event log into state, optionally on top of a snapshot.
+ *
+ * Malformed events are skipped rather than thrown on: the log contains events
+ * written by other devices running other builds, and one bad event must never
+ * be able to stop a device from loading its own data.
+ */
+export function replay(events: Event[], base?: State): State {
+  const state = base ? cloneState(base) : emptyState();
+  const sorted = events.filter(isWellFormed).sort(compareEvents);
+
+  // Rule 4. Collected before anything is applied, so a delete beats an update
+  // that carries a later timestamp.
+  const tombstoned = new Set<string>();
+  for (const e of sorted) {
+    if (e.type === 'delete' && e.entity !== 'settings') tombstoned.add(entityKey(e));
+  }
+  for (const key of tombstoned) {
+    const [entity, id] = splitKey(key);
+    if (entity === 'task') delete state.tasks[id];
+    else if (entity === 'project') delete state.projects[id];
+    else if (entity === 'tag') delete state.tags[id];
+  }
+
+  // An entity referenced before its create event has been applied is only
+  // materialised if the log actually creates it. Without this a delta whose
+  // create was compacted away would resurrect a deleted entity.
+  const created = new Set<string>();
+  for (const e of sorted) {
+    if (e.type === 'create') created.add(entityKey(e));
+  }
+
+  for (const e of sorted) {
+    const key = entityKey(e);
+    if (tombstoned.has(key)) continue;
+    applyEvent(state, e, created.has(key));
+  }
+
+  normalize(state);
+  return state;
+}
+
+function splitKey(key: string): [string, string] {
+  const at = key.indexOf(':');
+  return [key.slice(0, at), key.slice(at + 1)];
+}
+
+function applyEvent(state: State, e: Event, isDeclared: boolean): void {
+  const payload = asRecord(e.payload);
+  switch (e.entity) {
+    case 'task':
+      applyTaskEvent(state, e, payload, isDeclared);
+      return;
+    case 'project':
+      applyProjectEvent(state, e, payload, isDeclared);
+      return;
+    case 'tag':
+      applyTagEvent(state, e, payload, isDeclared);
+      return;
+    case 'settings':
+      applySettingsEvent(state, e, payload);
+      return;
+  }
+}
+
+function touch(entity: { updated: number }, e: Event): void {
+  entity.updated = Math.max(entity.updated, tsOf(e));
+}
+
+function applyTaskEvent(state: State, e: Event, payload: Record_, isDeclared: boolean): void {
+  if (e.type === 'delete') return; // handled by the tombstone pass
+
+  let task = state.tasks[e.entityId];
+  if (!task) {
+    // A create always materialises the task. An update or a delta only does so
+    // when the log creates that task somewhere, which happens when the creating
+    // device's clock ran ahead of the device that wrote the update.
+    if (e.type !== 'create' && !isDeclared) return;
+    task = newTask(e.entityId, tsOf(e));
+    state.tasks[e.entityId] = task;
+  } else if (e.type === 'create') {
+    // A create for a task that already exists arrived after an event that
+    // referenced it. Keep the earlier creation stamp and treat it as an update.
+    task.created = Math.min(task.created, tsOf(e));
+  }
+
+  if (e.type === 'timeDelta') {
+    accrue(task, payload);
+    touch(task, e);
+    return;
+  }
+
+  applyFields(task as unknown as Record_, payload, TASK_FIELDS);
+  applyDueExclusivity(task, payload);
+  touch(task, e);
+}
+
+/**
+ * Rule 1. Increments add, so two devices tracking the same task at the same
+ * time produce a sum. A non-finite ms is dropped rather than stored: one NaN
+ * serialises to null and silently zeroes the day.
+ */
+function accrue(task: Task, payload: Record_): void {
+  const day = payload['day'];
+  const ms = payload['ms'];
+  if (typeof day !== 'string' || day === '') return;
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return;
+  task.timeSpentOnDay[day] = (task.timeSpentOnDay[day] ?? 0) + ms;
+}
+
+/** dueDay and dueWithTime are mutually exclusive; readers check dueWithTime first. */
+function applyDueExclusivity(task: Task, payload: Record_): void {
+  if (has(payload, 'dueWithTime') && task.dueWithTime !== undefined) {
+    delete task.dueDay;
+  } else if (has(payload, 'dueDay') && task.dueDay !== undefined) {
+    delete task.dueWithTime;
+  }
+}
+
+function applyProjectEvent(state: State, e: Event, payload: Record_, isDeclared: boolean): void {
+  if (e.type === 'delete' || e.type === 'timeDelta') return;
+  let project = state.projects[e.entityId];
+  if (!project) {
+    if (e.type !== 'create' && !isDeclared) return;
+    project = { id: e.entityId, title: '', color: '', taskIds: [], isArchived: false };
+    state.projects[e.entityId] = project;
+  }
+  applyFields(project as unknown as Record_, payload, PROJECT_FIELDS);
+}
+
+function applyTagEvent(state: State, e: Event, payload: Record_, isDeclared: boolean): void {
+  if (e.type === 'delete' || e.type === 'timeDelta') return;
+  let tag = state.tags[e.entityId];
+  if (!tag) {
+    if (e.type !== 'create' && !isDeclared) return;
+    tag = { id: e.entityId, title: '', color: '', taskIds: [] };
+    state.tags[e.entityId] = tag;
+  }
+  applyFields(tag as unknown as Record_, payload, TAG_FIELDS);
+}
+
+function applySettingsEvent(state: State, e: Event, payload: Record_): void {
+  if (e.type !== 'create' && e.type !== 'update') return;
+  if (e.entityId === 'todayOrder') {
+    const order = payload['order'];
+    if (isStringArray(order)) state.todayOrder = [...(order as string[])];
+    return;
+  }
+  applyFields(state.settings as unknown as Record_, payload, SETTINGS_FIELDS);
+  if (isPlainObject(payload['github'])) {
+    applyFields(state.settings.github as unknown as Record_, payload['github'], SETTINGS_GITHUB_FIELDS);
+  }
+  if (isPlainObject(payload['calendar'])) {
+    applyFields(state.settings.calendar as unknown as Record_, payload['calendar'], SETTINGS_CALENDAR_FIELDS);
+  }
+}
+
+/**
+ * Restores the invariants that are derived rather than stored: the time totals,
+ * and the ordering arrays on containers.
+ *
+ * Membership lives on the entity (a task's projectId, tagIds, parentId) and
+ * ordering lives on the container, so the container's array is reconciled
+ * against the entities rather than trusted on its own. That is the same rule
+ * Today follows, and it is what stops a stored list and a stored field from
+ * disagreeing about what belongs where.
+ */
+function normalize(state: State): void {
+  const tasks = Object.values(state.tasks);
+
+  for (const task of tasks) {
+    let total = 0;
+    for (const [day, ms] of Object.entries(task.timeSpentOnDay)) {
+      const value = typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : 0;
+      if (value === 0) {
+        delete task.timeSpentOnDay[day];
+        continue;
+      }
+      task.timeSpentOnDay[day] = value;
+      total += value;
+    }
+    task.timeSpent = total;
+  }
+
+  // Sorted ids give a deterministic append order, and a ULID sorts by creation.
+  const ids = Object.keys(state.tasks).sort();
+
+  for (const task of tasks) {
+    const children = ids.filter(id => {
+      const child = state.tasks[id];
+      return child !== undefined && child.parentId === task.id;
+    });
+    task.subTaskIds = reconcileOrder(task.subTaskIds, children);
+  }
+
+  for (const project of Object.values(state.projects)) {
+    const members = ids.filter(id => state.tasks[id]?.projectId === project.id);
+    project.taskIds = reconcileOrder(project.taskIds, members);
+  }
+
+  for (const tag of Object.values(state.tags)) {
+    const members = ids.filter(id => state.tasks[id]?.tagIds.includes(tag.id));
+    tag.taskIds = reconcileOrder(tag.taskIds, members);
+  }
+
+  // todayOrder is ordering only, so dead ids are dropped and nothing is added:
+  // membership is computed from the due fields at read time.
+  const live = new Set(ids);
+  state.todayOrder = dedupe(state.todayOrder.filter(id => live.has(id)));
+}
+
+/** Keeps the stored order for members it still knows, then appends the rest. */
+function reconcileOrder(stored: string[], members: string[]): string[] {
+  const wanted = new Set(members);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of stored) {
+    if (!wanted.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  for (const id of members) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function dedupe(ids: string[]): string[] {
+  const seen = new Set<string>();
+  return ids.filter(id => (seen.has(id) ? false : (seen.add(id), true)));
+}
+
