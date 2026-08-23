@@ -55,6 +55,12 @@ function gitApi({ defaultBranch = 'main', empty = true } = {}): {
       return ref === null ? send(409, { message: 'empty' }) : send(200, { object: { sha: ref } });
     }
     if (rest === '/git/trees' && req.method === 'POST') {
+      /*
+       * Verified against real GitHub: the Git Data API refuses to work in a
+       * repository with no commits. Every write answers 409, so the engine's
+       * commit path can make the second commit and not the first.
+       */
+      if (ref === null) return send(409, { message: 'Git Repository is empty.' });
       const { base_tree, tree } = body() as unknown as {
         base_tree?: string;
         tree: Array<{ path: string; content?: string; sha: string | null }>;
@@ -72,6 +78,13 @@ function gitApi({ defaultBranch = 'main', empty = true } = {}): {
         else merged.set(entry.path, { path: entry.path, sha: put('blob', entry.content), type: 'blob' });
       }
       return send(201, { sha: put('tree', { entries: [...merged.values()] }) });
+    }
+    // The Contents API is the way in: it creates the branch and the first
+    // commit together, which is the only thing that works on an empty repo.
+    if (rest.startsWith('/contents/') && req.method === 'PUT') {
+      if (ref !== null) return send(422, { message: 'already exists' });
+      ref = put('commit', { tree: put('tree', { entries: [{ path: 'README.md', sha: put('blob', 'x'), type: 'blob' }] }), parents: [] });
+      return send(201, {});
     }
     if (rest === '/git/commits' && req.method === 'POST') {
       const { message, tree, parents } = body() as unknown as Record<string, never>;
@@ -155,8 +168,9 @@ describe('SyncController', () => {
     store.addTask('Solder the preamp');
 
     expect((await sync.syncNow()).phase).toBe('ok');
-    expect(api.paths()).toHaveLength(1);
-    expect(api.paths()[0]).toMatch(/^events\/laptop\/.*\.json$/);
+    const events = api.paths().filter(p => p.startsWith('events/'));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatch(/^events\/laptop\/.*\.json$/);
     // The branch was read rather than assumed, and nothing else was touched.
     expect(api.calls).toContain('GET /');
     expect(api.calls.some(c => c.includes(`heads/${shape.defaultBranch}`))).toBe(true);
@@ -191,7 +205,9 @@ describe('SyncController', () => {
     expect(a.store.getSnapshot().state.tasks[solder]!.isDone).toBe(true);
     expect(a.store.getSnapshot().state.tasks).toEqual(b.store.getSnapshot().state.tasks);
     // One file per push batch, each under the writing device's own prefix.
-    const prefixes = new Set(api.paths().map(p => p.split('/').slice(0, 2).join('/')));
+    const prefixes = new Set(
+      api.paths().filter(p => p.startsWith('events/')).map(p => p.split('/').slice(0, 2).join('/')),
+    );
     expect([...prefixes].sort()).toEqual(['events/laptop', 'events/phone']);
   });
 
@@ -249,6 +265,24 @@ describe('SyncController', () => {
     // Still the only copy, so still here. Nothing was marked pushed.
     expect(store.pending()).toHaveLength(before);
     expect(Object.keys(store.getSnapshot().state.tasks)).toHaveLength(1);
+  });
+
+  it('gives an empty repository its first commit rather than failing forever', async () => {
+    /*
+     * Found by running against real GitHub, not by any fake. A repository the
+     * wizard has just created has no commits at all, and every Git Data write
+     * into one answers `409 Git Repository is empty`. Without this, the first
+     * sync a new user ever runs fails, and keeps failing, with a message about
+     * trees.
+     */
+    const api = gitApi({ defaultBranch: 'master', empty: true });
+    const { store, sync } = deviceOn(api.http, 'laptop', settingsFor());
+    store.addTask('Solder the preamp');
+
+    expect((await sync.syncNow()).phase).toBe('ok');
+    // Bootstrapped through the Contents API, then the ordinary path.
+    expect(api.calls.some(c => c.startsWith('PUT /contents/'))).toBe(true);
+    expect(api.paths().some(p => p.startsWith('events/laptop/'))).toBe(true);
   });
 
   it('joins a sync already in flight instead of racing it', async () => {

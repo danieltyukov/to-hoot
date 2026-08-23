@@ -2,11 +2,14 @@ import {
   GitHubClient,
   SyncConflictError,
   SyncEngine,
+  isEmptyRepository,
   type Http,
+  type PushResult,
   type Settings,
 } from '@to-hoot/core';
 
 import { watermarkOf } from './persistence.js';
+import { ensureInitialCommit } from './setup.js';
 import type { Store } from './store.js';
 
 /*
@@ -123,6 +126,36 @@ export class SyncController {
     return this.running;
   }
 
+  /**
+   * Pushes, giving an empty repository its first commit if that is what is
+   * wrong.
+   *
+   * Verified live: the Git Data API answers `409 Git Repository is empty` for
+   * every write into a repository with no commits, so the engine's whole commit
+   * path can make the second commit and not the first. Someone who points the
+   * app at a fresh empty repository without running the wizard's check would
+   * otherwise see sync fail forever with a message about trees.
+   */
+  private async push(
+    engine: SyncEngine,
+    settings: Settings,
+    pending: Parameters<SyncEngine['push']>[0],
+  ): Promise<PushResult['status']> {
+    try {
+      return (await engine.push(pending)).status;
+    } catch (err) {
+      if (!isEmptyRepository(err)) throw err;
+      const seeded = await ensureInitialCommit(this.http, settings.github.token, {
+        owner: settings.github.owner,
+        repo: settings.github.repo,
+        branch: settings.github.branch,
+      });
+      if (seeded.status === 'error') throw new Error(seeded.detail);
+      await engine.pull();
+      return (await engine.push(pending)).status;
+    }
+  }
+
   private set(phase: SyncPhase, detail: string, at: number | null = this.status.at): SyncStatus {
     this.status = { phase, detail, at, pending: this.store.pending().length };
     this.onStatus?.(this.status);
@@ -151,8 +184,10 @@ export class SyncController {
 
       const pending = this.store.pending();
       if (pending.length > 0) {
-        const result = await engine.push(pending);
-        if (result.status === 'ok') this.store.markPushed(watermarkOf(pending));
+        const result = await this.push(engine, settings, pending);
+        // `unchanged` means the engine found nothing new to write, which is as
+        // good as a push: the repository already has these events.
+        if (result === 'ok' || result === 'unchanged') this.store.markPushed(watermarkOf(pending));
       }
 
       // The repository's view, snapshot included. Local work that has not been

@@ -1,6 +1,7 @@
 import {
   BranchNotFoundError,
   CalendarBridgeClient,
+  isEmptyRepository,
   DEVICE_ID_RULE,
   GitHubClient,
   RepositoryNotVisibleError,
@@ -105,7 +106,7 @@ interface Json {
 async function api(
   http: Http,
   token: string,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PUT',
   path: string,
   body?: unknown,
 ): Promise<Json> {
@@ -312,6 +313,47 @@ export function readmeFor(target: RepoTarget): string {
   ].join('\n');
 }
 
+/** Base64 that survives anything outside ASCII, which a repository name can be. */
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * Gives a repository with no commits its first one.
+ *
+ * Verified live, and it is not a detail: the Git Data API refuses to work in an
+ * empty repository. `POST /git/trees` answers `409 Git Repository is empty`, so
+ * the whole commit path the sync engine uses cannot make the FIRST commit, only
+ * the ones after it. The Contents API can, and creating a file through it
+ * creates the branch and the initial commit together.
+ *
+ * Idempotent by outcome rather than by check: a repository that already has the
+ * file answers 422, which is success as far as this is concerned.
+ */
+export async function ensureInitialCommit(
+  http: Http,
+  token: string,
+  target: RepoTarget,
+): Promise<Check<RepoTarget>> {
+  let res: Json;
+  try {
+    res = await api(http, token, 'PUT', `/repos/${target.owner}/${target.repo}/contents/${README_PATH}`, {
+      message: 'to-hoot: initialise data repository',
+      content: base64(readmeFor(target)),
+      ...(target.branch === '' ? {} : { branch: target.branch }),
+    });
+  } catch (err) {
+    return { status: 'error', detail: transportMessage(err) };
+  }
+  if (res.status === 200 || res.status === 201 || res.status === 422) {
+    return { status: 'ok', detail: `Initialised ${target.owner}/${target.repo}.`, value: target };
+  }
+  return { status: 'error', detail: apiMessage(res, `GitHub answered ${res.status}.`) };
+}
+
 /**
  * Writes a commit and reads it back.
  *
@@ -345,9 +387,20 @@ export async function testSync(
     const resolved: RepoTarget = { ...target, branch };
     const expected = readmeFor(resolved);
 
-    const outcome = await client.commitFiles('to-hoot: set up data repository', [
-      { path: README_PATH, content: expected },
-    ]);
+    let outcome = await client
+      .commitFiles('to-hoot: set up data repository', [{ path: README_PATH, content: expected }])
+      .catch(async (err: unknown) => {
+        // A repository with no commits at all cannot be written through the Git
+        // Data API. Give it a first commit through the Contents API, then the
+        // ordinary path works for this write and every one after it.
+        if (!isEmptyRepository(err)) throw err;
+        const seeded = await ensureInitialCommit(http, token, resolved);
+        if (seeded.status === 'error') throw new Error(seeded.detail);
+        return client.commitFiles('to-hoot: set up data repository', [
+          { path: README_PATH, content: expected },
+        ]);
+      });
+
     if (outcome === 'conflict') {
       return {
         status: 'error',
