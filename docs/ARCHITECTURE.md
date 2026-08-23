@@ -131,6 +131,11 @@ concurrency check.** On failure the engine re-reads and rebuilds the whole write
 against the new head, up to five attempts, then reports a conflict rather than
 retrying forever.
 
+One exception, and only ever once per repository. A repository created with no
+commits has no ref and no parent, so there is no `base_tree` to build against and
+the Git Data API refuses the write. The first commit goes in through the Contents
+API instead, after which every write is the four calls above.
+
 `force: true` is never passed, anywhere, under any condition. A force push
 against an append-only log is a data-loss weapon: it discards commits another
 device has not read yet, and the correctness of everything above rests on the log

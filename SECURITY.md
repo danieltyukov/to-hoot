@@ -32,8 +32,10 @@ shared account, no server holding anything on your behalf, and no telemetry.
 event log. A token that syncs is a token that reaches every device you own and
 lands in the data repository, where it stays in the git history after you notice.
 
-Settings shows tokens masked with a reveal. The Apps Script secret can be
-rotated from the app, which reprints the script source with the new value.
+Settings shows tokens masked, with a Show control beside each. The Apps Script
+secret can be rotated from the app, which generates a new one and shows it. The
+script source does not change, because the secret was never in it: what changes
+is the value you set `TO_HOOT_SECRET` to in your own project.
 
 ## The GitHub token
 

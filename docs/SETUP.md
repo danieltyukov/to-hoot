@@ -26,17 +26,22 @@ Nothing later in this document is required. If a local task tracker with time
 tracking is what you wanted, you are done, and the app will not nag you about the
 rest.
 
-Settings has five sections: Sync, Calendar, Claude, Appearance and Data. Only two
-of them matter until you set up the rest. **Appearance** carries the theme and
-the hours your workday runs between, which is the span the day timeline opens on.
-**Data** is export to JSON and import.
+Settings has six sections: Sync, Calendar, Claude, Appearance, Tracking and Data.
+Three of them are worth a look before you connect anything. **Appearance**
+carries the theme and the hours your workday runs between, which is the span the
+day timeline opens on. **Data** is export to JSON and import. **Tracking**
+carries the two below, and both change what the totals mean rather than how they
+look:
 
-Two behaviours are worth knowing because no control mentions them. The day
-boundary is an offset from midnight rather than midnight itself, so a task
-finished at 01:30 counts towards the day before rather than starting a new one.
-And on the desktop a timer left running while the machine sits idle offers the
-gap back instead of counting it; Android has no equivalent signal and does not
-ask. Both are stored settings that nothing on screen exposes yet.
+- **The day starts at.** Midnight, or any hour up to 06:00. Work done before it
+  counts towards the previous day, so an evening that ran past midnight stays on
+  the day it belonged to instead of starting a new one.
+- **Ask about idle time after.** Two, five, ten, fifteen, thirty or sixty
+  minutes. On the desktop, a stretch that long with nothing happening is taken
+  back out of the totals and you are asked where it went: the task it
+  interrupted, a different task, or it was a break. The time is removed either
+  way, so the numbers stay honest whether or not you answer. Android has no
+  equivalent signal and does not ask.
 
 ## 2. Sync
 
@@ -69,16 +74,35 @@ belongs to, and then offers two paths:
 
 - **Create the data repository.** One API call, private, and the most
   error-prone manual step disappears. `to-hoot-data` is the suggested name.
-- **Select an existing one.** If the app finds a log already in it, it offers to
-  adopt it rather than initialise over the top. That is the path for a second
-  device.
+- **Select an existing one.** The wizard reads it before writing anything and
+  tells you what it found, by name: "Already holds a log from one device:
+  laptop." It says in as many words that nothing already there is replaced. That
+  matters most on the second device, when the repository you are pointing at
+  holds the only copy of the first one's history.
 
 It then writes an initial commit and reads it back before declaring success, so
-the whole round trip is proven rather than assumed.
+the whole round trip is proven rather than assumed. Against a repository that
+already holds a log it reports joining it instead of setting it up.
+
+A repository created empty has no commits at all, and the Git Data API cannot
+write into one: there is no parent commit to build a tree against. The app gives
+it a first commit through the Contents API before the first sync, so "create it
+for me" and "here is one I made earlier" end up in the same state.
 
 Finally, **name the device**. The name becomes the event log prefix, so "laptop"
-and "phone" make a log you can read by eye later; two devices must never share
-one, and the app refuses a duplicate.
+and "phone" make a log you can read by eye later. Two devices must never share
+one, and the wizard reads the repository to check: a name another device already
+claims is refused, and the message says which, rather than hinting that
+something is wrong.
+
+Re-using a name is possible and is never silent. It is a separate button, "I am
+replacing that machine", and it is only safe if the old machine will never sync
+again. Two live devices under one name write to the same paths, and the whole
+merge model rests on that never happening.
+
+The names come from `meta.json` first and from the event paths only as a
+fallback. A device whose events have all been folded into the snapshot has no
+`events/<id>/` folder left, and it still holds its name.
 
 The data repository holds data only. No code, no Actions, no workflows. Nothing
 in this project ever executes anything it reads from there.
@@ -86,9 +110,20 @@ in this project ever executes anything it reads from there.
 ### Adding a second device
 
 Paste the same token, pick the same repository, give it a different device name.
-The app detects the existing log and adopts it. Both devices then write only
-under their own prefix, so they cannot collide, and time tracked on both at once
-adds up instead of one overwriting the other.
+The wizard names the devices already writing there and joins their log. Both
+devices then write only under their own prefix, so they cannot collide, and time
+tracked on both at once adds up instead of one overwriting the other.
+
+### When it syncs
+
+On its own, and opportunistically: once the log has loaded, on a timer, when the
+app comes back to the foreground, and shortly after anything changes. There is
+no sync button to remember.
+
+Nothing fights the platform for background execution, because it does not have
+to. Every event carries its own timestamp and device, and tracked time carries an
+increment rather than a total, so a phone that syncs when it is next opened
+reaches the same state as one that synced on time.
 
 ## 3. Calendar
 
