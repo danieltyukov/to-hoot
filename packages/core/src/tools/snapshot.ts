@@ -5,9 +5,9 @@
 // event file and folding hundreds of events costs real CPU, and a `SyncEngine`
 // refresh does exactly that. So this reads one file:
 //
-//   1. `latestCommit(etag)` — conditional, and a 304 answers the whole call.
-//   2. `listTree(head)` — only when the head actually moved.
-//   3. `getBlob(snapshot.json)` — only when the snapshot itself changed.
+//   1. `latestCommit(etag)`, conditional: a 304 answers the whole call.
+//   2. `listTree(head)`, only when the head actually moved.
+//   3. `getBlob(snapshot.json)`, only when the snapshot itself changed.
 //
 // The cost of that: events other devices have written since the last compaction
 // are invisible here, because folding them in is precisely the work being

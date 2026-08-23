@@ -67,6 +67,22 @@ export interface ToolContext {
   now(): number;
   newId(): string;
   maxSessionMs: number;
+  /**
+   * Runs `fn` with no other timer section running against this context.
+   *
+   * Starting and stopping a timer is read-decide-append-write, and every step
+   * but the first awaits. Two calls that interleave there both read the same
+   * running timer and both append for it, and because a `timeDelta` carries an
+   * increment rather than a total, the second one is time nobody worked,
+   * recorded permanently and invisibly while both replies claim the same
+   * honest-looking number. The Worker shares one store across every request an
+   * isolate serves, so the race is ordinary rather than exotic.
+   *
+   * A promise chain is enough because the scope is exactly one process or one
+   * isolate, which is also the scope of the store it guards. It is not a lock
+   * across devices, and it does not need to be: a device writes its own events.
+   */
+  withTimerLock<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 const DEFAULT_MAX_SESSION_MS = 12 * 3600_000;
@@ -74,6 +90,13 @@ const DEFAULT_MAX_SESSION_MS = 12 * 3600_000;
 export function toolContext(options: ToolContextOptions): ToolContext {
   const now = options.now ?? Date.now;
   const newId = options.newId ?? ulid;
+
+  // The tail of the queue. Each caller waits on whatever was queued before it
+  // and then becomes the tail, so the sections run one after another. The
+  // `catch` keeps a section that threw from poisoning the queue for everyone
+  // behind it; the rejection still reaches its own caller through `result`.
+  let queue: Promise<unknown> = Promise.resolve();
+
   return {
     backend: options.backend,
     timers: options.timers,
@@ -81,6 +104,11 @@ export function toolContext(options: ToolContextOptions): ToolContext {
     now,
     newId,
     maxSessionMs: options.maxSessionMs ?? DEFAULT_MAX_SESSION_MS,
+    withTimerLock<T>(fn: () => Promise<T>): Promise<T> {
+      const result = queue.then(fn, fn);
+      queue = result.catch(() => undefined);
+      return result;
+    },
   };
 }
 

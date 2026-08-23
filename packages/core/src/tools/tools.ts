@@ -417,22 +417,35 @@ const startTimer = define({
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   schema: z.object({ id: idField }).strict(),
   async run(args, ctx) {
-    const state = await ctx.backend.loadState();
-    if (state.tasks[args.id] === undefined) return fail(`there is no task ${JSON.stringify(args.id)}`);
+    // The whole read-decide-append-write runs as one section; see withTimerLock.
+    return ctx.withTimerLock(async () => {
+      const state = await ctx.backend.loadState();
+      if (state.tasks[args.id] === undefined) return fail(`there is no task ${JSON.stringify(args.id)}`);
 
-    const now = ctx.now();
-    const running = await ctx.timers.read();
-    let banked: { taskId: string; minutes: number } | undefined;
-    if (running !== null) {
-      const flushed = await bank(ctx, state, running, now);
-      if (flushed.event !== undefined) {
-        await ctx.backend.append([flushed.event]);
-        banked = { taskId: running.taskId, minutes: minutes(flushed.ms) };
+      const now = ctx.now();
+      const running = await ctx.timers.read();
+      let banked: { taskId: string; minutes: number } | undefined;
+      if (running !== null) {
+        const flushed = await bank(ctx, state, running, now);
+        if (flushed.tooLong) {
+          // The same answer `stop_timer` gives, because it is the same
+          // situation. Destroying a forgotten timer quietly while the other
+          // path refuses out loud would make the pair impossible to reason
+          // about, and the caller would never learn the span existed.
+          await ctx.timers.write(null);
+          return fail(forgottenTimer(running.taskId, flushed.ms, 'Start it again once you have.'));
+        }
+        if (flushed.event !== undefined) {
+          // Before the new timer replaces it: a throw here leaves the old timer
+          // running, which is recoverable, rather than dropping its span.
+          await ctx.backend.append([flushed.event]);
+          banked = { taskId: running.taskId, minutes: minutes(flushed.ms) };
+        }
       }
-    }
 
-    await ctx.timers.write({ taskId: args.id, startedAt: now });
-    return ok({ started: args.id, startedAt: new Date(now).toISOString(), banked });
+      await ctx.timers.write({ taskId: args.id, startedAt: now });
+      return ok({ started: args.id, startedAt: new Date(now).toISOString(), banked });
+    });
   },
 });
 
@@ -445,32 +458,37 @@ const stopTimer = define({
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   schema: z.object({}),
   async run(_args, ctx) {
-    const running = await ctx.timers.read();
-    if (running === null) {
-      return fail('no timer is running on this server; use log_time to record time directly');
-    }
-    const state = await ctx.backend.loadState();
-    const flushed = await bank(ctx, state, running, ctx.now());
-    await ctx.timers.write(null);
+    return ctx.withTimerLock(async () => {
+      const running = await ctx.timers.read();
+      if (running === null) {
+        return fail('no timer is running on this server; use log_time to record time directly');
+      }
+      const state = await ctx.backend.loadState();
+      const flushed = await bank(ctx, state, running, ctx.now());
 
-    if (flushed.tooLong) {
-      // Banking it would write hours nobody worked, and silently trimming it
-      // would write a number this server invented. Neither is the user's call
-      // to make for them, so the span is reported and dropped.
-      return fail(
-        `the timer on ${JSON.stringify(running.taskId)} ran for ${minutes(flushed.ms)} minutes, ` +
-          'which is longer than one work session; it has been cleared without recording anything. ' +
-          'Use log_time to record what was actually worked.',
-      );
-    }
-    if (flushed.event === undefined) {
-      return ok({ stopped: running.taskId, recordedMinutes: 0 });
-    }
-    await ctx.backend.append([flushed.event]);
-    return ok({
-      stopped: running.taskId,
-      recordedMinutes: minutes(flushed.ms),
-      day: (flushed.event.payload as { day: string }).day,
+      if (flushed.tooLong) {
+        // Banking it would write hours nobody worked, and silently trimming it
+        // would write a number this server invented. Neither is the user's call
+        // to make for them, so the span is reported and dropped.
+        await ctx.timers.write(null);
+        return fail(forgottenTimer(running.taskId, flushed.ms));
+      }
+      if (flushed.event === undefined) {
+        await ctx.timers.write(null);
+        return ok({ stopped: running.taskId, recordedMinutes: 0 });
+      }
+
+      // Append FIRST, clear second. The other order loses the span outright
+      // when the append fails: the timer is already gone, and the minutes are
+      // stated nowhere for anyone to recover them from. This way a failure
+      // leaves the timer running and the caller can simply stop it again.
+      await ctx.backend.append([flushed.event]);
+      await ctx.timers.write(null);
+      return ok({
+        stopped: running.taskId,
+        recordedMinutes: minutes(flushed.ms),
+        day: (flushed.event.payload as { day: string }).day,
+      });
     });
   },
 });
@@ -511,6 +529,15 @@ const logTime = define({
     });
   },
 });
+
+/** One wording for a forgotten timer, so both timer tools say the same thing. */
+function forgottenTimer(taskId: string, ms: number, andThen = ''): string {
+  return (
+    `the timer on ${JSON.stringify(taskId)} ran for ${minutes(ms)} minutes, which is longer than ` +
+    'one work session; it has been cleared without recording anything. Use log_time to record ' +
+    `what was actually worked.${andThen === '' ? '' : ` ${andThen}`}`
+  );
+}
 
 interface Banked {
   ms: number;

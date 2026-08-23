@@ -406,6 +406,85 @@ describe('timers', () => {
     expect((backend.appended[0]!.payload as { day: string }).day).toBe(dayStr(start));
   });
 
+  it('does not double-bank when two stop_timer calls race', async () => {
+    const backend = memoryBackend(seed(ev('a', { title: 'Alpha' })));
+    const timers = memoryTimerStore();
+    let now = NOW;
+    const ctx = toolContext({ backend, timers, deviceId: DEVICE, now: () => now });
+
+    await toolByName('start_timer')!.run({ id: 'a' }, ctx);
+    now = NOW + 600_000;
+    const [first, second] = await Promise.all([
+      toolByName('stop_timer')!.run({}, ctx),
+      toolByName('stop_timer')!.run({}, ctx),
+    ]);
+
+    // timeDelta carries an increment, so a second append is ten minutes nobody
+    // worked, permanently and invisibly.
+    expect(backend.appended).toHaveLength(1);
+    expect(backend.appended[0]!.payload).toEqual({ day: TODAY, ms: 600_000 });
+    const outcomes = [first, second].map(r => r.isError === true);
+    expect(outcomes.sort()).toEqual([false, true]);
+  });
+
+  it('does not let two start_timer calls both claim to have started', async () => {
+    const backend = memoryBackend(seed(ev('a', { title: 'Alpha' }), ev('b', { title: 'Beta' })));
+    const timers = memoryTimerStore();
+    const ctx = toolContext({ backend, timers, deviceId: DEVICE, now: () => NOW });
+
+    const results = await Promise.all([
+      toolByName('start_timer')!.run({ id: 'a' }, ctx),
+      toolByName('start_timer')!.run({ id: 'b' }, ctx),
+    ]);
+
+    const running = await timers.read();
+    const started = results.filter(r => r.isError !== true);
+    expect(started).toHaveLength(2);
+    // Whichever won, exactly one timer is running and it is the one the last
+    // successful call reported.
+    expect(running).not.toBeNull();
+    expect(['a', 'b']).toContain(running!.taskId);
+    expect(backend.appended.length).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps the timer when the append fails, so the span is not lost', async () => {
+    const backend = memoryBackend(seed(ev('a', { title: 'Alpha' })));
+    const timers = memoryTimerStore();
+    let now = NOW;
+    const ctx = toolContext({ backend, timers, deviceId: DEVICE, now: () => now });
+
+    await toolByName('start_timer')!.run({ id: 'a' }, ctx);
+    backend.append = async () => {
+      throw new Error('the repository is unreachable');
+    };
+    now = NOW + 300_000;
+
+    await expect(toolByName('stop_timer')!.run({}, ctx)).rejects.toThrow(/unreachable/);
+    expect(await timers.read()).toEqual({ taskId: 'a', startedAt: NOW });
+  });
+
+  it('refuses loudly when start_timer finds a timer past the session cap', async () => {
+    const backend = memoryBackend(seed(ev('a', { title: 'Alpha' }), ev('b', { title: 'Beta' })));
+    const timers = memoryTimerStore();
+    let now = NOW;
+    const ctx = toolContext({ backend, timers, deviceId: DEVICE, now: () => now, maxSessionMs: 3600_000 });
+
+    await toolByName('start_timer')!.run({ id: 'a' }, ctx);
+    now = NOW + 5 * 3600_000;
+    const out = await toolByName('start_timer')!.run({ id: 'b' }, ctx);
+
+    // stop_timer refuses in this case, so start_timer must not destroy it in
+    // silence: the two have to agree.
+    expect(out.isError).toBe(true);
+    expect(out.text).toContain('log_time');
+    expect(backend.appended).toHaveLength(0);
+    expect(await timers.read()).toBeNull();
+
+    // The stale timer is cleared, so the next call starts cleanly.
+    const retry = await toolByName('start_timer')!.run({ id: 'b' }, ctx);
+    expect(retry.isError).toBeUndefined();
+  });
+
   it('refuses to start on a task that does not exist', async () => {
     const h = harness();
     const out = await h.call('start_timer', { id: 'ghost' });
