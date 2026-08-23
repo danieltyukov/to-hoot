@@ -297,6 +297,11 @@ export class SyncEngine {
 
     // A file is removed only when the snapshot absorbed every event in it.
     // Deleting one that still holds an uncovered event would delete the event.
+    //
+    // These paths come from the tree read at the head this write is swapped
+    // against, which is what keeps the list valid: GitHub rejects a tree that
+    // deletes a path the parent commit does not have, with a 422 that fails the
+    // whole commit rather than the one entry.
     const covered = new Set(folded.map(e => e.id));
     const deletions = this.files.filter(f => f.events.every(e => covered.has(e.id))).map(f => f.path);
 

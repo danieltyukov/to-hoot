@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SyncEngine, SyncConflictError, SNAPSHOT_PATH, META_PATH, type SnapshotFile } from './sync.js';
 import { GitHubClient, type CommitOutcome, type RepoClient, type TreeEntry, type TreeFile } from './client.js';
 import { newEvent, type Event } from '../events.js';
@@ -453,19 +453,38 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
 
 describe.skipIf(!TOKEN)('SyncEngine against a real repository', () => {
   let scratch: { owner: string; repo: string } | undefined;
+  // Deliberately no `branch`: the client has to work out for itself what this
+  // repository calls its default branch, which is the case that was broken.
+  let config: { owner: string; repo: string; token: string };
+  let defaultBranch = '';
+
+  beforeAll(async () => {
+    const me = await api('GET', '/user');
+    const repo = `to-hoot-scratch-${ulid().toLowerCase()}`;
+    const created = await api('POST', '/user/repos', { name: repo, private: true, auto_init: true });
+    scratch = { owner: me.login, repo };
+    defaultBranch = created.default_branch;
+    // Pin the bug on any account, whatever this one's default happens to be.
+    if (defaultBranch === 'main') {
+      await api('POST', `/repos/${me.login}/${repo}/branches/main/rename`, { new_name: 'master' });
+      defaultBranch = 'master';
+    }
+    config = { owner: me.login, repo, token: TOKEN! };
+  }, 120_000);
 
   afterAll(async () => {
     if (!scratch) return;
     await api('DELETE', `/repos/${scratch.owner}/${scratch.repo}`);
   });
 
-  it('two devices editing offline converge after both sync', async () => {
-    const me = await api('GET', '/user');
-    const repo = `to-hoot-scratch-${ulid().toLowerCase()}`;
-    await api('POST', '/user/repos', { name: repo, private: true, auto_init: true });
-    scratch = { owner: me.login, repo };
+  it('syncs a repository whose default branch is not main, with no branch configured', async () => {
+    expect(defaultBranch).not.toBe('main');
+    const client = new GitHubClient(nodeHttp, config);
+    await expect(client.branchName()).resolves.toBe(defaultBranch);
+    await expect(client.latestCommit()).resolves.toMatchObject({ sha: expect.any(String) });
+  }, 120_000);
 
-    const config = { owner: me.login, repo, token: TOKEN! };
+  it('two devices editing offline converge after both sync', async () => {
     const a = new SyncEngine({ client: new GitHubClient(nodeHttp, config), deviceId: 'a' });
     const b = new SyncEngine({ client: new GitHubClient(nodeHttp, config), deviceId: 'b' });
 
@@ -473,5 +492,26 @@ describe.skipIf(!TOKEN)('SyncEngine against a real repository', () => {
     await b.push([addTask('t2', 'from b', { deviceId: 'b' })]); // b never saw a's write
     expect(replay(await a.pull())).toEqual(replay(await b.pull()));
     expect(Object.keys(replay(await a.pull()).tasks).sort()).toEqual(['t1', 't2']);
+  }, 120_000);
+
+  it('rejects a deletion for a path the parent commit does not have', async () => {
+    // Live behaviour, previously unverified: GitHub answers 422
+    // GitRPC::BadObjectState. It is what makes the compare-and-swap load
+    // bearing rather than merely tidy: the engine computes its deletion list
+    // from the tree it read at the head it then swaps against, so the list can
+    // only ever name paths the parent commit has. Without the swap, a
+    // compaction retry could carry a stale deletion and fail the whole commit.
+    const client = new GitHubClient(nodeHttp, config);
+    await client.commitFiles('seed a doomed file', [{ path: 'doomed.json', content: '1' }]);
+    await expect(
+      client.commitFiles('delete a path that was never here', [], ['never-here.json'], (await client.getRef()).sha),
+    ).rejects.toThrow(/every deletion must name a path the base tree actually has/);
+
+    // The same commit naming only what exists goes through.
+    await expect(
+      client.commitFiles('delete the doomed file', [], ['doomed.json'], (await client.getRef()).sha),
+    ).resolves.toBe('ok');
+    const tree = await client.listTree((await client.getRef()).sha);
+    expect(tree.some(e => e.path === 'doomed.json')).toBe(false);
   }, 120_000);
 });

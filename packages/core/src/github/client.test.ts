@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { GitHubClient, GitHubError } from './client.js';
+import {
+  BranchNotFoundError,
+  GitHubClient,
+  GitHubError,
+  RepositoryNotVisibleError,
+  isEmptyRepository,
+} from './client.js';
 import type { Http, HttpMethod, HttpRequest, HttpResponse } from '../platform.js';
 
 interface Call {
@@ -41,6 +47,11 @@ class MockHttp {
   truncated = false;
   headSha = 'commit-1';
   etag = 'W/"etag-1"';
+  /** The branch that actually exists. Anything else 404s, as GitHub does. */
+  existingBranch = 'main';
+  /** What `GET /repos/o/r` reports, which is not always what a caller assumed. */
+  defaultBranch = 'master';
+  repoVisible = true;
   private queued: Queued[] = [];
 
   replyOnce(method: HttpMethod, status: number, body: unknown, headers?: Record<string, string>): void {
@@ -66,14 +77,23 @@ class MockHttp {
   private route(method: HttpMethod, url: URL): HttpResponse {
     const path = url.pathname;
     const key = `${method} ${path}`;
-    if (key === 'GET /repos/o/r/git/ref/heads/main') {
-      return respond(200, { ref: 'refs/heads/main', object: { sha: this.headSha, type: 'commit' } });
+    if (!this.repoVisible && path.startsWith('/repos/o/r')) return respond(404, { message: 'Not Found' });
+    if (key === 'GET /repos/o/r') return respond(200, { default_branch: this.defaultBranch });
+    if (method === 'GET' && path.startsWith('/repos/o/r/git/ref/heads/')) {
+      const branch = path.slice('/repos/o/r/git/ref/heads/'.length);
+      if (branch !== this.existingBranch) return respond(404, { message: 'Not Found' });
+      return respond(200, { ref: `refs/heads/${branch}`, object: { sha: this.headSha, type: 'commit' } });
     }
     if (key === 'POST /repos/o/r/git/trees') return respond(201, { sha: 'tree-2' });
     if (key === 'POST /repos/o/r/git/commits') return respond(201, { sha: 'commit-2' });
-    if (key === 'PATCH /repos/o/r/git/refs/heads/main') return respond(200, { object: { sha: 'commit-2' } });
+    if (method === 'PATCH' && path.startsWith('/repos/o/r/git/refs/heads/')) {
+      return respond(200, { object: { sha: 'commit-2' } });
+    }
     if (key === 'POST /repos/o/r/git/refs') return respond(201, { object: { sha: 'commit-2' } });
     if (key === 'GET /repos/o/r/commits') {
+      // GitHub answers 404 for a branch that does not exist, the same status it
+      // gives for a repository it will not admit to having.
+      if (url.searchParams.get('sha') !== this.existingBranch) return respond(404, { message: 'Not Found' });
       return respond(200, [{ sha: this.headSha }], { etag: this.etag });
     }
     if (method === 'GET' && path.startsWith('/repos/o/r/git/trees/')) {
@@ -95,7 +115,82 @@ describe('GitHubClient', () => {
 
   beforeEach(() => {
     http = new MockHttp();
-    client = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+    client = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok', branch: 'main' });
+  });
+
+  describe('branch resolution', () => {
+    // The trap this closes: a repository takes its owning account's default
+    // branch name, which is master on any account that never changed the
+    // setting. A client defaulting to a literal "main" 404s on the very first
+    // read, and the 404 is indistinguishable from a token that lost access.
+    it('targets the repository default branch when none is configured', async () => {
+      http.existingBranch = 'master';
+      const unconfigured = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+      await expect(unconfigured.latestCommit()).resolves.toEqual({ sha: 'commit-1', etag: 'W/"etag-1"' });
+      expect(http.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+        'GET /repos/o/r',
+        'GET /repos/o/r/commits',
+      ]);
+      expect(new URL(http.calls[1]!.url).searchParams.get('sha')).toBe('master');
+    });
+
+    it('resolves the default branch once, then commits in four requests', async () => {
+      http.existingBranch = 'master';
+      const unconfigured = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+      await unconfigured.commitFiles('first', [{ path: 'a', content: 'x' }]);
+      expect(http.calls).toHaveLength(5); // the one-time resolution, then the four
+      http.calls = [];
+      await unconfigured.commitFiles('second', [{ path: 'b', content: 'y' }]);
+      expect(http.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+        'GET /repos/o/r/git/ref/heads/master',
+        'POST /repos/o/r/git/trees',
+        'POST /repos/o/r/git/commits',
+        'PATCH /repos/o/r/git/refs/heads/master',
+      ]);
+    });
+
+    it('reads and writes the same branch, so a poll cannot watch one and commit to another', async () => {
+      http.existingBranch = 'master';
+      const unconfigured = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+      await unconfigured.latestCommit();
+      await unconfigured.updateRef('abc');
+      const read = new URL(http.calls[1]!.url).searchParams.get('sha');
+      const written = new URL(http.calls[2]!.url).pathname;
+      expect(written).toBe(`/repos/o/r/git/refs/heads/${read}`);
+    });
+
+    it('does not cache a failed resolution', async () => {
+      http.repoVisible = false;
+      const unconfigured = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+      await expect(unconfigured.latestCommit()).rejects.toThrow();
+      http.repoVisible = true;
+      http.existingBranch = 'master';
+      await expect(unconfigured.latestCommit()).resolves.toMatchObject({ sha: 'commit-1' });
+    });
+
+    it('says which branch it looked for and which one exists', async () => {
+      http.existingBranch = 'master'; // configured for main, repo is on master
+      const err = await client.latestCommit().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BranchNotFoundError);
+      expect((err as Error).message).toMatch(/"main" does not exist/);
+      expect((err as Error).message).toMatch(/default branch is "master"/);
+    });
+
+    it('says the repository is not visible when the repository itself is not there', async () => {
+      http.repoVisible = false;
+      const err = await client.latestCommit().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RepositoryNotVisibleError);
+      expect(err).not.toBeInstanceOf(BranchNotFoundError);
+      expect((err as Error).message).toMatch(/not visible to this token/);
+    });
+
+    it('leaves an empty repository reporting itself as empty', async () => {
+      // 409 is the answer for a repo with no commits, and it must not be
+      // rewritten into either 404 story: the first push creates the branch.
+      http.replyOnce('GET', 409, { message: 'Git Repository is empty.' });
+      const err = await client.latestCommit().catch((e: unknown) => e);
+      expect(isEmptyRepository(err)).toBe(true);
+    });
   });
 
   it('commits many files in exactly four requests', async () => {
@@ -252,9 +347,10 @@ describe('GitHubClient', () => {
     expect(http.calls).toHaveLength(4);
   });
 
-  it('targets the branch it was configured with', async () => {
+  it('targets the branch it was configured with, without asking the repository', async () => {
     const other = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok', branch: 'data' });
     await other.getRef().catch(() => undefined);
     expect(new URL(http.calls[0]!.url).pathname).toBe('/repos/o/r/git/ref/heads/data');
+    expect(http.calls.some(c => new URL(c.url).pathname === '/repos/o/r')).toBe(false);
   });
 });

@@ -21,7 +21,14 @@ export interface GitHubRepoConfig {
   repo: string;
   /** A fine-grained token with Contents: read and write on this repo alone. */
   token: string;
-  /** Defaults to `main`. */
+  /**
+   * Defaults to whatever the repository says its default branch is, read once
+   * and cached. It is deliberately not defaulted to a literal: a repository
+   * takes the branch name its owning account is configured for, `master` on any
+   * account that never changed the setting, and GitHub answers 404 for a branch
+   * that does not exist, which is the same 404 it gives for a repository the
+   * token cannot see.
+   */
   branch?: string;
   /** Defaults to the public API host. Overridden for GitHub Enterprise. */
   apiBase?: string;
@@ -87,6 +94,38 @@ export function isEmptyRepository(err: unknown): boolean {
   return httpStatusOf(err) === 409;
 }
 
+/**
+ * The branch was looked for and is not there. Separated from the 404 below
+ * because the two are byte-identical on the wire and the remedies are opposite:
+ * one is a setting to correct, the other is access to restore. Telling someone
+ * to regenerate a working token because their branch is named `master` costs
+ * them an hour and leaves them no better off.
+ */
+export class BranchNotFoundError extends GitHubError {
+  constructor(readonly branch: string, readonly defaultBranch: string, path: string) {
+    super(
+      404,
+      'GET',
+      path,
+      `branch "${branch}" does not exist here; the repository's default branch is "${defaultBranch}"`,
+    );
+    this.name = 'BranchNotFoundError';
+  }
+}
+
+/** The repository itself did not answer: gone, renamed, or out of the token's reach. */
+export class RepositoryNotVisibleError extends GitHubError {
+  constructor(owner: string, repo: string, path: string) {
+    super(
+      404,
+      'GET',
+      path,
+      `repository ${owner}/${repo} is not visible to this token: it may not exist, may have been renamed, or the token may no longer have access`,
+    );
+    this.name = 'RepositoryNotVisibleError';
+  }
+}
+
 const API_BASE = 'https://api.github.com';
 const API_VERSION = '2022-11-28';
 const ACCEPT = 'application/vnd.github+json';
@@ -103,24 +142,60 @@ export class GitHubClient implements RepoClient {
   private readonly http: Http;
   private readonly config: GitHubRepoConfig;
   private readonly base: string;
-  readonly branch: string;
+  /** Resolved once, then reused. Absent until something needs the branch. */
+  private branchPromise?: Promise<string>;
 
   constructor(http: Http, config: GitHubRepoConfig) {
     this.http = http;
     this.config = config;
     this.base = (config.apiBase ?? API_BASE).replace(/\/+$/, '');
-    this.branch = config.branch ?? 'main';
   }
 
   private get repoPath(): string {
     return `/repos/${this.config.owner}/${this.config.repo}`;
   }
 
+  /**
+   * The branch every read and write targets: the configured one, or the
+   * repository's own default read once and cached. Read and write resolve the
+   * same way on purpose; a client that polled one branch and committed to
+   * another would look like it was working and sync nothing.
+   *
+   * A failed resolution is not cached, so a network blip does not disable the
+   * client for the rest of its life.
+   */
+  async branchName(): Promise<string> {
+    const configured = this.config.branch;
+    if (configured !== undefined && configured !== '') return configured;
+    if (this.branchPromise === undefined) {
+      this.branchPromise = this.repoInfo()
+        .then(info => info.defaultBranch)
+        .catch((err: unknown) => {
+          this.branchPromise = undefined;
+          throw err;
+        });
+    }
+    return this.branchPromise;
+  }
+
+  /** Also the probe that tells a missing branch apart from a missing repository. */
+  async repoInfo(): Promise<{ defaultBranch: string }> {
+    const path = this.repoPath;
+    const res = await this.send('GET', path);
+    const body = parseJson(res, 'GET', path);
+    const name = isRecord(body) ? body['default_branch'] : undefined;
+    if (typeof name !== 'string' || name === '') {
+      throw new GitHubError(res.status, 'GET', path, 'repository has no default_branch');
+    }
+    return { defaultBranch: name };
+  }
+
   /** The parent commit the next write builds on. */
   async getRef(): Promise<{ sha: string }> {
     const sha = await this.readRef();
     if (sha === null) {
-      throw new GitHubError(404, 'GET', `${this.repoPath}/git/ref/heads/${this.branch}`, 'branch does not exist');
+      const branch = await this.branchName();
+      throw new GitHubError(404, 'GET', `${this.repoPath}/git/ref/heads/${branch}`, 'branch does not exist');
     }
     return { sha };
   }
@@ -139,8 +214,21 @@ export class GitHubClient implements RepoClient {
     ];
     const body: Record<string, unknown> = { tree };
     if (baseTree !== '') body['base_tree'] = baseTree;
-    const res = await this.send('POST', `${this.repoPath}/git/trees`, body);
-    return { sha: this.expectSha(res, 'POST', `${this.repoPath}/git/trees`) };
+    const path = `${this.repoPath}/git/trees`;
+    const res = await this.request('POST', path, body);
+    // Verified against the live API: deleting a path the base tree does not
+    // have is rejected as `GitRPC::BadObjectState`, which says nothing a reader
+    // can act on. The caller's deletion list is stale.
+    if (res.status === 422 && (deletions?.length ?? 0) > 0) {
+      throw new GitHubError(
+        res.status,
+        'POST',
+        path,
+        `${messageOf(res.text)} (every deletion must name a path the base tree actually has)`,
+      );
+    }
+    this.checkOk(res, 'POST', path);
+    return { sha: this.expectSha(res, 'POST', path) };
   }
 
   async createCommit(message: string, tree: string, parents: string[]): Promise<{ sha: string }> {
@@ -154,7 +242,7 @@ export class GitHubClient implements RepoClient {
    * carries the new sha and nothing else: no `force`, under any condition.
    */
   async updateRef(sha: string): Promise<CommitOutcome> {
-    const path = `${this.repoPath}/git/refs/heads/${this.branch}`;
+    const path = `${this.repoPath}/git/refs/heads/${await this.branchName()}`;
     const res = await this.request('PATCH', path, { sha });
     if (isRefConflict(res.status)) return 'conflict';
     this.checkOk(res, 'PATCH', path);
@@ -164,7 +252,7 @@ export class GitHubClient implements RepoClient {
   /** Creates the branch. A branch another device created first is a conflict. */
   async createRef(sha: string): Promise<CommitOutcome> {
     const path = `${this.repoPath}/git/refs`;
-    const res = await this.request('POST', path, { ref: `refs/heads/${this.branch}`, sha });
+    const res = await this.request('POST', path, { ref: `refs/heads/${await this.branchName()}`, sha });
     if (isRefConflict(res.status)) return 'conflict';
     this.checkOk(res, 'POST', path);
     return 'ok';
@@ -218,10 +306,14 @@ export class GitHubClient implements RepoClient {
    * is the whole reason a device can poll once a minute and stay well inside it.
    */
   async latestCommit(etag?: string): Promise<{ sha: string; etag: string } | 'not-modified'> {
+    const branch = await this.branchName();
     const path = `${this.repoPath}/commits`;
-    const query = `?sha=${encodeURIComponent(this.branch)}&per_page=1`;
+    const query = `?sha=${encodeURIComponent(branch)}&per_page=1`;
     const res = await this.request('GET', `${path}${query}`, undefined, etag ? { 'if-none-match': etag } : undefined);
     if (res.status === 304) return 'not-modified';
+    // Two different problems arrive as the same 404, and they are told apart by
+    // asking whether the repository answers at all.
+    if (res.status === 404) throw await this.explain404(branch, path);
     this.checkOk(res, 'GET', path);
     const body = parseJson(res, 'GET', path);
     const head = Array.isArray(body) ? body[0] : undefined;
@@ -258,9 +350,25 @@ export class GitHubClient implements RepoClient {
     return parent === null ? this.createRef(commit.sha) : this.updateRef(commit.sha);
   }
 
+  /**
+   * Turns a 404 into the one a person can act on. Costs a request, and only on
+   * a path that has already failed.
+   */
+  private async explain404(branch: string, path: string): Promise<Error> {
+    try {
+      const info = await this.repoInfo();
+      return new BranchNotFoundError(branch, info.defaultBranch, path);
+    } catch (err) {
+      if (httpStatusOf(err) === 404) {
+        return new RepositoryNotVisibleError(this.config.owner, this.config.repo, path);
+      }
+      return err instanceof Error ? err : new GitHubError(404, 'GET', path, String(err));
+    }
+  }
+
   /** The branch head, or null when the repository has no commits yet. */
   private async readRef(): Promise<string | null> {
-    const path = `${this.repoPath}/git/ref/heads/${this.branch}`;
+    const path = `${this.repoPath}/git/ref/heads/${await this.branchName()}`;
     const res = await this.request('GET', path);
     if (res.status === 404 || res.status === 409) return null;
     this.checkOk(res, 'GET', path);
