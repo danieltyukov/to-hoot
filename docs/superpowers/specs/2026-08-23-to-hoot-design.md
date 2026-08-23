@@ -321,7 +321,7 @@ which is more than a background timer can claim on modern Android.
 
 ## 8. Calendar
 
-A Google Apps Script web app owned by `contact@danieltyukov.com`, deployed as
+A Google Apps Script web app owned by `your-calendar-account@example.com`, deployed as
 "Execute as: Me", "Who has access: Anyone".
 
 ### Interface
@@ -641,7 +641,7 @@ never committed:
     Apps Script shared secret      generated in-app
     Worker URL and path secret     user's own deployment, optional
 
-The repository contains no personal identifiers. `contact@danieltyukov.com`
+The repository contains no personal identifiers. `your-calendar-account@example.com`
 appears nowhere in code; it is one user's setting value.
 
 ## 17. The project site
