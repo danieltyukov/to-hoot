@@ -1,0 +1,236 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { GitHubClient, GitHubError } from './client.js';
+import type { Http, HttpMethod, HttpRequest, HttpResponse } from '../platform.js';
+
+interface Call {
+  method: HttpMethod;
+  url: string;
+  headers: Record<string, string>;
+  // The parsed request body. `any` so the plan's tests can read into it directly.
+  body: any;
+}
+
+interface Queued {
+  method: HttpMethod;
+  status: number;
+  body: unknown;
+  headers?: Record<string, string>;
+}
+
+function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function respond(status: number, body: unknown, headers: Record<string, string> = {}): HttpResponse {
+  return {
+    status,
+    headers,
+    text: async () => (body === null || body === undefined ? '' : JSON.stringify(body)),
+  };
+}
+
+/** A stand-in for `Platform.http` that records every request and can be steered per call. */
+class MockHttp {
+  calls: Call[] = [];
+  /** blob sha -> decoded content. */
+  blobs = new Map<string, string>();
+  tree: { path: string; type: string; sha: string }[] = [];
+  truncated = false;
+  headSha = 'commit-1';
+  etag = 'W/"etag-1"';
+  private queued: Queued[] = [];
+
+  replyOnce(method: HttpMethod, status: number, body: unknown, headers?: Record<string, string>): void {
+    this.queued.push({ method, status, body, headers });
+  }
+
+  readonly http: Http = async (req: HttpRequest): Promise<HttpResponse> => {
+    const method = req.method ?? 'GET';
+    this.calls.push({
+      method,
+      url: req.url,
+      headers: req.headers ?? {},
+      body: req.body === undefined ? undefined : JSON.parse(req.body),
+    });
+    const at = this.queued.findIndex(q => q.method === method);
+    if (at >= 0) {
+      const [q] = this.queued.splice(at, 1);
+      return respond(q.status, q.body, q.headers);
+    }
+    return this.route(method, new URL(req.url));
+  };
+
+  private route(method: HttpMethod, url: URL): HttpResponse {
+    const path = url.pathname;
+    const key = `${method} ${path}`;
+    if (key === 'GET /repos/o/r/git/ref/heads/main') {
+      return respond(200, { ref: 'refs/heads/main', object: { sha: this.headSha, type: 'commit' } });
+    }
+    if (key === 'POST /repos/o/r/git/trees') return respond(201, { sha: 'tree-2' });
+    if (key === 'POST /repos/o/r/git/commits') return respond(201, { sha: 'commit-2' });
+    if (key === 'PATCH /repos/o/r/git/refs/heads/main') return respond(200, { object: { sha: 'commit-2' } });
+    if (key === 'POST /repos/o/r/git/refs') return respond(201, { object: { sha: 'commit-2' } });
+    if (key === 'GET /repos/o/r/commits') {
+      return respond(200, [{ sha: this.headSha }], { etag: this.etag });
+    }
+    if (method === 'GET' && path.startsWith('/repos/o/r/git/trees/')) {
+      return respond(200, { sha: path.slice(path.lastIndexOf('/') + 1), truncated: this.truncated, tree: this.tree });
+    }
+    if (method === 'GET' && path.startsWith('/repos/o/r/git/blobs/')) {
+      const sha = path.slice(path.lastIndexOf('/') + 1);
+      const content = this.blobs.get(sha);
+      if (content === undefined) return respond(404, { message: 'Not Found' });
+      return respond(200, { sha, encoding: 'base64', content: toBase64(content) });
+    }
+    return respond(404, { message: `unrouted ${key}` });
+  }
+}
+
+describe('GitHubClient', () => {
+  let http: MockHttp;
+  let client: GitHubClient;
+
+  beforeEach(() => {
+    http = new MockHttp();
+    client = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
+  });
+
+  it('commits many files in exactly four requests', async () => {
+    await client.commitFiles('msg', [{ path: 'a', content: '1' }, { path: 'b', content: '2' }, { path: 'c', content: '3' }]);
+    expect(http.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+      'GET /repos/o/r/git/ref/heads/main',
+      'POST /repos/o/r/git/trees',
+      'POST /repos/o/r/git/commits',
+      'PATCH /repos/o/r/git/refs/heads/main',
+    ]);
+  });
+
+  it('inlines content into the tree rather than creating blobs', async () => {
+    await client.commitFiles('msg', [{ path: 'a', content: 'x' }]);
+    const tree = http.calls.find(c => c.url.endsWith('/git/trees'))!;
+    expect(tree.body.tree[0]).toEqual({ path: 'a', mode: '100644', type: 'blob', content: 'x' });
+    expect(http.calls.some(c => c.url.endsWith('/git/blobs'))).toBe(false);
+  });
+
+  it('reports a moved ref as a conflict instead of forcing', async () => {
+    http.replyOnce('PATCH', 422, { message: 'Update is not a fast forward' });
+    await expect(client.updateRef('abc')).resolves.toBe('conflict');
+  });
+
+  it('NEVER sends force in a ref update', async () => {
+    await client.commitFiles('msg', [{ path: 'a', content: 'x' }]);
+    const patch = http.calls.find(c => c.method === 'PATCH')!;
+    expect(patch.body).not.toHaveProperty('force');
+  });
+
+  it('sends If-None-Match and understands 304', async () => {
+    http.replyOnce('GET', 304, null);
+    await expect(client.latestCommit('W/"abc"')).resolves.toBe('not-modified');
+  });
+
+  it('sends the conditional header only when it has an etag to send', async () => {
+    await client.latestCommit();
+    expect(http.calls[0]!.headers['if-none-match']).toBeUndefined();
+    await client.latestCommit('W/"abc"');
+    expect(http.calls[1]!.headers['if-none-match']).toBe('W/"abc"');
+  });
+
+  it('returns the head sha and the etag to poll with next time', async () => {
+    http.headSha = 'head-9';
+    http.etag = 'W/"etag-9"';
+    await expect(client.latestCommit()).resolves.toEqual({ sha: 'head-9', etag: 'W/"etag-9"' });
+    const poll = http.calls[0]!;
+    expect(new URL(poll.url).searchParams.get('sha')).toBe('main');
+    expect(new URL(poll.url).searchParams.get('per_page')).toBe('1');
+  });
+
+  it('authenticates every request without putting the token in the url', async () => {
+    await client.commitFiles('msg', [{ path: 'a', content: 'x' }]);
+    for (const call of http.calls) {
+      expect(call.headers['authorization']).toBe('Bearer tok');
+      expect(call.headers['x-github-api-version']).toBe('2022-11-28');
+      expect(call.url).not.toContain('tok');
+    }
+  });
+
+  it('deletes a path with a null sha entry rather than a second commit', async () => {
+    await client.commitFiles('msg', [{ path: 'a', content: 'x' }], ['gone.json']);
+    const tree = http.calls.find(c => c.url.endsWith('/git/trees'))!;
+    expect(tree.body.tree).toContainEqual({ path: 'gone.json', mode: '100644', type: 'blob', sha: null });
+    expect(tree.body.base_tree).toBe('commit-1');
+  });
+
+  it('lists a whole tree in one recursive request and ignores directory entries', async () => {
+    http.tree = [
+      { path: 'events', type: 'tree', sha: 't1' },
+      { path: 'events/dev-a/01.json', type: 'blob', sha: 'b1' },
+      { path: 'snapshot.json', type: 'blob', sha: 'b2' },
+    ];
+    await expect(client.listTree('commit-1')).resolves.toEqual([
+      { path: 'events/dev-a/01.json', sha: 'b1' },
+      { path: 'snapshot.json', sha: 'b2' },
+    ]);
+    expect(new URL(http.calls[0]!.url).searchParams.get('recursive')).toBe('1');
+  });
+
+  it('refuses a truncated tree rather than reporting a partial repository', async () => {
+    http.truncated = true;
+    await expect(client.listTree('commit-1')).rejects.toThrow(/truncat/i);
+  });
+
+  it('decodes a base64 blob, multi-byte characters included', async () => {
+    http.blobs.set('b1', '{"title":"café — 日本語"}');
+    await expect(client.getBlob('b1')).resolves.toBe('{"title":"café — 日本語"}');
+  });
+
+  it('refuses a blob it cannot decode instead of returning base64 as text', async () => {
+    http.replyOnce('GET', 200, { sha: 'b1', encoding: 'none', content: '' });
+    await expect(client.getBlob('b1')).rejects.toThrow(/encoding/i);
+  });
+
+  it('throws a GitHubError carrying the status for an unexpected failure', async () => {
+    http.replyOnce('POST', 500, { message: 'boom' });
+    const err = await client.createTree('base', [{ path: 'a', content: 'x' }]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitHubError);
+    expect((err as GitHubError).status).toBe(500);
+    expect((err as GitHubError).message).toMatch(/boom/);
+  });
+
+  it('creates the branch instead of patching it when the repository has no commits yet', async () => {
+    http.replyOnce('GET', 404, { message: 'Not Found' });
+    await expect(client.commitFiles('first', [{ path: 'a', content: 'x' }])).resolves.toBe('ok');
+    expect(http.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+      'GET /repos/o/r/git/ref/heads/main',
+      'POST /repos/o/r/git/trees',
+      'POST /repos/o/r/git/commits',
+      'POST /repos/o/r/git/refs',
+    ]);
+    const tree = http.calls[1]!;
+    expect(tree.body).not.toHaveProperty('base_tree');
+    expect(http.calls[2]!.body.parents).toEqual([]);
+    expect(http.calls[3]!.body).toEqual({ ref: 'refs/heads/main', sha: 'commit-2' });
+  });
+
+  it('reports a branch another device created first as a conflict', async () => {
+    http.replyOnce('GET', 404, { message: 'Not Found' });
+    http.replyOnce('POST', 201, { sha: 'tree-2' });
+    http.replyOnce('POST', 201, { sha: 'commit-2' });
+    http.replyOnce('POST', 422, { message: 'Reference already exists' });
+    await expect(client.commitFiles('first', [{ path: 'a', content: 'x' }])).resolves.toBe('conflict');
+  });
+
+  it('does not retry a conflict itself, because retrying needs a fresh read', async () => {
+    http.replyOnce('PATCH', 409, { message: 'Conflict' });
+    await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }])).resolves.toBe('conflict');
+    expect(http.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
+  });
+
+  it('targets the branch it was configured with', async () => {
+    const other = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok', branch: 'data' });
+    await other.getRef().catch(() => undefined);
+    expect(new URL(http.calls[0]!.url).pathname).toBe('/repos/o/r/git/ref/heads/data');
+  });
+});
