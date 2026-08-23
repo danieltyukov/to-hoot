@@ -145,7 +145,12 @@ export default function App({
   // disk and vault reads and the second reassigned the log from disk.
   useEffect(() => {
     const stop = sync.start();
-    void store.load().then(() => sync.syncNow());
+    // Belt and braces on the same point: whatever load does, the first sync
+    // still runs. It is the only thing that gets unsynced work off this device.
+    void store
+      .load()
+      .catch(() => undefined)
+      .then(() => sync.syncNow());
     const off = platform?.onResume(() => void sync.syncNow());
     return () => {
       stop();

@@ -47,6 +47,23 @@ function task(title: string, ts = BASE + seq): Event {
   });
 }
 
+function delta(taskId: string, atMs: number, ms: number): Event {
+  return newEvent({
+    deviceId: 'laptop',
+    id: `01M2${String(seq++).padStart(22, '0')}`,
+    type: 'timeDelta',
+    entity: 'task',
+    entityId: taskId,
+    payload: { day: dayStr(atMs), ms },
+    ts: atMs,
+  });
+}
+
+/** A repository snapshot that accounts for exactly these events, as a pull returns one. */
+function covering(events: Event[]): State {
+  return { ...replay([...events]), coversThrough: watermarkOf(events)! };
+}
+
 describe('watermarkOf', () => {
   it('is the greatest id, not the last one applied', () => {
     /*
@@ -117,12 +134,20 @@ describe('load', () => {
     expect((await load(files)).cached).toBe(false);
   });
 
-  it('survives a log with a broken entry in it', async () => {
+  it('refuses a log with a broken entry in it rather than reading past it', async () => {
+    /*
+     * This test used to assert the opposite: that the bad entries were skipped
+     * and the good one kept. That reads well until you follow what happens
+     * next, which is that the file is rewritten from what was kept, so the
+     * entries that were skipped are deleted. Whatever they were, they were in
+     * the only copy, and nobody asked for them to go.
+     */
     const files = memoryFiles({
       [LOG_FILE]: JSON.stringify({ version: 1, events: [null, task('Solder the preamp'), 7] }),
     });
-    const { state } = await load(files);
-    expect(Object.keys(state.tasks)).toHaveLength(1);
+    const { state, damaged } = await load(files);
+    expect(Object.keys(state.tasks)).toHaveLength(0);
+    expect(damaged).toBeTruthy();
   });
 });
 
@@ -325,7 +350,15 @@ describe('folding forward and replaying agree', () => {
     const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
     store.adoptRemote(remoteAhead());
 
-    store.merge([{ ...task('Arrived from elsewhere'), id: '01M0MERGED0000000000000001', deviceId: 'phone' }]);
+    /*
+     * The id has to sort above the adopted watermark, which is what "arrived
+     * after the snapshot was taken" means. It used to sort below it, and the
+     * assertion passed only because the watermark was being stripped off the
+     * base entirely. Stripping it is what let an event the snapshot already
+     * held be applied to that snapshot a second time, so the id is now the
+     * realistic one and the filtered case is pinned by its own test.
+     */
+    store.merge([{ ...task('Arrived from elsewhere'), id: '02M0MERGED0000000000000001', deviceId: 'phone' }]);
 
     const titles = Object.values(store.getSnapshot().state.tasks).map(t => t.title).sort();
     expect(titles).toEqual(['Arrived from elsewhere', 'From the other device']);
@@ -517,5 +550,364 @@ describe('importing an exported log', () => {
 
     store.importJson(JSON.stringify({ events: [task('Cut the chassis')] }));
     expect(store.getSnapshot().state.tasks[created.entityId]!.timeSpent).toBe(90_000);
+  });
+});
+
+describe('a log this app did not write', () => {
+  /*
+   * Three shapes that are not corruption in the "cut short by a kill" sense and
+   * still must never be written over. The rule is one rule: if the file is not
+   * exactly the shape this app writes, it is not this app's to replace.
+   */
+  it('treats a log of exactly null as damaged rather than throwing', async () => {
+    // `typeof null === 'object'`, so a shape check that only rules out
+    // `undefined` walks straight into reading `.events` off null.
+    const files = memoryFiles({ [LOG_FILE]: 'null' });
+    await expect(load(files)).resolves.toMatchObject({ events: [] });
+    expect((await load(files)).damaged).toBeTruthy();
+  });
+
+  it('treats a log from a newer format as damaged rather than reading it as this one', async () => {
+    // The cache checks its version and the log did not, so a v2 log was read as
+    // v1 and rewritten as v1. The cache can be discarded on doubt. The log
+    // cannot, so the only safe response to a version it cannot read is to stop.
+    const files = memoryFiles({ [LOG_FILE]: JSON.stringify({ version: 2, events: [task('a')] }) });
+    const { events, damaged } = await load(files);
+    expect(events).toEqual([]);
+    expect(damaged).toBeTruthy();
+  });
+
+  it('treats a log holding an unusable entry as damaged rather than dropping it', async () => {
+    // Silently filtering the entry out and then rewriting the file is a delete
+    // the user never asked for, of the one copy nothing else has.
+    const files = memoryFiles({
+      [LOG_FILE]: JSON.stringify({ version: 1, events: [task('a'), { id: 42 }] }),
+    });
+    const { events, damaged } = await load(files);
+    expect(events).toEqual([]);
+    expect(damaged).toBeTruthy();
+  });
+});
+
+describe('a log that cannot be read at all', () => {
+  /** A store whose reads throw, as EACCES or EIO does, rather than returning null. */
+  const throwingFiles = (contents: Map<string, string>, failing: string): FileStore => ({
+    async read(name) {
+      if (name === failing) throw new Error('EIO: i/o error');
+      return contents.get(name) ?? null;
+    },
+    async write(name, text) {
+      contents.set(name, text);
+    },
+    async remove(name) {
+      contents.delete(name);
+    },
+  });
+
+  it('reports damage rather than rejecting when the log cannot be read', async () => {
+    // Unparseable content was handled and an unreadable file was not, though
+    // they mean the same thing to everything downstream.
+    const contents = new Map<string, string>();
+    await expect(load(throwingFiles(contents, LOG_FILE))).resolves.toMatchObject({ events: [] });
+    expect((await load(throwingFiles(contents, LOG_FILE))).damaged).toBeTruthy();
+  });
+
+  it('ignores a cache that cannot be read, because a cache is derivable', async () => {
+    const contents = new Map<string, string>([
+      [LOG_FILE, JSON.stringify({ version: 1, events: [task('Solder the preamp')] })],
+    ]);
+    const { events, damaged, cached } = await load(throwingFiles(contents, CACHE_FILE));
+    expect(events).toHaveLength(1);
+    expect(cached).toBe(false);
+    expect(damaged).toBeUndefined();
+  });
+
+  it('does not reject when the vault refuses to answer', async () => {
+    /*
+     * The caller chains the first sync onto this promise. A rejection therefore
+     * skipped the sync too, so one unreadable settings key stopped work that
+     * was already safely on disk from ever reaching the repository.
+     */
+    const vault = {
+      get: async (): Promise<string | null> => {
+        throw new Error('EACCES: permission denied');
+      },
+      set: async (): Promise<void> => undefined,
+      remove: async (): Promise<void> => undefined,
+      keys: async (): Promise<string[]> => [],
+    };
+    const store = new Store({ now: () => BASE, storage: null, vault, files: memoryFiles() });
+    await expect(store.load()).resolves.toBeUndefined();
+  });
+
+  it('never writes a short log over the real one after a failed read', async () => {
+    /*
+     * The whole point of the guard. `load` rejecting left `storageError` null,
+     * so the store carried on with an empty log and the next save put that
+     * empty log on disk. Three events became one.
+     */
+    const real = [task('a'), task('b'), task('c')];
+    const contents = new Map<string, string>([
+      [LOG_FILE, JSON.stringify({ version: 1, events: real })],
+    ]);
+    const files = throwingFiles(contents, LOG_FILE);
+
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await expect(store.load()).resolves.toBeUndefined();
+    expect(store.getSnapshot().storageError).toBeTruthy();
+
+    store.addTask('written during the degraded session');
+    await store.flush();
+
+    const stillThere = JSON.parse(contents.get(LOG_FILE)!) as { events: Event[] };
+    expect(stillThere.events).toHaveLength(3);
+  });
+});
+
+describe('the damaged flag and a failed write are different facts', () => {
+  it('does not let a write failure clear the damaged flag', async () => {
+    /*
+     * They were one field. A damaged log set `storageError`; a later cache
+     * write failed and set it again; the persist after that saw a non-null
+     * `writeFailure`, published `storageError: null` to say the write had
+     * recovered, and unstuck the damaged guard. The next persist then wrote
+     * over the damaged bytes.
+     */
+    const contents = new Map<string, string>([[LOG_FILE, '{"version":1,"events":[{"id":"01A","ty']]);
+    let failWrite = true;
+    const files: FileStore = {
+      async read(name) {
+        return contents.get(name) ?? null;
+      },
+      async write(name, text) {
+        if (failWrite) throw new Error('no space left on device');
+        contents.set(name, text);
+      },
+      async remove(name) {
+        contents.delete(name);
+      },
+    };
+
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await store.load();
+    const damaged = store.getSnapshot().storageError;
+    expect(damaged).toContain('could not be read');
+
+    // A forced cache write is the only write still attempted while damaged, so
+    // it is the only one that can fail and set the transient flag.
+    store.addTask('a');
+    store.markPushed(store.pending().at(-1)!.id);
+    await store.flush();
+    // Not "Could not save": while the log is damaged nothing is attempted, so
+    // there is no write to fail and nothing that can replace the message.
+    expect(store.getSnapshot().storageError).toBe(damaged);
+
+    failWrite = false;
+    store.addTask('b');
+    store.markPushed(store.pending().at(-1)!.id);
+    await store.flush();
+    store.addTask('c');
+    await store.flush();
+
+    // Still damaged, and the bytes are still the damaged ones.
+    expect(store.getSnapshot().storageError).toContain('could not be read');
+    expect(contents.get(LOG_FILE)).toBe('{"version":1,"events":[{"id":"01A","ty');
+  });
+
+  it('writes nothing at all while the log is damaged, including the cache', async () => {
+    // The notice tells the user nothing is being written. A forced cache write
+    // would make that untrue, for a file that buys nothing while the log it
+    // describes cannot be read.
+    const contents = new Map<string, string>([[LOG_FILE, 'not json']]);
+    const written: string[] = [];
+    const files: FileStore = {
+      async read(name) {
+        return contents.get(name) ?? null;
+      },
+      async write(name, text) {
+        written.push(name);
+        contents.set(name, text);
+      },
+      async remove(name) {
+        contents.delete(name);
+      },
+    };
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await store.load();
+    store.addTask('a');
+    store.markPushed(store.pending().at(-1)!.id);
+    await store.flush();
+    expect(written).toEqual([]);
+  });
+
+  it('goes on writing after a write fails, because a failed write is transient', async () => {
+    /*
+     * The other direction, and the reason the two facts cannot share a field.
+     * Guarding the writes on the user-visible error would mean one full disk
+     * latched saving off for the rest of the session: nothing would write, so
+     * nothing would ever clear the error that was stopping the writes.
+     */
+    const contents = new Map<string, string>();
+    let failWrite = true;
+    const files: FileStore = {
+      async read(name) {
+        return contents.get(name) ?? null;
+      },
+      async write(name, text) {
+        if (failWrite) throw new Error('no space left on device');
+        contents.set(name, text);
+      },
+      async remove(name) {
+        contents.delete(name);
+      },
+    };
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    store.addTask('written while the disk was full');
+    await store.flush();
+    expect(store.getSnapshot().storageError).toContain('Could not save');
+
+    failWrite = false;
+    store.addTask('written after it cleared');
+    await store.flush();
+
+    expect(store.getSnapshot().storageError).toBeNull();
+    const written = JSON.parse(contents.get(LOG_FILE)!) as { events: Event[] };
+    expect(written.events).toHaveLength(2);
+  });
+
+  it('keeps the work of the degraded session when a fresh log is started', async () => {
+    /*
+     * `startFreshLog` emptied the log. Those events are the only copy there has
+     * ever been, because the damaged flag is what stopped them being written,
+     * so emptying it is the loss the whole degraded mode exists to prevent.
+     */
+    const contents = new Map<string, string>([[LOG_FILE, 'not json']]);
+    const files: FileStore = {
+      async read(name) {
+        return contents.get(name) ?? null;
+      },
+      async write(name, text) {
+        contents.set(name, text);
+      },
+      async remove(name) {
+        contents.delete(name);
+      },
+    };
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await store.load();
+    store.addTask('typed while the log was unreadable');
+
+    const kept = await store.startFreshLog();
+    expect(kept).toBeTruthy();
+    expect(store.getSnapshot().storageError).toBeNull();
+
+    // On screen, and now actually on disk.
+    expect(Object.values(store.getSnapshot().state.tasks).map(t => t.title)).toEqual([
+      'typed while the log was unreadable',
+    ]);
+    const fresh = JSON.parse(contents.get(LOG_FILE)!) as { events: Event[] };
+    expect(fresh.events).toHaveLength(1);
+  });
+});
+
+describe('an event the base already accounts for', () => {
+  const build = () => new Store({ now: () => BASE, storage: null, vault: memoryStore() });
+
+  it('does not add its time a second time when it is fed back after a sync', async () => {
+    /*
+     * The hole the fold fix opened. Stripping the watermark off the adopted
+     * base was safe only under the premise that everything replayed onto it is
+     * known not to be in it. `merge` dedups against the local log, and after a
+     * push the local log is empty, so an event the snapshot already accounts
+     * for passed the dedup and was applied on top of the snapshot that already
+     * held it. For a timeDelta that is time the user did not spend.
+     */
+    const created = task('Solder the preamp');
+    const spent = delta(created.entityId, BASE + 3_600_000, 3_600_000);
+    const store = new Store({
+      now: () => BASE,
+      storage: null,
+      vault: memoryStore(),
+      seed: [created, spent],
+    });
+
+    // A push acknowledged both, then a pull adopted the snapshot holding them.
+    store.markPushed(watermarkOf([created, spent]));
+    store.adoptRemote(covering([created, spent]));
+    expect(store.getSnapshot().state.tasks[created.entityId]!.timeSpent).toBe(3_600_000);
+
+    store.importJson(JSON.stringify({ events: [created, spent] }));
+    expect(store.getSnapshot().state.tasks[created.entityId]!.timeSpent).toBe(3_600_000);
+  });
+
+  it('is logged but does not change state when it arrives below the watermark', async () => {
+    // The accepted cost of compaction, pinned so it stays deliberate: below the
+    // watermark the snapshot is the authority, so the event still goes into the
+    // log and still syncs, and it cannot move the state here.
+    const created = task('Solder the preamp');
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore() });
+    store.markPushed(created.id);
+    store.adoptRemote(covering([created]));
+
+    const old = { ...task('minted before the snapshot'), id: '01A0000000000000000000000A' };
+    expect(store.importJson(JSON.stringify({ events: [old] }))).toEqual({ ok: true, added: 1 });
+    expect(store.getSnapshot().events.some(e => e.id === old.id)).toBe(true);
+    expect(Object.values(store.getSnapshot().state.tasks).map(t => t.title)).toEqual([
+      'Solder the preamp',
+    ]);
+  });
+
+  it('still applies a local event minted below an adopted watermark', () => {
+    // The Important 3 case, which the fix above must not undo: this device's
+    // own unpushed event sorts below the repository's watermark only because
+    // another device's clock ran ahead, and it is genuinely not in the snapshot.
+    const store = build();
+    const ahead: Event = { ...task('From the other device'), id: '01ZZZZZZZZZZZZZZZZZZZZZZZZ', deviceId: 'phone' };
+    store.adoptRemote({ ...replay([ahead]), coversThrough: ahead.id });
+
+    const id = store.addTask('Solder the preamp');
+    // Forces the full replay path rather than the fold.
+    store.merge([{ ...task('Arrived from elsewhere'), id: '01ZZZZZZZZZZZZZZZZZZZZZZZb', deviceId: 'phone' }]);
+
+    expect(store.getSnapshot().state.tasks[id]?.title).toBe('Solder the preamp');
+  });
+});
+
+describe('importing an export from another device', () => {
+  it('gives what a full replay of everything gives', () => {
+    /*
+     * The assertion the round-trip test never made. It imported this device's
+     * own export and checked `added: 0`, which exercises the dedup and says
+     * nothing about where the events land once they are in.
+     */
+    const mine = [task('Solder the preamp'), task('Order the transformer')];
+    const theirs: Event[] = [
+      { ...task('Cut the chassis'), deviceId: 'phone', ts: BASE - 86_400_000 },
+      { ...task('Drill the panel'), deviceId: 'phone', ts: BASE - 172_800_000 },
+    ];
+    const spentThere = {
+      ...delta(mine[0]!.entityId, BASE - 86_400_000 + 600_000, 600_000),
+      deviceId: 'phone',
+    };
+
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), seed: mine });
+    store.importJson(JSON.stringify({ events: [...theirs, spentThere] }));
+
+    expect(store.getSnapshot().state).toEqual(replay([...mine, ...theirs, spentThere]));
+  });
+
+  it('is idempotent, however many times the same file is imported', () => {
+    const mine = [task('Solder the preamp')];
+    const theirs: Event[] = [{ ...task('Cut the chassis'), deviceId: 'phone', ts: BASE - 86_400_000 }];
+    const spentThere = { ...delta(mine[0]!.entityId, BASE - 3_600_000, 600_000), deviceId: 'phone' };
+    const file = JSON.stringify({ events: [...theirs, spentThere] });
+
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), seed: mine });
+    expect(store.importJson(file)).toEqual({ ok: true, added: 2 });
+    const once = store.getSnapshot().state;
+
+    expect(store.importJson(file)).toEqual({ ok: true, added: 0 });
+    expect(store.importJson(file)).toEqual({ ok: true, added: 0 });
+    expect(store.getSnapshot().state).toEqual(once);
   });
 });

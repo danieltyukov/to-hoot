@@ -106,22 +106,67 @@ export interface Loaded {
   damaged?: string;
 }
 
+/**
+ * Reads one file, turning a refusal into an answer rather than a rejection.
+ *
+ * `FileStore.read` returns null for a file that is not there, and throws for one
+ * that is there and cannot be opened: EACCES, EIO, a Tauri `readTextFile` that
+ * fails after `exists` said true. Those are opposite facts and the caller has to
+ * be able to tell them apart, so the throw is caught here rather than being
+ * allowed to reject the whole load.
+ */
+async function readOr(files: FileStore, name: string): Promise<{ text: string | null; failed: boolean }> {
+  try {
+    return { text: await files.read(name), failed: false };
+  } catch {
+    return { text: null, failed: true };
+  }
+}
+
+/**
+ * Decides whether a log file is one this app can safely replace.
+ *
+ * One rule, applied to every way a file can be wrong: if it is not exactly the
+ * shape this app writes, it is not this app's to overwrite. A version it does
+ * not know, an entry it cannot read, a top level that is not an object: none of
+ * those are recoverable here, and all of them are somebody's only copy.
+ */
+function readLog(text: string): { events: Event[] } | { damaged: string } {
+  const body = parse(text);
+  if (body === undefined) {
+    return { damaged: 'The log file could not be read. It may have been cut short by a crash.' };
+  }
+  if (typeof body !== 'object' || body === null || !Array.isArray((body as LogFile).events)) {
+    return { damaged: 'The log file is not the shape this app writes.' };
+  }
+  const logBody = body as LogFile;
+  if (logBody.version !== FORMAT_VERSION) {
+    // Written by a newer version of the app, most likely. Reading it as this
+    // format and rewriting it as this format is how the newer data is lost.
+    return { damaged: `The log file is version ${String(logBody.version)}, which this app cannot read.` };
+  }
+  if (!logBody.events.every(isEventish)) {
+    return { damaged: 'The log file holds an entry this app cannot read.' };
+  }
+  return { events: logBody.events };
+}
+
 export async function load(files: FileStore): Promise<Loaded> {
-  const [logText, cacheText] = await Promise.all([files.read(LOG_FILE), files.read(CACHE_FILE)]);
+  const [log, cache] = await Promise.all([readOr(files, LOG_FILE), readOr(files, CACHE_FILE)]);
 
   let damaged: string | undefined;
   let events: Event[] = [];
-  if (logText !== null) {
-    const logBody = parse(logText) as LogFile | undefined;
-    if (logBody === undefined) {
-      damaged = 'The log file could not be read. It may have been cut short by a crash.';
-    } else if (!Array.isArray(logBody.events)) {
-      damaged = 'The log file has no events in it, which is not a shape this app writes.';
-    } else {
-      events = logBody.events.filter(isEventish);
-    }
+  if (log.failed) {
+    damaged = 'The log file could not be read. The disk refused it, so what it holds is unknown.';
+  } else if (log.text !== null) {
+    const read = readLog(log.text);
+    if ('damaged' in read) damaged = read.damaged;
+    else events = read.events;
   }
 
+  // A cache that could not be read is simply not used. It is derivable, so
+  // there is nothing here to protect and no reason to stop.
+  const cacheText = cache.text;
   const cacheBody = parse(cacheText) as CacheFile | undefined;
   const usable =
     cacheBody?.version === FORMAT_VERSION &&

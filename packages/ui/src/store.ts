@@ -211,6 +211,32 @@ export class Store {
    *   mint. See `foldBase`.
    */
   private base: State | undefined;
+  /**
+   * Log events the base's watermark must not filter out.
+   *
+   * A watermark is a promise that everything at or below it is folded into the
+   * state. That promise is true of the repository's own events and false of
+   * this device's unpushed ones, which sort below it whenever another device's
+   * clock ran ahead. The set names the exceptions, so the watermark can stay on
+   * and still do its real job, which is to stop an event the base already holds
+   * being applied to it a second time.
+   *
+   * Bounded by the clock skew between devices, so a handful of ids at most, and
+   * it never needs to survive a restart: by then the cache covers the whole log
+   * and no exception applies.
+   */
+  private exempt = new Set<string>();
+  /**
+   * Set when the log on disk cannot be read, and cleared only by the user
+   * choosing to start a new one.
+   *
+   * Separate from `writeFailure` because they are different facts with
+   * different lifetimes. A failed write is transient and clears itself on the
+   * next success. An unreadable log stays true until somebody acts on it, and
+   * it is what stops the app writing over the only copy of unsynced work. They
+   * were one field, so a write that recovered announced the damage was over.
+   */
+  private logUnreadable: string | null = null;
   /** The greatest event id a push has acknowledged. Below it, the repo has a copy. */
   private pushedThrough: string | undefined;
   /** Events appended since the cache was last rewritten. */
@@ -294,6 +320,7 @@ export class Store {
       this.base = base;
       // Only what is in front of the cache has to be replayed next time.
       this.sinceCache = cached ? 0 : events.length;
+      this.logUnreadable = damaged ?? null;
       this.publish({
         state,
         events,
@@ -304,10 +331,22 @@ export class Store {
       });
     }
     if (this.vault === undefined) return;
-    const [raw, setup] = await Promise.all([
-      this.vault.get(SETTINGS_KEY),
-      this.vault.get(SETUP_KEY),
-    ]);
+    /*
+     * A vault that refuses to answer leaves the defaults in place rather than
+     * taking the boot down with it.
+     *
+     * The caller chains the first sync onto this promise, so a rejection here
+     * skipped the sync as well, which meant one unreadable settings key stopped
+     * the work already on disk from ever reaching the repository. Defaults are
+     * a bad settings screen; no sync is lost work.
+     */
+    let raw: string | null = null;
+    let setup: string | null = null;
+    try {
+      [raw, setup] = await Promise.all([this.vault.get(SETTINGS_KEY), this.vault.get(SETUP_KEY)]);
+    } catch {
+      return;
+    }
     const patch: Partial<Snapshot> = { setupDone: setup === 'true' };
     if (raw !== null) {
       const parsed = safeJson(raw);
@@ -625,6 +664,23 @@ export class Store {
    * Events arriving from another device are NOT folded this way; they can sort
    * anywhere, so `merge` below replays.
    */
+  /**
+   * Replays the whole log onto the base, which is the only correct answer once
+   * events can sort anywhere.
+   *
+   * The watermark stays on the base and the filtering happens here, because
+   * `replay` applies one rule to every event and this needs two: an event from
+   * outside is filtered by the watermark, and one of this device's own that
+   * merely sorts below it is not. `foldBase` then strips the watermark only
+   * because it has already been applied.
+   */
+  private replayAll(): State {
+    const covered = this.base?.coversThrough;
+    if (covered === undefined) return replay([...this.log], this.base);
+    const applicable = this.log.filter(e => e.id > covered || this.exempt.has(e.id));
+    return replay(applicable, foldBase(this.base));
+  }
+
   private commit(events: readonly Event[], patch: Partial<Snapshot> = {}): void {
     if (events.length === 0) {
       this.publish(patch);
@@ -632,6 +688,12 @@ export class Store {
     }
     this.log = [...this.log, ...events];
     this.sinceCache += events.length;
+    // Minted here, so not in the base whatever its id says. Without this the
+    // fold shows the user their action and the next full replay takes it away.
+    const covered = this.base?.coversThrough;
+    if (covered !== undefined) {
+      for (const event of events) if (event.id <= covered) this.exempt.add(event.id);
+    }
     this.publish({ ...patch, state: replay([...events], foldBase(this.snapshot.state)), events: this.log });
     this.persist();
   }
@@ -653,7 +715,7 @@ export class Store {
     // Onto the base, not from nothing. Replaying the log alone would discard
     // everything the base accounts for and the log no longer holds, which after
     // a sync or a boot from a compacted log is most of the user's history.
-    this.publish({ state: replay(this.log, this.base), events: this.log });
+    this.publish({ state: this.replayAll(), events: this.log });
     this.persist();
     return fresh.length;
   }
@@ -671,8 +733,16 @@ export class Store {
     const keep = this.pending();
     this.log = keep;
     this.sinceCache = 0;
-    this.base = foldBase(remote);
-    this.publish({ state: replay(keep, this.base), events: keep });
+    this.base = remote;
+    // The unpushed events that sort below the repository's watermark. They are
+    // this device's own and are genuinely not in the snapshot, so they are the
+    // exceptions the watermark must not touch.
+    this.exempt = new Set(
+      remote.coversThrough === undefined
+        ? []
+        : keep.filter(e => e.id <= remote.coversThrough!).map(e => e.id),
+    );
+    this.publish({ state: this.replayAll(), events: keep });
     // Forced, so the cache on disk describes the state that was just adopted
     // rather than one several syncs behind it.
     this.persist(true);
@@ -705,6 +775,16 @@ export class Store {
   private persist(force = false): void {
     const files = this.files;
     if (files === undefined) return;
+    /*
+     * Nothing is written at all while the log cannot be read, the cache
+     * included.
+     *
+     * The log because those bytes are the only copy of whatever has not synced.
+     * The cache because it describes a log this app cannot read, so it buys
+     * nothing, and because the notice on screen tells the user nothing is being
+     * saved. A file written behind that sentence makes it a lie.
+     */
+    if (this.logUnreadable !== null) return;
     const events = this.log;
     const state = this.snapshot.state;
     /*
@@ -738,9 +818,7 @@ export class Store {
        */
       try {
         if (rewriteCache) await disk.writeCache(files, covers, state);
-        // Never over an unreadable log. Those bytes are the only copy of
-        // whatever has not synced, and this app cannot read them any more.
-        if (this.snapshot.storageError === null) await disk.writeLog(files, events);
+        await disk.writeLog(files, events);
         if (this.writeFailure !== null) this.publish({ storageError: null });
         this.writeFailure = null;
       } catch (err) {
@@ -768,12 +846,29 @@ export class Store {
    * aside may be the only place their unsynced work still exists.
    */
   async startFreshLog(): Promise<string | null> {
-    if (this.files === undefined) return null;
-    const kept = await disk.setLogAside(this.files, this.nowFn());
-    this.log = [];
-    this.sinceCache = 0;
+    const files = this.files;
+    if (files === undefined) return null;
+    // Behind the same queue as every other write, so it cannot move the file
+    // out from under one that is already in flight.
+    let kept: string | null = null;
+    this.writing = this.writing.then(async () => {
+      kept = await disk.setLogAside(files, this.nowFn());
+    });
+    await this.writing;
+
+    /*
+     * The log in memory is kept, not cleared.
+     *
+     * Everything in it was typed during the degraded session, and the damaged
+     * flag is precisely what stopped it being written, so this is the only copy
+     * that has ever existed. Clearing it here would be the app doing the exact
+     * loss the degraded mode was protecting against, one click after telling
+     * the user it had protected them.
+     */
+    this.sinceCache = this.log.length;
     this.writeFailure = null;
-    this.publish({ events: this.log, storageError: null });
+    this.logUnreadable = null;
+    this.publish({ storageError: null });
     this.persist(true);
     await this.flush();
     return kept;

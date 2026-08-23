@@ -163,7 +163,13 @@ export class SyncController {
         branch: settings.github.branch,
       });
       // The seed's own reason, not a generic one, and the original 409 with it.
-      if (seeded.status === 'error') throw err;
+      // Throwing `err` alone was the generic one, which is what the comment was
+      // written to rule out.
+      if (seeded.status === 'error') {
+        throw new Error(
+          `${seeded.detail} (after ${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
       await engine.pull();
       return (await engine.push(pending)).status;
     }
