@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { replay } from './replay.js';
-import { completedPerDay, consistency, plannedToday, todayTasks, trackedToday } from './selectors.js';
+import { completedPerDay, consistency, plannedToday, taskTotalTime, todayTasks, trackedToday } from './selectors.js';
 import type { Event } from './events.js';
 
 const NOW = new Date(2026, 7, 23, 12, 0).getTime();
@@ -138,5 +138,30 @@ describe('consistency', () => {
     expect(done).toHaveLength(7);
     expect(done[6]).toBe(1);
     expect(consistency(state, 7, NOW)[6]).toBe(0);
+  });
+});
+
+describe('taskTotalTime', () => {
+  it('adds the children to the parent, derived at read time rather than stored', () => {
+    const state = replay([
+      task('parent', { dueDay: TODAY }),
+      task('child-a', { parentId: 'parent' }),
+      task('child-b', { parentId: 'parent' }),
+      task('unrelated', {}),
+      tracked('parent', TODAY, 1_000),
+      tracked('child-a', TODAY, 2_000),
+      tracked('child-a', YESTERDAY, 4_000),
+      tracked('child-b', TODAY, 8_000),
+      tracked('unrelated', TODAY, 16_000),
+    ]);
+    expect(taskTotalTime(state, 'parent')).toBe(15_000);
+    // The stored field stays the task's own time, so nothing double counts.
+    expect(state.tasks.parent.timeSpent).toBe(1_000);
+    expect(taskTotalTime(state, 'child-a')).toBe(6_000);
+    expect(taskTotalTime(state, 'unrelated')).toBe(16_000);
+  });
+
+  it('is zero for a task that does not exist', () => {
+    expect(taskTotalTime(replay([]), 'nobody')).toBe(0);
   });
 });

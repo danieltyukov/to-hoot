@@ -49,6 +49,35 @@ export function todayTasks(state: State, now: number = Date.now()): Task[] {
   });
 }
 
+function sumDays(task: Task): number {
+  let total = 0;
+  for (const ms of Object.values(task.timeSpentOnDay)) total += ms;
+  return total;
+}
+
+/**
+ * A task's tracked time including its subtasks, derived at read time.
+ *
+ * Never stored and never emitted as a second event: under replay a stored
+ * roll-up can double count (the same child delta folded in twice by two
+ * devices) and can drift from `timeSpentOnDay`, while a derived one cannot do
+ * either. `task.timeSpent` stays the task's own time, so nothing double counts
+ * when a caller sums a list that contains both a parent and its children.
+ *
+ * Children are found by their `parentId` rather than by the parent's
+ * `subTaskIds`, for the same reason membership is read off the entity
+ * everywhere else: the ordering array is ordering, not truth.
+ */
+export function taskTotalTime(state: State, taskId: string): number {
+  const task = state.tasks[taskId];
+  if (task === undefined) return 0;
+  let total = sumDays(task);
+  for (const other of Object.values(state.tasks)) {
+    if (other.parentId === taskId) total += sumDays(other);
+  }
+  return total;
+}
+
 /** day -> total milliseconds tracked across every task. */
 function trackedByDay(state: State): Map<string, number> {
   const totals = new Map<string, number>();
