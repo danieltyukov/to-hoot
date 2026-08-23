@@ -1,0 +1,17 @@
+.ring {
+  flex: 0 0 auto;
+  /* Twelve o'clock, not three. */
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: var(--border);
+}
+
+.ring-value {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease);
+}
