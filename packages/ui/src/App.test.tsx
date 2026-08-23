@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import App, { TICK_MS } from './App.js';
 import { FLUSH_MS, Store } from './store.js';
+import { SyncController } from './sync.js';
 
 const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
 
@@ -556,5 +557,85 @@ describe('two idle gaps in a row', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Count it to Read the datasheet' }));
     expect(store.getSnapshot().state.tasks[second.id]!.timeSpent).toBe(20 * 60_000);
+  });
+});
+
+describe('every change asks for a sync', () => {
+  /*
+   * The gap this closes: a wrapper each handler opted into, whose own comment
+   * said it put the nudge in one place. It put it in a dozen, import and both
+   * settings paths were not among them, and nothing tested any of it, so their
+   * changes sat on the device for up to five minutes.
+   */
+  function watched() {
+    const storage = new Map<string, string>();
+    const store = new Store({
+      now: () => NOW,
+      storage: {
+        getItem: key => storage.get(key) ?? null,
+        setItem: (key, value) => void storage.set(key, value),
+      },
+    });
+    store.finishSetup();
+    const sync = new SyncController({
+      store,
+      http: async () => ({ ok: true, status: 200, headers: {}, text: async () => '{}' }),
+      settings: () => store.getSnapshot().settings,
+    });
+    const soon = vi.spyOn(sync, 'soon').mockImplementation(() => undefined);
+    render(<App store={store} sync={sync} />);
+    return { store, soon };
+  }
+
+  it('asks after a task is added', async () => {
+    const { soon } = watched();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('New task'), 'Solder the preamp{Enter}');
+    expect(soon).toHaveBeenCalled();
+  });
+
+  it('asks after an import, which used to wait out the timer', () => {
+    const { store, soon } = watched();
+    soon.mockClear();
+    act(() => {
+      store.importJson(
+        JSON.stringify({
+          events: [
+            {
+              id: '01M9IMPORTED00000000000001',
+              deviceId: 'phone',
+              type: 'create',
+              entity: 'task',
+              entityId: 'imported-1',
+              payload: { title: 'From the other device', projectId: 'inbox' },
+              ts: NOW - 3_600_000,
+            },
+          ],
+        }),
+      );
+    });
+    expect(soon).toHaveBeenCalled();
+  });
+
+  it('asks after a settings change, which used to wait out the timer', () => {
+    const { store, soon } = watched();
+    soon.mockClear();
+    act(() => {
+      store.saveSettings({ workdayStart: '08:00' });
+    });
+    expect(soon).toHaveBeenCalled();
+  });
+
+  it('does not ask again when a push truncates the log', () => {
+    // Otherwise a sync is the thing that schedules the next sync.
+    const { store, soon } = watched();
+    act(() => {
+      store.addTask('Solder the preamp');
+    });
+    soon.mockClear();
+    act(() => {
+      store.markPushed(store.pending().at(-1)!.id);
+    });
+    expect(soon).not.toHaveBeenCalled();
   });
 });

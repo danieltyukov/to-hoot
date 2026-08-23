@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   completedPerDay,
   consistency,
@@ -56,6 +56,8 @@ export interface AppProps {
   mcpServerPath?: string;
   /** The shell. Used for the resume signal; absent in tests and in SSR. */
   platform?: Pick<Platform, 'onResume'> | undefined;
+  /** The sync controller. Injectable so a test can watch when a sync is asked for. */
+  sync?: SyncController;
 }
 
 /** "09:00" to 9. Anything unparseable falls back, rather than rendering NaN rows. */
@@ -81,6 +83,7 @@ export default function App({
   http = browserHttp,
   mcpServerPath,
   platform,
+  sync: injectedSync,
 }: AppProps = {}) {
   // The vault is where settings, secrets and the setup flag live. Without one
   // the wizard would have nowhere to record that it had been finished, and
@@ -109,14 +112,36 @@ export default function App({
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const sync = useMemo(
     () =>
+      injectedSync ??
       new SyncController({
         store,
         http,
         settings: () => store.getSnapshot().settings,
         onStatus: setSyncStatus,
       }),
-    [store, http],
+    [store, http, injectedSync],
   );
+
+  /*
+   * Every change to the log is a reason to sync, whoever made it.
+   *
+   * This used to be a wrapper each handler opted into, with a comment claiming
+   * that put it in one place. It did not: it put it in a dozen, and two of them
+   * were missed, so an import and a settings change waited out the five minute
+   * timer. Watching the log cannot be forgotten, because appending to it is
+   * what a change is.
+   *
+   * Only growth counts. A push truncates the log to what it has not
+   * acknowledged, and treating that as a change would schedule a sync in
+   * response to a sync.
+   */
+  const logLength = snapshot.events.length;
+  const syncedAt = useRef(logLength);
+  useEffect(() => {
+    const grew = logLength > syncedAt.current;
+    syncedAt.current = logLength;
+    if (grew) sync.soon();
+  }, [sync, logLength]);
 
   /*
    * The calendar, at both ends: today's events onto the timeline, and tracked
@@ -165,12 +190,6 @@ export default function App({
     if (snapshot.theme === 'system') delete root.dataset['theme'];
     else root.dataset['theme'] = snapshot.theme;
   }, [snapshot.theme]);
-
-  // One place, so a new action cannot forget to schedule a sync.
-  const acted = <T,>(value: T): T => {
-    sync.soon();
-    return value;
-  };
 
   const { state, now } = snapshot;
   const offsetMs = state.settings.dayStartOffsetMs;
@@ -272,8 +291,8 @@ export default function App({
             setPane('tasks');
           }}
           counts={counts}
-          onAddProject={title => setView(`project:${acted(store.addProject(title))}`)}
-          onAddTag={title => acted(store.addTag(title))}
+          onAddProject={title => setView(`project:${store.addProject(title)}`)}
+          onAddTag={title => store.addTag(title)}
           footer={
             <div className="sidebar-tools">
               <ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />
@@ -322,18 +341,18 @@ export default function App({
             projects={state.projects}
             trackedFor={store.trackedFor}
             runningTaskId={snapshot.runningTaskId}
-            onToggleDone={(id, isDone) => acted(store.toggleDone(id, isDone))}
-            onStart={id => acted(store.start(id))}
-            onStop={() => acted(store.stop())}
+            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+            onStart={id => store.start(id)}
+            onStop={() => store.stop()}
             onSelect={select}
-            onAdd={title => acted(store.addTask(title, defaultsFor(view, today)))}
+            onAdd={title => store.addTask(title, defaultsFor(view, today))}
             notice={
               snapshot.idleGap !== null ? (
                 <IdlePrompt
                   gap={snapshot.idleGap}
                   interrupted={state.tasks[snapshot.idleGap.taskId]}
                   choices={todayTasks(state, now)}
-                  onResolve={taskId => acted(store.resolveIdle(taskId))}
+                  onResolve={taskId => store.resolveIdle(taskId)}
                 />
               ) : view === 'today' ? (
                 <TodayState open={open.length} done={done.length} />
@@ -350,13 +369,13 @@ export default function App({
             today={today}
             runningTaskId={snapshot.runningTaskId}
             onClose={() => setSelectedId(null)}
-            onPatch={(id, patch) => acted(store.patchTask(id, patch))}
-            onAddSubtask={(parentId, title) => acted(store.addSubtask(parentId, title))}
-            onToggleDone={(id, isDone) => acted(store.toggleDone(id, isDone))}
-            onStart={id => acted(store.start(id))}
-            onStop={() => acted(store.stop())}
+            onPatch={(id, patch) => store.patchTask(id, patch)}
+            onAddSubtask={(parentId, title) => store.addSubtask(parentId, title)}
+            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+            onStart={id => store.start(id)}
+            onStop={() => store.stop()}
             onDelete={id => {
-              acted(store.deleteTask(id));
+              store.deleteTask(id);
               setSelectedId(null);
             }}
             onSelect={select}
