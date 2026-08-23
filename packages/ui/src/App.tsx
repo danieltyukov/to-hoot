@@ -26,6 +26,8 @@ import { browserHttp, browserStore } from './platform/browser.js';
 import type { Span, TimelineEvent } from './components/timeline-layout.js';
 import type { Http, Platform } from '@to-hoot/core';
 import { SyncController, type SyncStatus } from './sync.js';
+import { CalendarService } from './calendar.js';
+import type { BridgeEvent } from '@to-hoot/core';
 import { formatDuration } from './format.js';
 import { Store } from './store.js';
 import './App.css';
@@ -121,6 +123,29 @@ export default function App({
     [store, http],
   );
 
+  /*
+   * The calendar, at both ends: today's events onto the timeline, and tracked
+   * time back onto a separate calendar. Write-back is driven by the ledger
+   * rather than by "something changed", so running it on every state change
+   * costs nothing when nothing has moved.
+   */
+  const [calendarEvents, setCalendarEvents] = useState<BridgeEvent[]>([]);
+  const calendar = useMemo(
+    () =>
+      new CalendarService({
+        store,
+        http,
+        settings: () => store.getSnapshot().settings,
+        onEvents: setCalendarEvents,
+      }),
+    [store, http],
+  );
+
+  useEffect(() => calendar.start(), [calendar]);
+  useEffect(() => {
+    calendar.syncWriteback(snapshot.state);
+  }, [calendar, snapshot.state]);
+
   useEffect(() => {
     const stop = sync.start();
     void store.load().then(() => sync.syncNow());
@@ -190,7 +215,7 @@ export default function App({
   // A task with a time on it is a block on the day. This is the only source of
   // events until the calendar bridge lands, and it is what makes the timeline
   // fill up as soon as anything is actually scheduled.
-  const events: TimelineEvent[] = Object.values(state.tasks)
+  const scheduled: TimelineEvent[] = Object.values(state.tasks)
     .filter(t => t.dueWithTime !== undefined && dayStr(t.dueWithTime, offsetMs) === today)
     .map(t => ({
       id: t.id,
@@ -200,6 +225,17 @@ export default function App({
       endMs: t.dueWithTime! + (t.timeEstimate > 0 ? t.timeEstimate : UNESTIMATED_BLOCK_MS),
       color: colorOf(t.id),
     }));
+
+  /*
+   * The day as the calendar has it, beside the day as the tasks have it. An
+   * all-day event is left off: it is a label for the whole day rather than a
+   * block within it, and drawing it as one would claim 24 hours of the grid.
+   */
+  const fromCalendar: TimelineEvent[] = calendarEvents
+    .filter(e => !e.allDay && e.end > e.start)
+    .map(e => ({ id: `cal:${e.id}`, title: e.title, startMs: e.start, endMs: e.end }));
+
+  const events: TimelineEvent[] = [...scheduled, ...fromCalendar];
 
   const heading = view === 'today' ? 'Today' : titleOf(view, state);
   const selected = selectedId === null ? undefined : state.tasks[selectedId];
