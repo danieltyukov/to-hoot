@@ -16,7 +16,7 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** Settings as they travel between devices: no secrets, no device identity. */
 export interface SyncableSettings {
-  github: { owner: string; repo: string };
+  github: { owner: string; repo: string; branch: string };
   calendar: { execUrl: string; icsUrl: string };
   theme: Theme;
   dayStartOffsetMs: number;
@@ -33,7 +33,7 @@ export interface SyncableSettings {
  */
 export function toSyncable(s: Settings): SyncableSettings {
   return {
-    github: { owner: s.github.owner, repo: s.github.repo },
+    github: { owner: s.github.owner, repo: s.github.repo, branch: s.github.branch },
     calendar: { execUrl: s.calendar.execUrl, icsUrl: s.calendar.icsUrl },
     theme: s.theme,
     dayStartOffsetMs: s.dayStartOffsetMs,
@@ -119,6 +119,7 @@ export function validateSettings(input: unknown): Result<Settings> {
   if (github) {
     str(github['owner'], 'github.owner', v => { out.github.owner = v; });
     str(github['repo'], 'github.repo', v => { out.github.repo = v; });
+    str(github['branch'], 'github.branch', v => { out.github.branch = v; });
     str(github['token'], 'github.token', v => { out.github.token = v; });
   }
 
@@ -132,6 +133,7 @@ export function validateSettings(input: unknown): Result<Settings> {
   const worker = nested('worker');
   if (worker) {
     str(worker['url'], 'worker.url', v => { out.worker.url = v; });
+    str(worker['pathSecret'], 'worker.pathSecret', v => { out.worker.pathSecret = v; });
   }
 
   /*

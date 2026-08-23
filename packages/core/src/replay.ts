@@ -103,9 +103,12 @@ const SETTINGS_FIELDS: FieldTable = {
   workdayEnd: { check: isString },
 };
 
+// The branch travels with the owner and repo: every device points at the same
+// one, and a second device that had to re-derive it could derive it differently.
 const SETTINGS_GITHUB_FIELDS: FieldTable = {
   owner: { check: isString },
   repo: { check: isString },
+  branch: { check: isString },
 };
 
 const SETTINGS_CALENDAR_FIELDS: FieldTable = {

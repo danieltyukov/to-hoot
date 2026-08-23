@@ -66,6 +66,18 @@ export interface Settings {
   github: {
     owner: string;
     repo: string;
+    /**
+     * The branch the data lives on.
+     *
+     * Empty means "whatever the repository says its default is", which the
+     * client resolves once and caches. It is stored rather than re-derived
+     * because a literal `main` written back over a `master` repository sends
+     * every read to a branch that does not exist, and GitHub answers 404 for
+     * that in the same way it answers for a repository you cannot see. The
+     * write path is worse: a missing ref reads as "no commits yet", so the next
+     * commit creates an orphan branch and reports success.
+     */
+    branch: string;
     /** Secret. Never synced. */
     token: string;
   };
@@ -78,6 +90,13 @@ export interface Settings {
   worker: {
     /** Contains a path secret, so it is never synced. */
     url: string;
+    /**
+     * The path secret the endpoint URL is built from. Secret, never synced.
+     *
+     * Stored rather than re-generated, so the commands the wizard prints and
+     * the URL already saved beside them cannot disagree.
+     */
+    pathSecret: string;
   };
   /** Device-local. Two devices must never share one id. */
   deviceId: string;
@@ -138,9 +157,9 @@ export const DEFAULT_TASK: Omit<Task, 'id' | 'created' | 'updated'> = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  github: { owner: '', repo: '', token: '' },
+  github: { owner: '', repo: '', branch: '', token: '' },
   calendar: { execUrl: '', secret: '', icsUrl: '' },
-  worker: { url: '' },
+  worker: { url: '', pathSecret: '' },
   deviceId: '',
   deviceName: '',
   theme: 'system',

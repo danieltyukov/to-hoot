@@ -6,9 +6,9 @@ import { replay } from './replay.js';
 import type { Event } from './events.js';
 
 const filled: Settings = {
-  github: { owner: 'an-owner', repo: 'a-repo', token: 'ghp_secret' },
+  github: { owner: 'an-owner', repo: 'a-repo', branch: 'master', token: 'ghp_secret' },
   calendar: { execUrl: 'https://example.test/exec', secret: 'shared-shh', icsUrl: 'https://example.test/basic.ics' },
-  worker: { url: 'https://example.test/mcp/path-secret-1234' },
+  worker: { url: 'https://example.test/mcp/path-secret-1234', pathSecret: 'path-secret-1234' },
   deviceId: 'device-alpha',
   deviceName: 'a laptop',
   theme: 'dark',
@@ -20,7 +20,7 @@ const filled: Settings = {
 
 describe('toSyncable', () => {
   it('never serialises secrets into a syncable payload', () => {
-    const s = { ...DEFAULT_SETTINGS, github: { token: 'ghp_secret', owner: 'o', repo: 'r' } };
+    const s = { ...DEFAULT_SETTINGS, github: { token: 'ghp_secret', owner: 'o', repo: 'r', branch: '' } };
     const synced = toSyncable(s);
     expect(JSON.stringify(synced)).not.toContain('ghp_secret');
   });
@@ -31,7 +31,9 @@ describe('toSyncable', () => {
       expect(json).not.toContain(secret);
     }
     expect(toSyncable(filled)).toEqual({
-      github: { owner: 'an-owner', repo: 'a-repo' },
+      // The branch syncs: every device points at the same one, and a device
+      // that had to re-derive it could derive it differently.
+      github: { owner: 'an-owner', repo: 'a-repo', branch: 'master' },
       calendar: { execUrl: 'https://example.test/exec', icsUrl: 'https://example.test/basic.ics' },
       theme: 'dark',
       dayStartOffsetMs: 4 * 3600_000,
