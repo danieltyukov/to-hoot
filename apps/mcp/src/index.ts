@@ -8,8 +8,8 @@
 // any other module gets a chance to write.
 
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
-import { GitHubClient, SyncEngine, type Event, type Http, type State } from '@to-hoot/core';
-import { toolContext, type ToolBackend } from '@to-hoot/core/tools';
+import { GitHubClient, SyncEngine, type Event, type State } from '@to-hoot/core';
+import { fetchHttp, toolContext, type ToolBackend } from '@to-hoot/core/tools';
 
 import { parseConfig } from './config.js';
 import { createServer } from './server.js';
@@ -21,20 +21,6 @@ import { fileTimerStore } from './timers.js';
 console.log = console.error;
 console.info = console.error;
 console.debug = console.error;
-
-/** `Platform.http` over the runtime's own fetch. */
-const http: Http = async req => {
-  const res = await fetch(req.url, {
-    method: req.method ?? 'GET',
-    headers: req.headers,
-    body: req.body,
-  });
-  const headers: Record<string, string> = {};
-  res.headers.forEach((value, key) => {
-    headers[key.toLowerCase()] = value;
-  });
-  return { status: res.status, headers, text: () => res.text() };
-};
 
 /**
  * The full sync engine as a tool backend. This host is a long-lived process
@@ -65,7 +51,7 @@ function main(): void {
   }
   const { github, deviceId, timerFile } = config.value;
 
-  const engine = new SyncEngine({ client: new GitHubClient(http, github), deviceId });
+  const engine = new SyncEngine({ client: new GitHubClient(fetchHttp, github), deviceId });
   const ctx = toolContext({
     backend: engineBackend(engine),
     timers: fileTimerStore(timerFile),

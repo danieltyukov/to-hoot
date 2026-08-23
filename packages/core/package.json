@@ -18,6 +18,9 @@
   "dependencies": {
     "zod": "^4.4.0"
   },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "^2.0.0"
+  },
   "scripts": {
     "build": "tsc -b"
   }

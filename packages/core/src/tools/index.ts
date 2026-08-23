@@ -5,3 +5,5 @@
 export * from './runtime.js';
 export * from './tools.js';
 export * from './snapshot.js';
+export * from './mcp.js';
+export * from './http.js';
