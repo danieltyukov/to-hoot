@@ -25,6 +25,9 @@ export const LOG_CALENDAR_NAME = 'to-hoot log';
 /** The `extendedProperties.private` key that makes a re-sync an update. */
 export const TO_HOOT_ID_KEY = 'toHootId';
 
+/** Bumped when the wire format changes in a way a client has to notice. */
+export const BRIDGE_VERSION = 1;
+
 /** A read window one call can serve comfortably. The client asks again for more. */
 export const MAX_LIST_DAYS = 62;
 /** Google's own per-page ceiling for `events.list`. */
@@ -50,7 +53,8 @@ export type BridgeErrorCode =
   | 'bad-request'
   | 'unsupported-action'
   | 'calendar-error'
-  | 'calendar-service-disabled';
+  | 'calendar-service-disabled'
+  | 'script-error';
 
 export interface ListEventsRequest {
   action: 'listEvents';
@@ -555,6 +559,15 @@ function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message;
   const message = (err as { message?: unknown } | null)?.message;
   return typeof message === 'string' ? message : String(err);
+}
+
+/**
+ * The answer to a failure outside the request handler: a Script Properties read
+ * that threw, or anything else in the thin Google-facing wrapper. Apps Script
+ * would otherwise serve its own HTML error page, which no client can parse.
+ */
+export function scriptFailure(err: unknown): BridgeErr {
+  return fail('script-error', messageOf(err));
 }
 
 /**

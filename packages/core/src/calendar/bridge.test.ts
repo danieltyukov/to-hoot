@@ -7,6 +7,7 @@ import {
   listOptionsFor,
   logEventResource,
   parseBridgeRequest,
+  scriptFailure,
   pickLogCalendar,
   toBridgeEvent,
   type BridgeResponse,
@@ -391,5 +392,16 @@ describe('request building', () => {
     expect(resource.start.dateTime).toBe(new Date(0).toISOString());
     expect(resource.end.dateTime).toBe(new Date(3600_000).toISOString());
     expect(resource.extendedProperties.private['toHootId']).toBe('t1::2026-08-23');
+  });
+});
+
+describe('scriptFailure', () => {
+  it('answers a wrapper failure in JSON, because the alternative is an HTML error page', () => {
+    expect(scriptFailure(new Error('script properties unavailable'))).toEqual({
+      ok: false,
+      code: 'script-error',
+      error: 'script properties unavailable',
+    });
+    expect(scriptFailure('boom').error).toBe('boom');
   });
 });

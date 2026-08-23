@@ -2,7 +2,7 @@
   "name": "to-hoot",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "apps/apps-script"],
   "scripts": {
     "build": "npm run build -w @to-hoot/core && npm run build -w @to-hoot/ui",
     "test": "vitest run",

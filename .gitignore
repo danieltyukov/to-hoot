@@ -11,6 +11,7 @@ apps/apps-script/dist/
 site/dist/
 .dev.vars*
 .env*
+.clasp.json
 keystore.properties
 *.jks
 *.keystore
