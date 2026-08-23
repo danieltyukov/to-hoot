@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+apps/desktop/src-tauri/target/
+apps/mobile/android/
+apps/mobile/.gradle/
+apps/apps-script/dist/
+site/dist/
+.dev.vars*
+.env*
+keystore.properties
+*.jks
+*.keystore
+.DS_Store
