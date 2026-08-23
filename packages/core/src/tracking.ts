@@ -81,9 +81,11 @@ export class Tracker {
     if (gap === null) return null;
     this.ticker.reset();
     // An explicit signal (the desktop's OS idle report) covers the same stretch
-    // of wall clock the ticker was inferring from, so its gaps are superseded
-    // rather than credited twice.
-    this.gaps = [];
+    // of wall clock the ticker was inferring from, so a queued gap for the same
+    // task and day is superseded rather than credited twice. A gap belonging to
+    // another task is a different stretch and survives: dropping it would lose
+    // time the user has not been asked about yet.
+    this.gaps = this.gaps.filter(g => g.taskId !== gap.taskId || g.day !== gap.day);
     return gap;
   }
 

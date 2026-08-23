@@ -219,10 +219,23 @@ function tsOf(e: Event): number {
  * Malformed events are skipped rather than thrown on: the log contains events
  * written by other devices running other builds, and one bad event must never
  * be able to stop a device from loading its own data.
+ *
+ * An event at or below `base.coversThrough` is already folded into the base and
+ * is discarded. Ids are ULIDs, so "at or below" is a string comparison under the
+ * same total order everything else uses. This is what stops a redelivered batch
+ * from double counting across a snapshot boundary, where the dedup below cannot
+ * see it: the base is a state, not a log, and remembers no event ids.
+ *
+ * `coversThrough` is carried through unchanged and never advanced here. Moving
+ * it belongs to the compactor, which only folds events every device has already
+ * synced; advancing it on every replay would silently discard an event from a
+ * device whose clock runs behind, which a full replay merges correctly.
  */
 export function replay(events: Event[], base?: State): State {
   const state = base ? cloneState(base) : emptyState();
-  const sorted = dedupeById(events.filter(isWellFormed).sort(compareEvents));
+  const covered = state.coversThrough;
+  const fresh = covered === undefined ? events : events.filter(e => e.id > covered);
+  const sorted = dedupeById(fresh.filter(isWellFormed).sort(compareEvents));
 
   const effective = effectiveParents(declaredParents(sorted, finallyDeleted(sorted)));
 
@@ -272,6 +285,11 @@ export function replay(events: Event[], base?: State): State {
  * last-write-wins field that is harmless, applying the same value twice. For a
  * `timeDelta` it is not, because the increments that make concurrent tracking
  * correct also make a duplicate add a second time, silently and permanently.
+ *
+ * The invariant this places on everything that writes the log: an event id
+ * identifies its content. If compaction ever rewrote an event in place under its
+ * original id, dedup would keep the pre-compaction copy and the rewrite would
+ * vanish. A changed event is a new id, always.
  */
 function dedupeById(sorted: Event[]): Event[] {
   const seen = new Set<string>();

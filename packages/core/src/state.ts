@@ -23,6 +23,16 @@ export interface State {
    * app loads through `Platform.store`, never in the log.
    */
   settings: SyncableSettings;
+  /**
+   * The id of the last event folded into this state, when it came from a
+   * snapshot. Events at or below it are already accounted for and are discarded
+   * on replay: the state carries no per-field stamps, so an older event cannot
+   * be merged into it correctly, and discarding is the only honest option.
+   *
+   * Only a compactor sets this, and only for events every device has already
+   * synced. Absent on a state built by replaying a log from nothing.
+   */
+  coversThrough?: string;
 }
 
 export function cloneTask(t: Task): Task {
@@ -61,5 +71,13 @@ export function cloneState(s: State): State {
   for (const [id, p] of Object.entries(s.projects)) projects[id] = cloneProject(p);
   const tags: Record<string, Tag> = {};
   for (const [id, t] of Object.entries(s.tags)) tags[id] = cloneTag(t);
-  return { tasks, projects, tags, todayOrder: [...s.todayOrder], settings: cloneSyncableSettings(s.settings) };
+  const out: State = {
+    tasks,
+    projects,
+    tags,
+    todayOrder: [...s.todayOrder],
+    settings: cloneSyncableSettings(s.settings),
+  };
+  if (s.coversThrough !== undefined) out.coversThrough = s.coversThrough;
+  return out;
 }

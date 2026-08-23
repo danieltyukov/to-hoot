@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { replay } from './replay.js';
 import type { Event } from './events.js';
+import type { State } from './state.js';
 
 const ev = (o: Partial<Event>): Event => ({
   id: o.id!, deviceId: o.deviceId ?? 'a', ts: o.ts ?? 0,
@@ -231,5 +232,36 @@ describe('delete and re-create determinism', () => {
     const reference = replay(evs);
     expect(reference.tasks.t1.timeSpent).toBe(7000);
     for (const perm of perms) expect(replay(perm)).toEqual(reference);
+  });
+});
+
+describe('the snapshot watermark', () => {
+  const createEv = ev({ id: '01AAA', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } });
+  const deltaEv = ev({ id: '01BBB', ts: 5, type: 'timeDelta', payload: { day: '2026-08-23', ms: 5000 } });
+
+  it('discards an event the base has already folded in', () => {
+    // What a compactor writes: the state, stamped with the last event it folded.
+    const snapshot: State = { ...replay([createEv, deltaEv]), coversThrough: deltaEv.id };
+    expect(snapshot.tasks.t1.timeSpent).toBe(5000);
+    // The batch is redelivered after compaction folded it away. Dedup inside one
+    // call cannot see it, so the watermark has to.
+    expect(replay([deltaEv], snapshot)).toEqual(snapshot);
+    expect(replay([createEv, deltaEv], snapshot).tasks.t1.timeSpent).toBe(5000);
+  });
+
+  it('still applies an event strictly newer than the watermark', () => {
+    const snapshot: State = { ...replay([createEv, deltaEv]), coversThrough: deltaEv.id };
+    const later = ev({ id: '01CCC', ts: 9, type: 'timeDelta', payload: { day: '2026-08-23', ms: 3000 } });
+    const next = replay([later], snapshot);
+    expect(next.tasks.t1.timeSpent).toBe(8000);
+    // The watermark is the compactor's to move, not replay's: advancing it here
+    // would silently discard a clock-skewed event that a full replay merges.
+    expect(next.coversThrough).toBe(deltaEv.id);
+  });
+
+  it('filters nothing when the base carries no watermark', () => {
+    const base = replay([createEv]);
+    expect(base.coversThrough).toBeUndefined();
+    expect(replay([deltaEv], base).tasks.t1.timeSpent).toBe(5000);
   });
 });

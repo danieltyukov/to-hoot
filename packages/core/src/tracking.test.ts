@@ -162,3 +162,28 @@ describe('Tracker idle bookkeeping', () => {
     expect(evs[0].payload).toEqual({ day: '2026-08-23', ms: 20 * 60_000 });
   });
 });
+
+describe('Tracker idle supersession', () => {
+  it('clears only the queued gaps the explicit signal supersedes', () => {
+    const h = harness();
+    h.tracker.start('t1');
+    h.advance(30 * 60_000);
+    h.tracker.start('t2');            // the flush queues the 30min gap against t1
+    h.advance(1_000);
+    const gap = h.tracker.detectIdle(20 * 60_000);
+    expect(gap).toEqual({ ms: 20 * 60_000, taskId: 't2', day: '2026-08-23' });
+    // t1's unanswered half hour is a different stretch and must survive.
+    expect(h.tracker.takeGap()).toEqual({ ms: 30 * 60_000, taskId: 't1', day: '2026-08-23' });
+    expect(h.tracker.takeGap()).toBeNull();
+  });
+
+  it('does supersede a queued gap for the same task and day', () => {
+    const h = harness();
+    h.tracker.start('t1');
+    h.advance(30 * 60_000);
+    expect(h.tracker.onTick()).toEqual([]);
+    const gap = h.tracker.detectIdle(20 * 60_000);
+    expect(gap!.taskId).toBe('t1');
+    expect(h.tracker.takeGap()).toBeNull();
+  });
+});
