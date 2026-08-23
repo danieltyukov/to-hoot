@@ -1,5 +1,8 @@
 node_modules/
 dist/
+test-results/
+playwright-report/
+blob-report/
 *.tsbuildinfo
 apps/desktop/src-tauri/target/
 apps/mobile/android/

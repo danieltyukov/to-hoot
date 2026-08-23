@@ -19,6 +19,12 @@ export interface TaskListProps {
   onAdd?: ((title: string) => void) | undefined;
   /** Shown in place of both groups when there is nothing at all. */
   empty?: ReactNode;
+  /**
+   * A line about the state of the list, shown under the composer. Separate from
+   * `empty` because a finished day still has rows on it: the message belongs
+   * where the next task would have been, not after the ones already done.
+   */
+  notice?: ReactNode;
 }
 
 /**
@@ -40,6 +46,7 @@ export function TaskList({
   onSelect,
   onAdd,
   empty,
+  notice,
 }: TaskListProps) {
   const present = new Set(tasks.map(t => t.id));
   // Subtasks render under their parent when the parent is on this list, and as
@@ -78,6 +85,8 @@ export function TaskList({
       )}
 
       {onAdd === undefined ? null : <Composer onAdd={onAdd} />}
+
+      {notice}
 
       {open.length === 0 && done.length === 0 ? (
         empty
