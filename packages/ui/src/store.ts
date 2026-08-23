@@ -163,9 +163,11 @@ function isTheme(v: unknown): v is Theme {
  * the user's own action from the state while still writing it to the log and
  * pushing it. The action would simply never appear.
  *
- * Every caller here passes events it knows are not in the base: freshly minted
- * local ones, or ones the log holds that a push has not acknowledged. Replay
- * still dedups by id, so applying them is safe whatever their ids are.
+ * Only ever applied to a state whose events are known to be disjoint from the
+ * ones about to be replayed onto it: freshly minted local ones, or the log a
+ * push has not acknowledged. A base that does overlap its log keeps its
+ * watermark, because there the watermark is the only thing that stops the
+ * overlap being applied twice.
  */
 function foldBase(state: State | undefined): State | undefined {
   if (state === undefined || state.coversThrough === undefined) return state;
@@ -191,11 +193,22 @@ export class Store {
   private readonly vault: KeyValueStore | undefined;
   private readonly files: FileStore | undefined;
   /**
-   * The repository's own view, once a sync has adopted one.
+   * What accounts for everything the log no longer does, ready to hand to
+   * `replay` as it stands.
    *
-   * Kept because the log alone stops describing the state after a sync: events
-   * the snapshot accounts for are no longer in it. Anything that replays the
-   * whole log has to replay it onto this.
+   * Two things fill it, and the difference is carried in the field rather than
+   * at the call sites, because getting it wrong at a call site is a silent
+   * wrong answer rather than an error:
+   *
+   *   the cache read at boot, watermark intact. The log on disk still holds
+   *   the events the cache covers, so base and log overlap, and `coversThrough`
+   *   is exactly what keeps the overlap from being applied a second time. It is
+   *   also exact here: this device wrote both files from one state.
+   *
+   *   a remote state a sync adopted, watermark stripped. The log is truncated
+   *   to what no push has acknowledged, so nothing in it is in the base, and
+   *   the repository's watermark can sit above an id this device is about to
+   *   mint. See `foldBase`.
    */
   private base: State | undefined;
   /** The greatest event id a push has acknowledged. Below it, the repo has a copy. */
@@ -273,8 +286,12 @@ export class Store {
    */
   async load(): Promise<void> {
     if (this.files !== undefined) {
-      const { events, state, cached, damaged } = await disk.load(this.files);
+      const { events, state, cached, base, damaged } = await disk.load(this.files);
       this.log = events;
+      // Kept, not just used once. Anything that replays the whole log later
+      // needs the state the boot replayed it onto, or it rebuilds the history
+      // from whatever the log still happens to hold.
+      this.base = base;
       // Only what is in front of the cache has to be replayed next time.
       this.sinceCache = cached ? 0 : events.length;
       this.publish({
@@ -380,17 +397,20 @@ export class Store {
    * Merged rather than replaced, and replay dedupes by event id, so importing
    * the same file twice is harmless and importing another device's export is a
    * merge rather than an overwrite.
+   *
+   * Through `merge` rather than `commit`, because an imported event is an event
+   * from elsewhere in every sense that matters here: it carries whatever
+   * timestamp it was minted with, so it can sort anywhere in the log, and only
+   * a replay of the whole log puts it in its place. Folded onto the end it
+   * would win every last-write-wins field it touches simply for having been
+   * imported last, which would quietly rewrite the history the file was meant
+   * to restore.
    */
   importJson(text: string): { ok: true; added: number } | { ok: false; error: string } {
     const parsed = safeJson(text);
     const events = (parsed as { events?: unknown } | undefined)?.events;
     if (!Array.isArray(events)) return { ok: false, error: 'That file has no events in it.' };
-    const known = new Set(this.log.map(e => e.id));
-    const fresh = events.filter(
-      (e): e is Event => typeof (e as Event | null)?.id === 'string' && !known.has((e as Event).id),
-    );
-    this.commit(fresh);
-    return { ok: true, added: fresh.length };
+    return { ok: true, added: this.merge(events.filter(isEventish)) };
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -630,10 +650,10 @@ export class Store {
     if (fresh.length === 0) return 0;
     this.log = [...this.log, ...fresh];
     this.sinceCache += fresh.length;
-    // Onto the adopted base, not from nothing. Replaying the log alone would
-    // discard everything the repository's snapshot accounts for, which after a
-    // sync is most of the user's history.
-    this.publish({ state: replay(this.log, foldBase(this.base)), events: this.log });
+    // Onto the base, not from nothing. Replaying the log alone would discard
+    // everything the base accounts for and the log no longer holds, which after
+    // a sync or a boot from a compacted log is most of the user's history.
+    this.publish({ state: replay(this.log, this.base), events: this.log });
     this.persist();
     return fresh.length;
   }
@@ -651,8 +671,8 @@ export class Store {
     const keep = this.pending();
     this.log = keep;
     this.sinceCache = 0;
-    this.base = remote;
-    this.publish({ state: replay(keep, foldBase(remote)), events: keep });
+    this.base = foldBase(remote);
+    this.publish({ state: replay(keep, this.base), events: keep });
     // Forced, so the cache on disk describes the state that was just adopted
     // rather than one several syncs behind it.
     this.persist(true);

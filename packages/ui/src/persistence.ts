@@ -80,6 +80,17 @@ export interface Loaded {
   state: State;
   cached: boolean;
   /**
+   * The cache the state was replayed onto, watermark intact, or undefined when
+   * there was no usable one.
+   *
+   * Returned rather than kept private because `state` alone is not enough to
+   * replay the log again later. An import has to re-order the whole log, and
+   * doing that needs the same base this did, including its `coversThrough`:
+   * the log still holds the events the cache covers, and the watermark is what
+   * stops them being applied twice.
+   */
+  base?: State;
+  /**
    * Set when the log file exists and could not be read.
    *
    * Absent and unreadable are different answers and must never be collapsed
@@ -123,6 +134,7 @@ export async function load(files: FileStore): Promise<Loaded> {
     events,
     state: replay(events, base),
     cached: usable,
+    ...(base === undefined ? {} : { base }),
     ...(damaged === undefined ? {} : { damaged }),
   };
 }

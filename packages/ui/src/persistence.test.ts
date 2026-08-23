@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { newEvent, replay, type Event, type FileStore, type State } from '@to-hoot/core';
+import { dayStr, newEvent, replay, type Event, type FileStore, type State } from '@to-hoot/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CACHE_EVERY, CACHE_FILE, LOG_FILE, load, unpushed, watermarkOf, writeCache, writeLog } from './persistence.js';
@@ -423,5 +423,99 @@ describe('the order the two files are written in', () => {
     const next = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
     await next.load();
     expect(Object.keys(next.getSnapshot().state.tasks)).toHaveLength(2);
+  });
+});
+
+describe('importing an exported log', () => {
+  const build = (files: FileStore) =>
+    new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+
+  const idAt = (n: number): string => `01M1${String(n).padStart(22, '0')}`;
+
+  const retitle = (entityId: string, id: string, ts: number, title: string): Event =>
+    newEvent({ deviceId: 'phone', id, type: 'update', entity: 'task', entityId, payload: { title }, ts });
+
+  it('replays an imported event into its place in the order, not onto the end', () => {
+    /*
+     * The whole difference between folding forward and replaying. An imported
+     * event can carry any timestamp, so it can sort before events already
+     * applied, and last-write-wins only gives the right answer if the log is
+     * ordered together. Folded onto the end, the older title wins purely
+     * because it arrived last, which is the one thing the ordering exists to
+     * prevent.
+     */
+    const created = task('Preamp');
+    const settled = retitle(created.entityId, idAt(2), BASE + 2000, 'Preamp, second attempt');
+    const store = new Store({
+      now: () => BASE,
+      storage: null,
+      vault: memoryStore(),
+      seed: [created, settled],
+    });
+
+    const stale = retitle(created.entityId, idAt(1), BASE + 1000, 'Preamp, first guess');
+    expect(store.importJson(JSON.stringify({ events: [stale] }))).toEqual({ ok: true, added: 1 });
+
+    expect(store.getSnapshot().state.tasks[created.entityId]!.title).toBe('Preamp, second attempt');
+  });
+
+  it('keeps the history the cache accounts for when the log has been compacted', async () => {
+    /*
+     * A guard on the base a replay is given, not on the import itself.
+     *
+     * Once a push has been acknowledged the log holds only what is above the
+     * watermark, and the cache is the only thing that still describes the rest.
+     * Replaying the log alone here is a full-history loss, and it is what
+     * happens if the base is left undefined because nothing has adopted a
+     * remote state in this session yet.
+     */
+    const a = task('Solder the preamp');
+    const b = task('Order the transformer');
+    const files = memoryFiles();
+    await writeCache(files, watermarkOf([a, b]), replay([a, b]));
+    await writeLog(files, []);
+
+    const store = build(files);
+    await store.load();
+    const fresh = task('Cut the chassis');
+    expect(store.importJson(JSON.stringify({ events: [fresh] }))).toEqual({ ok: true, added: 1 });
+
+    expect(
+      Object.values(store.getSnapshot().state.tasks)
+        .map(t => t.title)
+        .sort(),
+    ).toEqual(['Cut the chassis', 'Order the transformer', 'Solder the preamp']);
+  });
+
+  it('does not add time in twice that the cache already accounts for', async () => {
+    /*
+     * The other half of that guard, and the reason the base cannot simply have
+     * its watermark stripped the way an adopted remote state does.
+     *
+     * Until a push truncates it the log still holds the events the cache
+     * covers, so base and log overlap. `coversThrough` is what stops the
+     * overlap being applied a second time, and a timeDelta applied twice is
+     * time the user did not spend, recorded permanently.
+     */
+    const created = task('Solder the preamp');
+    const spent = newEvent({
+      deviceId: 'laptop',
+      id: idAt(9),
+      type: 'timeDelta',
+      entity: 'task',
+      entityId: created.entityId,
+      payload: { day: dayStr(BASE), ms: 90_000 },
+      ts: BASE + 90_000,
+    });
+    const files = memoryFiles();
+    await writeCache(files, watermarkOf([created, spent]), replay([created, spent]));
+    await writeLog(files, [created, spent]);
+
+    const store = build(files);
+    await store.load();
+    expect(store.getSnapshot().state.tasks[created.entityId]!.timeSpent).toBe(90_000);
+
+    store.importJson(JSON.stringify({ events: [task('Cut the chassis')] }));
+    expect(store.getSnapshot().state.tasks[created.entityId]!.timeSpent).toBe(90_000);
   });
 });
