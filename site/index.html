@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>to-hoot</title>
+    <meta
+      name="description"
+      content="A task list that tracks time against the day you actually had. Linux and Android, synced through a private GitHub repository you own, reachable from Claude. Free to run, with no account and no server."
+    />
+    <link rel="icon" href="../packages/ui/public/favicon.svg" type="image/svg+xml" />
+    <link rel="canonical" href="https://danieltyukov.github.io/to-hoot/" />
+    <script>
+      // Blocking, and in the head, because the alternative is a light page
+      // repainting to dark after the stylesheet has already been applied. It
+      // reads one key and sets one attribute; the CSS does the rest.
+      try {
+        var t = localStorage.getItem('to-hoot-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {
+        // Private mode, or storage disabled. The page is correct without it.
+      }
+    </script>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="head">
+      <div class="wrap head-inner">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true" focusable="false">
+            <path
+              d="M4.5,22 V15.5 A5.75,5.75 0 0,1 16,15.5 A5.75,5.75 0 0,1 27.5,15.5 V22"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.1"
+              stroke-linecap="round"
+            />
+            <circle cx="10.25" cy="17" r="2.8" fill="currentColor" />
+            <circle cx="21.75" cy="17" r="2.8" fill="currentColor" />
+            <path d="M14.1,16.6 L17.9,16.6 L16,21 Z" fill="currentColor" />
+          </svg>
+          <h1 class="wordmark">to-h<i class="wordmark-eye">o</i><i class="wordmark-eye">o</i>t</h1>
+        </div>
+
+        <button type="button" id="theme" class="toggle" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4" />
+            <path d="M8 2 A6 6 0 0 0 8 14 Z" fill="currentColor" />
+          </svg>
+          <span>Dark mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <div class="wrap">
+        <p class="lede">
+          A task list that tracks time against the day you actually had. One list on your Linux
+          desktop and your Android phone, synced through a private repository you own.
+        </p>
+
+        <p class="actions">
+          <a class="btn btn-primary" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/to-hoot.apk">
+            Download for Android
+          </a>
+          <a class="btn" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/to-hoot_x86_64.AppImage">
+            Download for Linux
+          </a>
+        </p>
+        <p class="note">
+          The AppImage runs anywhere: <code>chmod +x</code> and go. A <code>.deb</code> is on the
+          <a href="https://github.com/danieltyukov/to-hoot/releases/latest">releases page</a>, and
+          both are built on Ubuntu 22.04 so they run on older systems too.
+        </p>
+      </div>
+
+      <figure class="shot">
+        <img
+          class="shot-light"
+          src="../docs/img/desktop-light.png"
+          width="2880"
+          height="1720"
+          alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
+        />
+        <img
+          class="shot-dark"
+          src="../docs/img/desktop-dark.png"
+          width="2880"
+          height="1720"
+          alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
+        />
+      </figure>
+
+      <div class="wrap">
+        <section class="section" aria-labelledby="for">
+          <p class="micro">What it is for</p>
+          <h2 id="for">Four things it does, and nothing else</h2>
+          <dl class="points">
+            <dt>One list on every device.</dt>
+            <dd>
+              The same tasks on the desktop and on the phone, without an account with anyone. Both
+              devices append to one log and both replay it, so a change made offline on one lands
+              on the other whenever it next reaches the network.
+            </dd>
+
+            <dt>Time tracked against your real calendar.</dt>
+            <dd>
+              The day view puts what you tracked next to what was already in your calendar, in the
+              same column. Tracked time is written back to a separate calendar, so a week of work
+              is visible where the rest of your commitments are and your real calendars are never
+              touched.
+            </dd>
+
+            <dt>Your data in your own private repository.</dt>
+            <dd>
+              An append-only event log in a private GitHub repository you own, as plain JSON you
+              can read with <code>cat</code>. There is no server in the middle and nothing to
+              export from, because it was never anywhere else.
+            </dd>
+
+            <dt>Ask Claude to add a task from anywhere.</dt>
+            <dd>
+              An MCP server offers the same nine tools the app uses. A task Claude adds is one
+              event appended to the log, indistinguishable from one you typed.
+            </dd>
+          </dl>
+        </section>
+
+        <section class="section" aria-labelledby="cost">
+          <p class="micro">What it costs</p>
+          <h2 id="cost">Nothing, and there is nowhere to enter a card</h2>
+          <p>
+            Every service in the stack has a free tier that stops working when you exceed it rather
+            than starting to bill you. There is no paid plan to be upgraded onto, because there is
+            no hosted service: what runs is running in your accounts.
+          </p>
+
+          <div class="table-scroll">
+            <table>
+              <caption class="visually-hidden">
+                Every service to-hoot uses, its free tier, and what happens at the limit
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Service</th>
+                  <th scope="col">What it does here</th>
+                  <th scope="col">Free tier</th>
+                  <th scope="col">At the limit</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">GitHub Free</th>
+                  <td>Holds your private data repository</td>
+                  <td>Unlimited private repositories</td>
+                  <td>403 with <code>Retry-After</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">GitHub Actions</th>
+                  <td>Builds the releases</td>
+                  <td>Unmetered on public repositories</td>
+                  <td>Not applicable</td>
+                </tr>
+                <tr>
+                  <th scope="row">GitHub Releases</th>
+                  <td>Hosts the downloads above</td>
+                  <td>Unmetered bandwidth, 2 GiB a file</td>
+                  <td>Not applicable</td>
+                </tr>
+                <tr>
+                  <th scope="row">Apps Script and Calendar API v3</th>
+                  <td>The calendar bridge, in your account</td>
+                  <td>Free, with no billing account</td>
+                  <td>Quota error</td>
+                </tr>
+                <tr>
+                  <th scope="row">Cloudflare Workers Free</th>
+                  <td>Optional MCP endpoint for Claude on the web</td>
+                  <td>100,000 requests a day on <code>workers.dev</code></td>
+                  <td>HTTP error, never a bill</td>
+                </tr>
+                <tr>
+                  <th scope="row">Sideloaded APK</th>
+                  <td>Installing it on your phone</td>
+                  <td>No Play Console account</td>
+                  <td>Not applicable</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="setup">
+          <p class="micro">Set up</p>
+          <h2 id="setup">Four steps, and only the first one is required</h2>
+          <p>
+            The app walks through these as a first-run wizard you can resume or skip, and every
+            step ends in a Test connection button that makes a real call and reports the actual
+            error. This is the same sequence, so the page and the app cannot disagree.
+          </p>
+
+          <ol class="steps">
+            <li>
+              <h3>Local only</h3>
+              <p>
+                Install it and use it. Tasks, projects, tags, timers and the day view all work with
+                no accounts at all. If a local task tracker is what you wanted, you are done.
+              </p>
+            </li>
+            <li>
+              <h3>Sync</h3>
+              <p>
+                Paste a GitHub fine-grained token with Contents read and write on one repository.
+                The app offers to create the private data repository for you, writes a commit and
+                reads it back before saying it worked, then asks you to name the device.
+              </p>
+            </li>
+            <li>
+              <h3>Calendar</h3>
+              <p>
+                Optional. The app gives you the complete Apps Script source and a generated secret;
+                you paste them into a new project in your own Google account, enable the Calendar
+                service, deploy it as a web app, and paste the URL back. A secret calendar address
+                in ICS format is the read-only shortcut if you do not need write-back.
+              </p>
+            </li>
+            <li>
+              <h3>Claude</h3>
+              <p>
+                Optional. One command registers the local MCP server with Claude Code. For Claude
+                on the web, deploy the Cloudflare Worker to your own free account and add the URL
+                as a custom connector. Skipping this changes nothing else.
+              </p>
+            </li>
+          </ol>
+          <p>
+            <a href="https://github.com/danieltyukov/to-hoot/blob/main/docs/SETUP.md"
+              >The long version, with the exact clicks and what each error means</a
+            >.
+          </p>
+        </section>
+
+        <section class="section" aria-labelledby="build">
+          <p class="micro">Build from source</p>
+          <h2 id="build">For anyone who will not run a binary someone else compiled</h2>
+          <p>Node 22 and npm 10 or newer. The tests run on a fresh clone with no build step first.</p>
+          <pre><code>git clone https://github.com/danieltyukov/to-hoot.git
+cd to-hoot
+npm ci
+npm test
+npm run build</code></pre>
+          <p>
+            That builds the web application, which is the whole app. The desktop and mobile targets
+            are shells around it, each built separately because the Tauri and Capacitor CLIs both
+            want a flat <code>node_modules</code>:
+          </p>
+          <pre><code>cd apps/desktop &amp;&amp; npm install &amp;&amp; npm run build
+cd apps/mobile  &amp;&amp; npm install &amp;&amp; npm run apk:debug</code></pre>
+          <p>
+            No keystore is needed to build: debug builds sign themselves, and a release build with
+            no signing material stays unsigned rather than failing.
+            <a href="https://github.com/danieltyukov/to-hoot/blob/main/CONTRIBUTING.md"
+              >CONTRIBUTING</a
+            >
+            has the toolchain package list and how to run each suite.
+          </p>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <p>
+          <a href="https://github.com/danieltyukov/to-hoot">github.com/danieltyukov/to-hoot</a>
+          &middot;
+          <a href="https://github.com/danieltyukov/to-hoot/blob/main/LICENSE">MIT</a>
+        </p>
+        <p class="fonts">
+          Set in subsets of three fonts, each licensed under the SIL Open Font License 1.1 and
+          renamed as the licence requires for a modified version. Instrument Sans, copyright 2022
+          the Instrument Sans Project Authors. Newsreader, copyright 2020 the Newsreader Project
+          Authors. JetBrains Mono, copyright 2020 the JetBrains Mono Project Authors. Each licence
+          text ships beside its font file in the repository.
+        </p>
+        <p class="fonts">
+          This page makes no third-party requests and sets no cookie. There is nothing here to
+          consent to.
+        </p>
+      </div>
+    </footer>
+
+    <script type="module" src="./theme.js"></script>
+  </body>
+</html>
