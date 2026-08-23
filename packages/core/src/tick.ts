@@ -42,6 +42,11 @@ export class Ticker {
     return { delta, day: dayStr(stamp, this.dayOffsetMs), now };
   }
 
+  /** The logical day a clock reading falls in, under this ticker's offset. */
+  dayOf(ts: number): string {
+    return dayStr(Number.isFinite(ts) ? ts : this.last, this.dayOffsetMs);
+  }
+
   /** Drops the time since the last tick without accruing it. */
   reset(): void {
     const now = this.nowFn();
