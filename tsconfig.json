@@ -3,6 +3,8 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/core/tsconfig.test.json" },
-    { "path": "packages/ui" }
+    { "path": "packages/ui" },
+    { "path": "apps/mcp" },
+    { "path": "apps/mcp/tsconfig.test.json" }
   ]
 }

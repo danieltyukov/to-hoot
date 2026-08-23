@@ -7,6 +7,7 @@ export default defineConfig({
   test: {
     projects: [
       { test: { name: 'core', root: './packages/core', environment: 'node' } },
+      { test: { name: 'mcp', root: './apps/mcp', environment: 'node' } },
       './packages/ui/vite.config.ts',
     ],
   },
