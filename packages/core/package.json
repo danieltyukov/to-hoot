@@ -9,7 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
     }
+  },
+  "dependencies": {
+    "zod": "^4.4.0"
   },
   "scripts": {
     "build": "tsc -b"
