@@ -20,7 +20,11 @@ export default defineConfig({
     // The preview server, not the dev server: this is the build that ships, and
     // a bundling mistake that only shows up in production is exactly the kind of
     // thing a shell test should be catching.
-    command: 'npm run build && npm run preview -- --port 4173 --strictPort',
+    // --host 127.0.0.1 is not decoration. Vite's preview binds `localhost` by
+    // default, which resolves to ::1 before 127.0.0.1 on some CI runners, and
+    // the url below is polled over IPv4. The server starts, the poll never
+    // reaches it, and the only symptom is a 120 second timeout with no error.
+    command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: process.env['CI'] !== 'true',
     timeout: 120_000,
