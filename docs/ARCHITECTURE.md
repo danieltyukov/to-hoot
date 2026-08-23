@@ -178,7 +178,19 @@ moment; they write different filenames, and only one of them wins the ref. A
 fixed snapshot path could be clobbered between another device's write and its
 read, leaving `snapshot.json` pointing at bytes nobody wrote.
 
-Compaction never changes what state replays to. It only moves the starting point.
+Compaction never changes what state replays to for the events it folded. It only
+moves the starting point.
+
+There is one consequence worth knowing if you are reading the log by hand. A
+snapshot carries a watermark, and replay discards an event at or below it,
+because the base is a state rather than a log and remembers no event ids. That is
+what stops a redelivered batch double-counting tracked time across a snapshot
+boundary. It also means an event that arrives after a compaction but sorts below
+the watermark is kept in the log and synced to other devices, and still cannot
+move local state. The compactor only folds events every device has already
+synced, so this needs an event minted before the watermark that never reached
+anyone, which in practice means a device that went offline before its first sync
+and was restored from a backup later.
 
 ## Schema versioning
 

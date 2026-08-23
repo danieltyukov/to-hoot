@@ -262,6 +262,13 @@ Two behaviours are worth knowing before you rely on it:
 Settings, Data, has export to JSON and import, next to a plain statement of
 where your data lives and what deleting the repository would mean.
 
+Import merges rather than appends. An exported file carries other devices and
+other days, so each event lands in its place in the history instead of winning
+because it arrived last: import a file you exported today onto a device that has
+since renamed the same task, and the newer title survives. Anything already in
+the log is recognised and not added twice, so importing the same file twice
+changes nothing.
+
 There is no compact button, on purpose. Compaction happens during a sync, in the
 same commit that writes the snapshot, so there is never a moment where the two
 disagree. A local button would either do nothing or fold away a log that no other
