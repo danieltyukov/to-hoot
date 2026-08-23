@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The ink field the owl mark is cut out of. The eyes and beak are holes
+         in the disc, so this colour shows through them; white here would put a
+         rectangle of the wrong colour behind the mark on any launcher that
+         masks the icon. Keep it in step with icon-source.svg. -->
+    <color name="ic_launcher_background">#12110F</color>
+</resources>

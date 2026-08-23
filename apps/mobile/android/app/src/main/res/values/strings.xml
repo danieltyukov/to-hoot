@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">to-hoot</string>
+    <string name="title_activity_main">to-hoot</string>
+    <string name="package_name">com.tohoot.app</string>
+    <string name="custom_url_scheme">com.tohoot.app</string>
+</resources>

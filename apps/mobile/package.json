@@ -10,5 +10,16 @@
     "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/network": "^8.0.1"
   },
-  "devDependencies": { "@capacitor/cli": "^8.5.0" }
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "stage": "node scripts/stage-web.mjs",
+    "sync": "node scripts/stage-web.mjs --fresh && cap sync android",
+    "typecheck": "tsc --noEmit",
+    "apk:debug": "npm run sync && cd android && ./gradlew assembleDebug",
+    "apk:release": "npm run sync && cd android && ./gradlew assembleRelease"
+  }
 }
