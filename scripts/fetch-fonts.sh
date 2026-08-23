@@ -26,15 +26,19 @@ python3 -c 'import brotli, fontTools' 2>/dev/null ||
 # punctuation real copy uses, and U+FFFD so a bad byte still renders as a box.
 UNICODES='U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD'
 
-# slug | upstream file | output basename | new family | axis limits
+# slug | upstream file | output basename | new family | original family | axis limits
+#
+# The original family is passed through so the rename can sweep for it and then
+# assert it is gone. Guessing it from the name table would miss the case that
+# matters: a record that carries the reserved name in a form no rule expects.
 FONTS=(
-  'instrumentsans|InstrumentSans[wdth,wght].ttf|tohoot-sans|To-Hoot Sans|wdth=100 wght=400:700'
-  'newsreader|Newsreader[opsz,wght].ttf|tohoot-serif|To-Hoot Serif|opsz=16 wght=400:600'
-  'jetbrainsmono|JetBrainsMono[wght].ttf|tohoot-mono|To-Hoot Mono|wght=400:700'
+  'instrumentsans|InstrumentSans[wdth,wght].ttf|tohoot-sans|To-Hoot Sans|Instrument Sans|wdth=100 wght=400:700'
+  'newsreader|Newsreader[opsz,wght].ttf|tohoot-serif|To-Hoot Serif|Newsreader|opsz=16 wght=400:600'
+  'jetbrainsmono|JetBrainsMono[wght].ttf|tohoot-mono|To-Hoot Mono|JetBrains Mono|wght=400:700'
 )
 
 for spec in "${FONTS[@]}"; do
-  IFS='|' read -r slug upstream base family limits <<<"$spec"
+  IFS='|' read -r slug upstream base family original limits <<<"$spec"
   dir="$OUT/${base#tohoot-}"
   mkdir -p "$dir"
   url_file="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$upstream")"
@@ -49,7 +53,7 @@ for spec in "${FONTS[@]}"; do
   python3 -m fontTools.varLib.instancer -q -o "$WORK/$base-inst.ttf" "$WORK/$base.ttf" $limits
 
   echo "  renaming to \"$family\""
-  python3 "$ROOT/scripts/rename-font.py" "$WORK/$base-inst.ttf" "$family"
+  python3 "$ROOT/scripts/rename-font.py" "$WORK/$base-inst.ttf" "$family" "$original"
 
   echo "  subsetting"
   python3 -m fontTools.subset "$WORK/$base-inst.ttf" \

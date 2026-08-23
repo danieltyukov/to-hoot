@@ -5,8 +5,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { readNameTable } from './test/woff2.js';
+
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+
+const readBinary = (rel: string): Buffer =>
+  readFileSync(fileURLToPath(new URL(rel, import.meta.url)));
 
 // The stylesheet is the source of truth, so the test reads it rather than a
 // duplicate table of the same hex values. A duplicate would agree with itself
@@ -95,21 +100,29 @@ const THEMES = [
 ] as const;
 
 /*
- * Each foreground token with the ratio it has to clear and the reason for that
- * number. `faint` and `accent` sit at 3:1 rather than 4.5:1 on purpose: neither
- * ever carries a sentence. `faint` is hour labels and secondary metadata beside
- * text that is already legible, `accent` is the current-time rule, the active
- * nav marker and the progress ring, all of which are the "user interface
- * component" case WCAG 1.4.11 puts at 3:1. Anything wanting accent-coloured
- * words uses `accent-hover`, which clears 4.5:1 in both themes.
+ * Each foreground token with the ratio it has to clear.
+ *
+ * Everything that can be set in type is at 4.5:1, including `faint`. An earlier
+ * version of this file put `faint` at 3:1 on the grounds that it is only ever
+ * incidental, which was wrong twice over: WCAG 1.4.11 excludes text explicitly,
+ * so it never applied, and four of the five things `faint` colours are text
+ * (the hour labels, the nav counts, the composer placeholder, the "/" between
+ * the two day totals). Being small and secondary is what makes contrast matter
+ * more, not less.
+ *
+ * `accent` is the one exception and is genuinely non-text: the current-time
+ * rule, the active nav marker, the ring, the focus outline and the tracked
+ * pills. Every one is a "user interface component" under 1.4.11 at 3:1, and
+ * a test below asserts it is never used as a text colour. Anything that wants
+ * accent-coloured words uses `accent-hover`, which clears 4.5:1 in both themes.
  */
 const FOREGROUNDS: ReadonlyArray<readonly [token: string, min: number]> = [
   ['text', 4.5],
   ['muted', 4.5],
+  ['faint', 4.5],
   ['success', 4.5],
   ['danger', 4.5],
   ['accent-hover', 4.5],
-  ['faint', 3],
   ['accent', 3],
 ];
 
@@ -176,11 +189,13 @@ describe('tokens.css', () => {
     expect(Math.abs(hue(LIGHT['--accent']!) - hue(DARK['--accent']!))).toBeLessThan(12);
   });
 
-  it('exposes exactly two rectangular radii', () => {
+  it('exposes a radius token for every radius the design uses', () => {
+    // One, not two: the panel radius has nothing to round yet, and a token
+    // nothing consumes is a value no test can be wrong about. It comes back at
+    // 10px with the first real panel; see the comment in tokens.css.
     expect(LIGHT['--r-control']).toBe('6px');
-    expect(LIGHT['--r-panel']).toBe('10px');
     const radiusTokens = Object.keys(LIGHT).filter(k => k.startsWith('--r-'));
-    expect(radiusTokens.sort()).toEqual(['--r-control', '--r-panel']);
+    expect(radiusTokens).toEqual(['--r-control']);
   });
 
   it('carries the three motion durations and the one easing curve', () => {
@@ -219,5 +234,64 @@ describe('tokens.css', () => {
       // renamed rather than shipped as the original families.
       expect(notice).toContain('Reserved Font Name');
     }
+  });
+});
+
+/*
+ * The licence check reads the shipped binaries, not the stylesheet.
+ *
+ * The stylesheet only proves what the CSS asks for. What the OFL constrains is
+ * what is inside the file: nameID 1 is what a font manager shows, 18 is what
+ * some systems show, 6 is what a PDF embeds, and an fvar instance carries its
+ * own PostScript name that no walk of IDs 1 to 25 would reach. All four have
+ * to be clean, and only reading the file can say whether they are.
+ */
+describe('the shipped font binaries', () => {
+  const FONTS = [
+    ['sans', 'To-Hoot Sans', 'Instrument Sans'],
+    ['serif', 'To-Hoot Serif', 'Newsreader'],
+    ['mono', 'To-Hoot Mono', 'JetBrains Mono'],
+  ] as const;
+
+  // Copyright, trademark and manufacturer. The OFL requires these to survive
+  // unchanged: they are attribution, not the font's name, and stripping them
+  // would remove the credit the licence exists to preserve.
+  const ATTRIBUTION = new Set([0, 7, 8]);
+
+  describe.each(FONTS)('%s', (dir, family, original) => {
+    const records = readNameTable(readBinary(`./fonts/${dir}/tohoot-${dir}.woff2`));
+
+    it('carries the reserved name in no record except attribution', () => {
+      const leaks = records
+        .filter(r => !ATTRIBUTION.has(r.nameID))
+        .filter(r => r.text.includes(original) || r.text.includes(original.replace(/ /g, '')));
+      expect(leaks.map(r => `${r.nameID}: ${r.text}`)).toEqual([]);
+    });
+
+    it('keeps the upstream attribution intact', () => {
+      // The other half of the same licence term. A rename that also wiped the
+      // copyright would pass the test above and still breach the OFL.
+      const copyright = records.find(r => r.nameID === 0);
+      expect(copyright?.text).toContain(original.split(' ')[0]);
+    });
+
+    it('renames every record a user or a system reads the family from', () => {
+      for (const nid of [1, 4, 6, 16, 18, 21, 25]) {
+        for (const record of records.filter(r => r.nameID === nid)) {
+          expect(record.text.replace(/[- ]/g, ''), `nameID ${nid}`).toContain(
+            family.replace(/[- ]/g, ''),
+          );
+        }
+      }
+    });
+
+    it('renames the PostScript name of every named instance', () => {
+      // These sit at nameIDs above 255 and are reached through fvar, not by
+      // walking the well-known IDs. Missing them was a real leak.
+      const instanceNames = records.filter(r => r.nameID >= 256 && r.text.includes('-'));
+      for (const record of instanceNames) {
+        expect(record.text).toContain(family.replace(/[- ]/g, ''));
+      }
+    });
   });
 });

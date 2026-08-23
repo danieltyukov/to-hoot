@@ -55,7 +55,7 @@
   --border-strong: #d6cfc4;
   --text: #1c1b19;
   --muted: #6b665f;
-  --faint: #948e85;
+  --faint: #767068;
   --accent: #c2603f;
   --accent-hover: #a94f31;
   --accent-tint: #f8ece7;
@@ -67,9 +67,13 @@
   --hover: rgba(28, 27, 25, 0.045);
   --pressed: rgba(28, 27, 25, 0.08);
 
-  /* Exactly two radii, everywhere. Controls take the first, panels the second. */
+  /*
+   * The rule is two radii: 6px for controls, 10px for panels. Only the control
+   * radius is a token, because nothing is a panel yet: the shell is full-bleed
+   * panes separated by hairlines, with no floating surface to round. The panel
+   * radius returns as --r-panel with the first thing that needs it, at 10px.
+   */
   --r-control: 6px;
-  --r-panel: 10px;
 
   --dur-quick: 100ms;
   --dur-base: 200ms;
@@ -110,7 +114,7 @@
     --border-strong: #3b3833;
     --text: #ece8e2;
     --muted: #98928a;
-    --faint: #6b6660;
+    --faint: #8a847c;
     --accent: #d97757;
     --accent-hover: #e58e70;
     --accent-tint: #2b1d17;
@@ -129,7 +133,7 @@
   --border-strong: #3b3833;
   --text: #ece8e2;
   --muted: #98928a;
-  --faint: #6b6660;
+  --faint: #8a847c;
   --accent: #d97757;
   --accent-hover: #e58e70;
   --accent-tint: #2b1d17;
