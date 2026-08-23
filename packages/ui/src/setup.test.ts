@@ -6,7 +6,9 @@ import {
   README_PATH,
   SECRET_LENGTH,
   checkDeviceId,
+  checkDeviceName,
   createDataRepo,
+  inspectRepo,
   generateSecret,
   listRepos,
   mcpAddCommand,
@@ -564,5 +566,155 @@ describe('testWorker', () => {
     const result = await testWorker(http as unknown as Http, 'https://example.com');
     expect(result.status).toBe('error');
     expect(http).not.toHaveBeenCalled();
+  });
+});
+
+describe('inspectRepo', () => {
+  function repoWith(paths: string[], meta?: Record<string, unknown>) {
+    return transport([
+      [/\/commits\?/, json(200, [{ sha: 'c' }])],
+      [
+        /\/git\/trees\/c/,
+        json(200, {
+          truncated: false,
+          tree: paths.map(p => ({
+            path: p,
+            sha: p === 'meta.json' ? 'metablob' : `sha-${p}`,
+            type: 'blob',
+          })),
+        }),
+      ],
+      [
+        /\/git\/blobs\/metablob/,
+        json(200, {
+          content: btoa(JSON.stringify({ schemaVersion: 1, devices: meta ?? {} })),
+          encoding: 'base64',
+        }),
+      ],
+      [/\/git\/blobs\//, json(200, { content: btoa('x'), encoding: 'base64' })],
+    ]);
+  }
+
+  it('reports an empty repository as one with nothing to join', async () => {
+    const { http } = transport([[/\/commits\?/, json(409, { message: 'Git Repository is empty.' })]]);
+    const result = await readRepoContents(http);
+    expect(result).toMatchObject({ hasLog: false, deviceIds: [], eventFiles: 0 });
+  });
+
+  const readRepoContents = async (http: Http) => {
+    const check = await inspectRepo(http, 't', { owner: 'o', repo: 'r', branch: 'main' });
+    return check.status === 'ok' ? check.value : null;
+  };
+
+  it('finds the devices that have written here', async () => {
+    const { http } = repoWith([
+      'README.md',
+      'events/laptop/01A.json',
+      'events/laptop/01B.json',
+      'events/phone/01C.json',
+    ]);
+    const found = await readRepoContents(http);
+    expect(found).toMatchObject({ hasLog: true, eventFiles: 3, deviceIds: ['laptop', 'phone'] });
+  });
+
+  it('keeps a device whose events have been compacted away', async () => {
+    /*
+     * meta.json outlives the event files. A device that synced and was then
+     * compacted into the snapshot has no events/<id>/ path left, but its name is
+     * still taken: handing it to a second machine would put two devices on one
+     * prefix, which is the one thing the whole merge design rests on not
+     * happening.
+     */
+    const { http } = repoWith(['snapshot.json', 'meta.json', 'events/phone/01C.json'], {
+      laptop: { firstSeen: 1, lastSeen: 2 },
+      phone: { firstSeen: 3, lastSeen: 4 },
+    });
+    const found = await readRepoContents(http);
+    expect(found?.deviceIds).toEqual(['laptop', 'phone']);
+    expect(found?.hasSnapshot).toBe(true);
+    // A repository whose log is entirely in the snapshot still has a log.
+    expect(found?.hasLog).toBe(true);
+  });
+
+  it('survives meta.json being unreadable rather than refusing to connect', async () => {
+    const { http } = transport([
+      [/\/commits\?/, json(200, [{ sha: 'c' }])],
+      [
+        /\/git\/trees\/c/,
+        json(200, {
+          truncated: false,
+          tree: [
+            { path: 'meta.json', sha: 'bad', type: 'blob' },
+            { path: 'events/laptop/01A.json', sha: 's', type: 'blob' },
+          ],
+        }),
+      ],
+      [/\/git\/blobs\//, json(200, { content: btoa('{ not json'), encoding: 'base64' })],
+    ]);
+    // The paths still say who is here, which is enough to refuse a clash.
+    expect((await readRepoContents(http))?.deviceIds).toEqual(['laptop']);
+  });
+});
+
+describe('checkDeviceName', () => {
+  it('accepts a name nobody is using', () => {
+    expect(checkDeviceName('laptop', ['phone'])).toMatchObject({ status: 'ok', value: 'laptop' });
+  });
+
+  it('refuses a name another device already claims', () => {
+    /*
+     * Every device writes only under events/<deviceId>/, and that single
+     * guarantee is what makes merging a replay rather than a reconciliation,
+     * and why there is no locking in the sync engine at all. Two devices
+     * sharing a name write one path concurrently and one side's events are lost
+     * on the retry.
+     */
+    const result = checkDeviceName('laptop', ['laptop', 'phone']);
+    expect(result.status).toBe('error');
+    expect(result.status === 'error' && result.detail).toContain('already called');
+    expect(result.status === 'error' && result.hint).toContain('without locking');
+  });
+
+  it('still refuses a name that is not a path segment, whoever holds it', () => {
+    expect(checkDeviceName('my laptop', []).status).toBe('error');
+  });
+
+  it('trims before comparing, so trailing space is not a way around it', () => {
+    expect(checkDeviceName('  laptop  ', ['laptop']).status).toBe('error');
+  });
+});
+
+describe('testSync against a repository that already has a log', () => {
+  it('joins it and says so, rather than reporting a fresh setup', async () => {
+    const existing = 'events/laptop/01A.json';
+    const { http } = transport([
+      [/\/commits\?/, json(200, [{ sha: 'c' }])],
+      [
+        /\/git\/trees\/c/,
+        json(200, {
+          truncated: false,
+          tree: [
+            { path: existing, sha: 'e1', type: 'blob' },
+            { path: README_PATH, sha: 'b', type: 'blob' },
+          ],
+        }),
+      ],
+      [req => req.url.includes('/git/ref/heads/'), json(200, { object: { sha: 'c' } })],
+      [/\/git\/trees$/, json(201, { sha: 't' })],
+      [/\/git\/commits$/, json(201, { sha: 'c' })],
+      [req => req.method === 'PATCH', json(200, {})],
+      [
+        req => req.url.includes('/git/blobs/'),
+        json(200, {
+          content: btoa(readmeFor({ owner: 'o', repo: 'r', branch: 'main' })),
+          encoding: 'base64',
+        }),
+      ],
+    ]);
+
+    const result = await testSync(http, 't', { owner: 'o', repo: 'r', branch: 'main' });
+    expect(result.status).toBe('ok');
+    expect(result.status === 'ok' && result.detail).toContain('Joined the log already here');
+    expect(result.status === 'ok' && result.detail).toContain('laptop');
   });
 });

@@ -41,7 +41,29 @@ describe('Settings', () => {
     const sections = [...container.querySelectorAll('[data-section]')].map(el =>
       el.getAttribute('data-section'),
     );
-    expect(sections).toEqual(['sync', 'calendar', 'claude', 'appearance', 'data']);
+    expect(sections).toEqual(['sync', 'calendar', 'claude', 'appearance', 'tracking', 'data']);
+  });
+
+  it('exposes the two settings that decide what a tracked second means', async () => {
+    /*
+     * Both were stored and honoured and neither had a control, which is the
+     * worst of the three states: the behaviour is real, so it can surprise
+     * someone, and there is nothing on screen to explain it.
+     */
+    const { user, store } = setup();
+    const tracking = await open(user, 'Tracking');
+
+    await user.selectOptions(within(tracking).getByLabelText('The day starts at'), String(4 * 3_600_000));
+    expect(store.getSnapshot().settings.dayStartOffsetMs).toBe(4 * 3_600_000);
+
+    await user.selectOptions(within(tracking).getByLabelText('Ask about idle time after'), String(120_000));
+    expect(store.getSnapshot().settings.idleThresholdMs).toBe(120_000);
+  });
+
+  it('says what the tracking settings are without opening the section', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByText('midnight, idle after 10m')).toBeInTheDocument();
   });
 
   it('says at a glance what is configured without opening anything', async () => {

@@ -3,12 +3,14 @@ import type { Http, Settings } from '@to-hoot/core';
 
 import { CheckResult, SecretField, TestConnection, TextField, useCheck } from '../fields.js';
 import {
-  checkDeviceId,
+  checkDeviceName,
   createDataRepo,
+  inspectRepo,
   readRepo,
   testSync,
   verifyToken,
   type GitHubAccount,
+  type RepoContents,
   type RepoTarget,
 } from '../../setup.js';
 
@@ -57,12 +59,19 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
         },
   );
   const [device, setDevice] = useState(settings.deviceId);
+  /** What is already in the repository: the log, and the names in use. */
+  const [contents, setContents] = useState<RepoContents | null>(null);
+  /** Set when the user says they are replacing the machine that holds the name. */
+  const [replacing, setReplacing] = useState(false);
 
   const [tokenState, runToken] = useCheck();
   const [repoState, runRepo] = useCheck();
   const [syncState, runSync] = useCheck();
 
-  const deviceCheck = device.trim() === '' ? null : checkDeviceId(device);
+  const taken = replacing ? [] : (contents?.deviceIds ?? []);
+  const deviceCheck = device.trim() === '' ? null : checkDeviceName(device, taken);
+  const clash =
+    deviceCheck?.status === 'error' && (contents?.deviceIds ?? []).includes(device.trim());
 
   const save = (patch: Partial<RepoTarget>): void => {
     const merged = { ...(target ?? { owner: '', repo: '', branch: '' }), ...patch };
@@ -138,7 +147,10 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
               onClick={() =>
                 void runRepo(async () => {
                   const check = await createDataRepo(http, token, repoName);
-                  if (check.status === 'ok') save(check.value);
+                  if (check.status === 'ok') {
+                    save(check.value);
+                    setContents(null);
+                  }
                   return check;
                 })
               }
@@ -154,8 +166,15 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
                   // Reads the repository's own default_branch, which is the
                   // whole reason this is a request rather than an assumption.
                   const check = await readRepo(http, token, account.login, repoName);
-                  if (check.status === 'ok') save(check.value);
-                  return check;
+                  if (check.status !== 'ok') return check;
+                  save(check.value);
+                  // What is in there decides whether this is a setup or a join,
+                  // and which names are already spoken for.
+                  const found = await inspectRepo(http, token, check.value);
+                  setContents(found.status === 'ok' ? found.value : null);
+                  return found.status === 'ok' && found.value.hasLog
+                    ? { ...check, detail: `${check.detail} ${found.detail}` }
+                    : check;
                 })
               }
             >
@@ -170,6 +189,16 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
         <>
           <hr className="step-rule" />
           <h3 className="micro">This device</h3>
+
+          {contents?.hasLog !== true ? null : (
+            <p className="field-hint">
+              This repository already holds a log from{' '}
+              {contents.deviceIds.length === 1
+                ? `one device (${contents.deviceIds.join(', ')})`
+                : `${contents.deviceIds.length} devices (${contents.deviceIds.join(', ')})`}
+              . This device will join it, and nothing already there is replaced.
+            </p>
+          )}
 
           <TextField
             id={field('device')}
@@ -186,6 +215,22 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
                   : `${deviceCheck.detail} ${deviceCheck.hint ?? ''}`
             }
           />
+
+          {!clash ? null : (
+            <div className="step-actions">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setReplacing(true)}
+              >
+                I am replacing that machine
+              </button>
+              <span className="field-hint">
+                Only if the old one will never sync again. Two devices writing one name lose
+                each other&apos;s work.
+              </span>
+            </div>
+          )}
 
           <TestConnection
             label="Test sync"

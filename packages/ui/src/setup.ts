@@ -1,6 +1,8 @@
 import {
   BranchNotFoundError,
   CalendarBridgeClient,
+  META_PATH,
+  SNAPSHOT_PATH,
   isEmptyRepository,
   DEVICE_ID_RULE,
   GitHubClient,
@@ -313,6 +315,120 @@ export function readmeFor(target: RepoTarget): string {
   ].join('\n');
 }
 
+export interface RepoContents {
+  /** True when the repository already holds someone's events. */
+  hasLog: boolean;
+  /**
+   * Every device that has ever written here.
+   *
+   * Read from `meta.json` first and from the tree only as a fallback, because
+   * a device whose event files have been compacted into the snapshot still
+   * holds its name: it has no `events/<id>/` path left, and offering that name
+   * to a second machine would put two devices on one prefix.
+   */
+  deviceIds: string[];
+  eventFiles: number;
+  hasSnapshot: boolean;
+}
+
+const EVENT_PATH = /^events\/([^/]+)\/[^/]+\.json$/;
+
+/**
+ * What is already in the repository.
+ *
+ * The wizard needs this before it does anything: a repository with a log is one
+ * to join, not one to set up, and the names already in use are the names a new
+ * device may not take.
+ */
+export async function inspectRepo(
+  http: Http,
+  token: string,
+  target: RepoTarget,
+): Promise<Check<RepoContents>> {
+  const client = new GitHubClient(http, {
+    owner: target.owner,
+    repo: target.repo,
+    token,
+    ...(target.branch === '' ? {} : { branch: target.branch }),
+  });
+  const empty: RepoContents = { hasLog: false, deviceIds: [], eventFiles: 0, hasSnapshot: false };
+
+  try {
+    const head = await client.latestCommit();
+    if (head === 'not-modified') return { status: 'ok', detail: 'Nothing here yet.', value: empty };
+    const tree = await client.listTree(head.sha);
+
+    const fromPaths = new Set<string>();
+    let eventFiles = 0;
+    for (const entry of tree) {
+      const match = EVENT_PATH.exec(entry.path);
+      if (match === null) continue;
+      eventFiles++;
+      fromPaths.add(match[1]!);
+    }
+
+    const metaEntry = tree.find(e => e.path === META_PATH);
+    const fromMeta = metaEntry === undefined ? [] : devicesInMeta(await client.getBlob(metaEntry.sha));
+    const deviceIds = [...new Set([...fromMeta, ...fromPaths])].sort();
+
+    const value: RepoContents = {
+      hasLog: eventFiles > 0 || deviceIds.length > 0,
+      deviceIds,
+      eventFiles,
+      hasSnapshot: tree.some(e => e.path === SNAPSHOT_PATH),
+    };
+    return { status: 'ok', detail: describeContents(value), value };
+  } catch (err) {
+    // A repository with no commits is not a failure; it is the ordinary shape
+    // of one the wizard has just created.
+    if (isEmptyRepository(err) || httpStatusOf(err) === 404) {
+      return { status: 'ok', detail: 'Nothing here yet.', value: empty };
+    }
+    return { status: 'error', ...syncFailure(err, target) };
+  }
+}
+
+function devicesInMeta(text: string): string[] {
+  try {
+    const body: unknown = JSON.parse(text);
+    const devices = (body as { devices?: unknown } | null)?.devices;
+    if (typeof devices !== 'object' || devices === null) return [];
+    return Object.keys(devices as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+function describeContents(contents: RepoContents): string {
+  if (!contents.hasLog) return 'Nothing here yet.';
+  const devices = contents.deviceIds.length;
+  const names = contents.deviceIds.join(', ');
+  return devices === 1
+    ? `Already holds a log from one device: ${names}.`
+    : `Already holds a log from ${devices} devices: ${names}.`;
+}
+
+/**
+ * Whether this device may call itself that.
+ *
+ * The name has to be a path segment, and it has to be one nobody else is using.
+ * The second half is not tidiness: every device writes only under
+ * `events/<deviceId>/`, and that one guarantee is what makes merging a replay
+ * rather than a reconciliation, and why there is no locking anywhere in the
+ * sync engine. Two devices sharing a name write the same path concurrently,
+ * and one side's events are lost on the retry that follows.
+ */
+export function checkDeviceName(name: string, taken: readonly string[]): Check<string> {
+  const shape = checkDeviceId(name);
+  if (shape.status === 'error') return shape;
+  if (!taken.includes(shape.value)) return shape;
+  return {
+    status: 'error',
+    detail: `Another device is already called "${shape.value}".`,
+    hint: 'Every device writes only to its own folder, and that is what lets two of them sync without locking. Pick another name, or say you are replacing that machine.',
+  };
+}
+
 /** Base64 that survives anything outside ASCII, which a repository name can be. */
 function base64(text: string): string {
   const bytes = new TextEncoder().encode(text);
@@ -387,6 +503,17 @@ export async function testSync(
     const resolved: RepoTarget = { ...target, branch };
     const expected = readmeFor(resolved);
 
+    /*
+     * Look before writing.
+     *
+     * A repository that already holds a log belongs to another device, and this
+     * one is joining it rather than setting it up. Nothing here ever replaced a
+     * log, but the wizard said the same thing either way, so someone setting up
+     * a second device could not tell that their first device's history was
+     * about to arrive rather than be started over.
+     */
+    const found = await inspectRepo(http, token, resolved);
+
     let outcome = await client
       .commitFiles('to-hoot: set up data repository', [{ path: README_PATH, content: expected }])
       .catch(async (err: unknown) => {
@@ -423,9 +550,14 @@ export async function testSync(
     }
     return {
       status: 'ok',
-      detail: `Wrote and read back ${README_PATH} on ${branch}.`,
+      detail:
+        found.status === 'ok' && found.value.hasLog
+          ? `Joined the log already here on ${branch}: ${describeContents(found.value)}`
+          : `Wrote and read back ${README_PATH} on ${branch}.`,
       value: resolved,
-    };
+      // What was already here, so the caller can warn about a name in use.
+      contents: found.status === 'ok' ? found.value : undefined,
+    } as Check<RepoTarget> & { contents?: RepoContents };
   } catch (err) {
     return { status: 'error', ...syncFailure(err, target) };
   }

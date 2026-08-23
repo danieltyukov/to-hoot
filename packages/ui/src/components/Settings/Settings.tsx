@@ -107,13 +107,11 @@ export function Settings({
         </Section>
 
         <Section title="Appearance" summary={theme}>
-          <Appearance
-            theme={theme}
-            workdayStart={settings.workdayStart}
-            workdayEnd={settings.workdayEnd}
-            onSetTheme={onSetTheme}
-            onSave={onSave}
-          />
+          <Appearance theme={theme} settings={settings} onSetTheme={onSetTheme} onSave={onSave} />
+        </Section>
+
+        <Section title="Tracking" summary={describeTracking(settings)}>
+          <Tracking settings={settings} onSave={onSave} />
         </Section>
 
         <Section title="Data" summary={`${eventCount} events`}>
@@ -182,19 +180,88 @@ function Section({
   );
 }
 
+function describeTracking(settings: CoreSettings): string {
+  const hours = settings.dayStartOffsetMs / 3_600_000;
+  const idle = Math.round(settings.idleThresholdMs / 60_000);
+  return `${hours === 0 ? 'midnight' : `${hours}h past midnight`}, idle after ${idle}m`;
+}
+
+/*
+ * The two settings that decide what a tracked second means.
+ *
+ * Both were stored and honoured and neither had a control, which is the worst
+ * of the three states: the behaviour is real, so someone can be surprised by
+ * it, and there is nothing to look at to find out why.
+ */
+function Tracking({
+  settings,
+  onSave,
+}: {
+  settings: CoreSettings;
+  onSave: (patch: Partial<CoreSettings>) => void;
+}) {
+  const ids = useId();
+  return (
+    <div className="step">
+      <div className="field">
+        <label className="micro" htmlFor={`${ids}-offset`}>
+          The day starts at
+        </label>
+        <select
+          id={`${ids}-offset`}
+          className="field-input"
+          value={String(settings.dayStartOffsetMs)}
+          onChange={e => onSave({ dayStartOffsetMs: Number(e.target.value) })}
+        >
+          {[0, 1, 2, 3, 4, 5, 6].map(hours => (
+            <option key={hours} value={hours * 3_600_000}>
+              {hours === 0 ? 'Midnight' : `${String(hours).padStart(2, '0')}:00`}
+            </option>
+          ))}
+        </select>
+        <p className="field-hint">
+          Work done before this counts towards the previous day. If you often finish after
+          midnight, move it later and the evening stays on the day it belonged to.
+        </p>
+      </div>
+
+      <div className="field">
+        <label className="micro" htmlFor={`${ids}-idle`}>
+          Ask about idle time after
+        </label>
+        <select
+          id={`${ids}-idle`}
+          className="field-input"
+          value={String(settings.idleThresholdMs)}
+          onChange={e => onSave({ idleThresholdMs: Number(e.target.value) })}
+        >
+          {[2, 5, 10, 15, 30, 60].map(minutes => (
+            <option key={minutes} value={minutes * 60_000}>
+              {minutes} minutes
+            </option>
+          ))}
+        </select>
+        <p className="field-hint">
+          A stretch this long with nothing happening is taken back out of the totals and you
+          are asked where it went. The numbers stay honest whether or not you answer.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function Appearance({
   theme,
-  workdayStart,
-  workdayEnd,
+  settings,
   onSetTheme,
   onSave,
 }: {
   theme: Theme;
-  workdayStart: string;
-  workdayEnd: string;
+  settings: CoreSettings;
   onSetTheme: (theme: Theme) => void;
   onSave: (patch: Partial<CoreSettings>) => void;
 }) {
+  const { workdayStart, workdayEnd } = settings;
   const ids = useId();
   return (
     <div className="step">

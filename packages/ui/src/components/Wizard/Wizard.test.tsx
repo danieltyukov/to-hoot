@@ -381,3 +381,100 @@ describe('Wizard', () => {
     }
   });
 });
+
+describe('joining a repository that already has a log', () => {
+  /** A repository with one device already in it. */
+  const withLog: Route[] = [
+    [/\/user$/, { body: { login: 'someone' } }],
+    [/\/repos\/someone\/[^/]+$/, { body: { default_branch: 'main', private: true } }],
+    [/\/commits\?/, { body: [{ sha: 'c' }] }],
+    [
+      /\/git\/trees\/c/,
+      {
+        body: {
+          truncated: false,
+          tree: [
+            { path: 'events/laptop/01A.json', sha: 'e1', type: 'blob' },
+            { path: 'meta.json', sha: 'metablob', type: 'blob' },
+          ],
+        },
+      },
+    ],
+    [
+      /\/git\/blobs\/metablob/,
+      {
+        body: {
+          content: btoa(JSON.stringify({ schemaVersion: 1, devices: { laptop: { firstSeen: 1, lastSeen: 2 } } })),
+          encoding: 'base64',
+        },
+      },
+    ],
+  ];
+
+  async function reachTheDeviceStep(user: ReturnType<typeof userEvent.setup>) {
+    await go(user, 'sync');
+    await user.type(screen.getByLabelText('GitHub token', { exact: true }), 'github_pat_x');
+    await user.click(screen.getByRole('button', { name: 'Verify token' }));
+    await screen.findByText('Signed in as someone.');
+    await user.click(screen.getByRole('button', { name: 'Use an existing one' }));
+    await screen.findByLabelText('Device name');
+  }
+
+  it('says it will join rather than set up, so nothing looks like it is starting over', async () => {
+    // Setting up a second device is the moment someone is most likely to fear
+    // that their first device's history is about to be replaced.
+    const { user } = setup(withLog);
+    await reachTheDeviceStep(user);
+    expect(
+      screen.getByText(/already holds a log from one device \(laptop\)/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/nothing already there is replaced/i)).toBeInTheDocument();
+  });
+
+  it('refuses a device name another machine already claims', async () => {
+    /*
+     * Every device writes only under events/<deviceId>/. That guarantee is what
+     * makes merging a replay rather than a reconciliation, and why the sync
+     * engine has no locking anywhere. Two devices on one name write the same
+     * path concurrently and one side's events are lost on the retry.
+     */
+    const { user } = setup(withLog);
+    await reachTheDeviceStep(user);
+
+    await user.type(screen.getByLabelText('Device name'), 'laptop');
+    expect(screen.getByLabelText('Device name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText(/Another device is already called "laptop"/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
+  });
+
+  it('accepts a name nobody is using', async () => {
+    const { user } = setup(withLog);
+    await reachTheDeviceStep(user);
+    await user.type(screen.getByLabelText('Device name'), 'phone');
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+  });
+
+  it('allows the name to be reused, but only as a deliberate choice', async () => {
+    // Replacing a lost machine is a real thing to want. It is offered as an
+    // explicit answer rather than as a silent merge.
+    const { user } = setup(withLog);
+    await reachTheDeviceStep(user);
+    await user.type(screen.getByLabelText('Device name'), 'laptop');
+
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'I am replacing that machine' }));
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+  });
+
+  it('says nothing about joining when the repository is empty', async () => {
+    const { user } = setup([
+      [/\/user$/, { body: { login: 'someone' } }],
+      [/\/repos\/someone\/[^/]+$/, { body: { default_branch: 'main', private: true } }],
+      [/\/commits\?/, { status: 409, body: { message: 'Git Repository is empty.' } }],
+    ]);
+    await reachTheDeviceStep(user);
+    expect(screen.queryByText(/already holds a log/i)).toBeNull();
+    await user.type(screen.getByLabelText('Device name'), 'laptop');
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+  });
+});

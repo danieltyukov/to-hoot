@@ -117,6 +117,10 @@ test('a master repository round-trips without ever creating a main ref', async (
    * the user's data. The wizard then reports success.
    */
   const seen: string[] = [];
+  // What the app asked to be written, so the blob read-back can echo it. A fake
+  // that returns something else makes the round-trip check fail for a reason
+  // that has nothing to do with the app.
+  let writtenReadme = '';
   await page.route('**/api.github.com/**', async route => {
     const req = route.request();
     const url = req.url();
@@ -135,7 +139,14 @@ test('a master repository round-trips without ever creating a main ref', async (
     if (url.includes('/git/ref/heads/master')) {
       return route.fulfill(body({ object: { sha: 'headsha' } }));
     }
-    if (url.endsWith('/git/trees')) return route.fulfill(body({ sha: 'treesha' }, 201));
+    if (url.endsWith('/git/trees')) {
+      const sent = JSON.parse(req.postData() ?? '{}') as {
+        tree?: Array<{ path: string; content?: string }>;
+      };
+      const readme = (sent.tree ?? []).find(e => e.path === 'README.md');
+      if (readme?.content !== undefined) writtenReadme = readme.content;
+      return route.fulfill(body({ sha: 'treesha' }, 201));
+    }
     if (url.endsWith('/git/commits')) return route.fulfill(body({ sha: 'commitsha' }, 201));
     if (url.endsWith('/git/refs')) return route.fulfill(body({}, 201));
     if (req.method() === 'PATCH') return route.fulfill(body({}));
@@ -146,10 +157,11 @@ test('a master repository round-trips without ever creating a main ref', async (
       );
     }
     if (url.includes('/git/blobs/blobsha')) {
-      // Whatever was written. The wizard compares what comes back with what it
-      // sent, so echoing the request body is what makes the round trip real.
-      const written = seen.find(s => s.includes('/git/trees')) ?? '';
-      return route.fulfill(body({ content: '', encoding: 'utf-8', written }));
+      // Echo what was written. The wizard compares the two, which is the point
+      // of the check, so a fake that returns anything else tests nothing.
+      return route.fulfill(
+        body({ content: Buffer.from(writtenReadme, 'utf8').toString('base64'), encoding: 'base64' }),
+      );
     }
     return route.fulfill(body({}, 404));
   });
@@ -164,7 +176,11 @@ test('a master repository round-trips without ever creating a main ref', async (
 
   await page.getByLabel('Device name').fill('laptop');
   await page.getByRole('button', { name: 'Test sync' }).click();
-  await expect(page.locator('[data-status]').last()).not.toBeEmpty();
+  // Wait for the outcome itself, not for any result line to be non-empty: the
+  // step has several, and the earlier ones are already filled in by this point.
+  await expect(page.locator('[data-status="ok"]').last()).toContainText(
+    /Wrote and read back|Joined the log/,
+  );
 
   // The point of the whole exercise: nothing was aimed at main, and no ref was
   // created. The commit went onto the branch that was already there.
