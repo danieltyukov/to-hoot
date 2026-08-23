@@ -1,0 +1,186 @@
+/*
+ * Window chrome, drawn by the app because the shell no longer draws any.
+ *
+ * The whole point of the change is that there is no bar. Everything here is
+ * either invisible (the drag strip, the resize edges) or is the three buttons,
+ * so the window looks frameless until the pointer is near an edge.
+ */
+
+.win-drag {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline: 0;
+  /* Tall enough to grab without thinking, short enough that it does not eat a
+     row of whatever is under it. Panes reserve the same amount. */
+  height: 34px;
+  z-index: 40;
+  /* Nothing is drawn. The strip exists to be dragged, not to be seen. */
+  background: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/*
+ * Buttons sit above the drag strip, and must not be draggable themselves or a
+ * click that moves a pixel becomes a window move instead of a press.
+ */
+.win-buttons {
+  position: fixed;
+  inset-block-start: 0;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding-inline: 10px;
+}
+
+.win-buttons[data-side='right'] {
+  inset-inline-end: 0;
+}
+
+.win-buttons[data-side='left'] {
+  inset-inline-start: 0;
+}
+
+.win-button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  /* A dot, which the radius rule already allows alongside the token. These are
+     the desktop's controls rather than the app's, and every GNOME window draws
+     them round. */
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--muted);
+  cursor: default;
+  transition:
+    background var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.win-button:hover {
+  background: var(--border-strong);
+  color: var(--text);
+}
+
+.win-button:active {
+  background: var(--pressed);
+}
+
+.win-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.win-button svg {
+  width: 16px;
+  height: 16px;
+  /* Stroked rather than filled so one glyph set reads at one weight, and square
+     capped because a round cap on a 1px diagonal renders as a smudge. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+  stroke-linecap: square;
+}
+
+/*
+ * Resize edges.
+ *
+ * Invisible, and slightly wider than they look they need to be: GNOME gives its
+ * own windows a grab margin outside the visible frame, and without one here a
+ * user has to hit an exact pixel to size the window.
+ */
+.win-resize {
+  position: fixed;
+  z-index: 42;
+}
+
+.win-resize-n,
+.win-resize-s {
+  inset-inline: 6px;
+  height: 5px;
+  cursor: ns-resize;
+}
+.win-resize-n {
+  inset-block-start: 0;
+}
+.win-resize-s {
+  inset-block-end: 0;
+}
+
+.win-resize-e,
+.win-resize-w {
+  inset-block: 6px;
+  width: 5px;
+  cursor: ew-resize;
+}
+.win-resize-e {
+  inset-inline-end: 0;
+}
+.win-resize-w {
+  inset-inline-start: 0;
+}
+
+.win-resize-nw,
+.win-resize-ne,
+.win-resize-sw,
+.win-resize-se {
+  width: 11px;
+  height: 11px;
+}
+.win-resize-nw {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  cursor: nwse-resize;
+}
+.win-resize-ne {
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  cursor: nesw-resize;
+}
+.win-resize-sw {
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  cursor: nesw-resize;
+}
+.win-resize-se {
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  cursor: nwse-resize;
+}
+
+/*
+ * Room for the strip.
+ *
+ * Given to the panes rather than to the window, so the sidebar's own background
+ * still runs to the top edge of the screen. A margin on the window would leave a
+ * band of page background above everything, which is the bar again in a paler
+ * colour.
+ */
+/* The sidebar is its pane's first child too, so one selector covers all three
+   and every pane header still lines up with the others. */
+.app[data-chrome='app'] .pane > *:first-child {
+  padding-block-start: 34px;
+}
+
+/*
+ * The wizard clears the buttons sideways rather than downwards.
+ *
+ * Pushing its header down instead gave it a 90px header with the content at the
+ * bottom, which is a title bar again, drawn by us and taller than the one that
+ * was removed. Its own row already has empty space at the right end, so the
+ * buttons go there and the header keeps its height.
+ */
+.wizard[data-chrome='app'] .wizard-head {
+  padding-inline-end: 116px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .win-button {
+    transition: none;
+  }
+}

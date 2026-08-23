@@ -16,6 +16,33 @@ fn idle_seconds() -> f64 {
     idle::seconds()
 }
 
+/// The desktop's own window-button layout, so the app can draw the controls
+/// this machine would have drawn.
+///
+/// The string is GNOME's own format, `left:right`, e.g. `:minimize,maximize,close`
+/// on Ubuntu or `close:` for someone who keeps one button on the left. Parsed in
+/// the front end rather than here, because the front end is what has to lay them
+/// out and a second representation is a second thing to keep in step.
+///
+/// Falls back to the Ubuntu default rather than to nothing: a window with no way
+/// to close it is worse than a window whose buttons are on the wrong side.
+#[tauri::command]
+fn window_buttons() -> String {
+    std::process::Command::new("gsettings")
+        .args([
+            "get",
+            "org.gnome.desktop.wm.preferences",
+            "button-layout",
+        ])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|raw| raw.trim().trim_matches('\'').to_string())
+        .filter(|layout| layout.contains(':'))
+        .unwrap_or_else(|| ":minimize,maximize,close".to_string())
+}
+
 /// Brings the existing window back rather than opening another one.
 fn focus_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -123,7 +150,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![idle_seconds])
+        .invoke_handler(tauri::generate_handler![idle_seconds, window_buttons])
         .setup(|app| {
             build_tray(app.handle())?;
             Ok(())

@@ -30,6 +30,9 @@ import type {
   HttpResponse,
   KeyValueStore,
   NotificationId,
+  WindowButton,
+  WindowButtonLayout,
+  WindowChrome,
   NotifyOptions,
   Platform,
   Unsubscribe,
@@ -213,6 +216,73 @@ async function idleSeconds(): Promise<number> {
   }
 }
 
+/**
+ * The window's own chrome, because this shell runs undecorated.
+ *
+ * Everything here is the cost of that decision. A window with no title bar has
+ * no buttons, no drag handle and no resize borders, so the app has to provide
+ * all three or it is a window you cannot move, size or close.
+ */
+const KNOWN_BUTTONS: WindowButton[] = ['minimize', 'maximize', 'close'];
+
+/**
+ * GNOME's `left:right` layout string into something to render.
+ *
+ * Anything unrecognised is dropped rather than guessed at: themes ship names
+ * like `appmenu` and `spacer` that this app has no equivalent for, and drawing
+ * a button for one would be inventing a control that does nothing.
+ */
+export function parseButtonLayout(raw: string): WindowButtonLayout {
+  const [left = '', right = ''] = raw.split(':');
+  const parse = (part: string): WindowButton[] =>
+    part
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name): name is WindowButton => (KNOWN_BUTTONS as string[]).includes(name));
+
+  const onRight = parse(right);
+  const onLeft = parse(left);
+  // Whichever side actually carries the buttons wins. Ties and empties go
+  // right, which is where every desktop this ships to puts them by default.
+  if (onRight.length === 0 && onLeft.length > 0) return { side: 'left', order: onLeft };
+  if (onRight.length === 0) return { side: 'right', order: [...KNOWN_BUTTONS] };
+  return { side: 'right', order: onRight };
+}
+
+const windowChrome: WindowChrome = {
+  async buttons() {
+    try {
+      return parseButtonLayout(await invoke<string>('window_buttons'));
+    } catch {
+      return { side: 'right', order: [...KNOWN_BUTTONS] };
+    }
+  },
+  minimize: () => getCurrentWindow().minimize(),
+  toggleMaximize: () => getCurrentWindow().toggleMaximize(),
+  // Hidden rather than destroyed, matching what the close button did while the
+  // shell drew it: a running timer must survive the window going away.
+  close: () => getCurrentWindow().hide(),
+  isMaximized: () => getCurrentWindow().isMaximized(),
+  onMaximizeChange(cb) {
+    const unlisten = getCurrentWindow().onResized(() => {
+      void getCurrentWindow().isMaximized().then(cb);
+    });
+    let cancelled = false;
+    void unlisten.then((off) => {
+      if (cancelled) off();
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((off) => off());
+    };
+  },
+  // `ResizeEdge` is declared with the same eight strings the shell's own
+  // `ResizeDirection` uses, so this passes straight through. The type is not
+  // exported to import, and restating the union in core is what keeps the shell
+  // out of the shared package.
+  startResize: (edge) => getCurrentWindow().startResizeDragging(edge),
+};
+
 export const platform: Platform = {
   http,
   store,
@@ -221,6 +291,7 @@ export const platform: Platform = {
   cancelNotification,
   onResume,
   idleSeconds,
+  windowChrome,
 };
 
 declare global {

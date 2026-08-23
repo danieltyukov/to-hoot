@@ -26,6 +26,8 @@ export interface WizardProps {
   onDone: () => void;
   /** Absolute path to the built MCP server, for the generated command. */
   mcpServerPath?: string;
+  /** True when the app draws the window frame, so the header leaves room for it. */
+  chrome?: boolean;
 }
 
 /*
@@ -41,7 +43,7 @@ export interface WizardProps {
  * well-formed URL and then fails a week later, in the background, with no
  * wizard on screen, has moved the problem rather than solved it.
  */
-export function Wizard({ http, settings, onSave, onDone, mcpServerPath }: WizardProps) {
+export function Wizard({ http, settings, onSave, onDone, mcpServerPath, chrome }: WizardProps) {
   const [at, setAt] = useState(0);
   const step = STEPS[at]!;
   const isLast = at === STEPS.length - 1;
@@ -59,7 +61,7 @@ export function Wizard({ http, settings, onSave, onDone, mcpServerPath }: Wizard
   };
 
   return (
-    <section className="wizard" aria-label="Setup">
+    <section className="wizard" aria-label="Setup" data-chrome={chrome ? 'app' : undefined}>
       <header className="wizard-head">
         <div className="brand">
           <OwlMark size={22} label={null} className="brand-mark" />

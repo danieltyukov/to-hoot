@@ -30,6 +30,7 @@ import { CalendarService } from './calendar.js';
 import type { BridgeEvent } from '@to-hoot/core';
 import { formatDuration } from './format.js';
 import { Store } from './store.js';
+import WindowFrame from './components/WindowChrome.js';
 import './App.css';
 
 /** How often the display advances. The log is written far less often; see FLUSH_MS. */
@@ -54,8 +55,11 @@ export interface AppProps {
   http?: Http;
   /** Absolute path to the built MCP server, for the command the wizard prints. */
   mcpServerPath?: string;
-  /** The shell. Used for the resume signal; absent in tests and in SSR. */
-  platform?: Pick<Platform, 'onResume'> | undefined;
+  /**
+   * The shell. Used for the resume signal and, where the shell draws no
+   * decorations of its own, for the window's frame. Absent in tests and in SSR.
+   */
+  platform?: Pick<Platform, 'onResume'> & Partial<Pick<Platform, 'windowChrome'>>;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -266,20 +270,33 @@ export default function App({
     setPane('tasks');
   };
 
+  /*
+   * The window's frame, when the shell has stopped drawing one.
+   *
+   * Absent everywhere else, which is why nothing in the browser build or the
+   * tests has to know this exists: no capability, no chrome, no reserved space.
+   */
+  const chrome = platform?.windowChrome;
+
   if (!snapshot.setupDone) {
     return (
-      <Wizard
-        http={http}
-        settings={snapshot.settings}
-        onSave={patch => store.saveSettings(patch)}
-        onDone={() => store.finishSetup()}
-        mcpServerPath={mcpServerPath}
-      />
+      <>
+        {chrome && <WindowFrame chrome={chrome} />}
+        <Wizard
+          http={http}
+          settings={snapshot.settings}
+          onSave={patch => store.saveSettings(patch)}
+          onDone={() => store.finishSetup()}
+          mcpServerPath={mcpServerPath}
+          chrome={chrome !== undefined}
+        />
+      </>
     );
   }
 
   return (
-    <div className="app" data-pane={pane}>
+    <div className="app" data-pane={pane} data-chrome={chrome ? 'app' : undefined}>
+      {chrome && <WindowFrame chrome={chrome} />}
       <div className="pane pane-lists">
         <Sidebar
           projects={projects}

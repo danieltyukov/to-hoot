@@ -98,4 +98,60 @@ export interface Platform {
    * browser have no such signal and infer idleness from a wall-clock gap.
    */
   idleSeconds?(): Promise<number>;
+  /**
+   * The window's own chrome, when the shell has stopped drawing it.
+   *
+   * Present only on a desktop shell that runs undecorated. GNOME dropped
+   * separate title bars for client-side decorations years ago, so a window
+   * wearing one reads on Linux as something ported rather than something
+   * written for the desktop. Absent in a browser, where the tab is the chrome,
+   * and on Android, where the system bars are.
+   */
+  windowChrome?: WindowChrome;
+}
+
+/** Which side the window buttons live on, and their order along it. */
+export type WindowButton = 'minimize' | 'maximize' | 'close';
+
+export interface WindowButtonLayout {
+  side: 'left' | 'right';
+  order: WindowButton[];
+}
+
+/**
+ * The eight directions a window can be dragged bigger from.
+ *
+ * Spelled the way the shell's own API spells them, because the alternative is a
+ * translation table that exists only to be got wrong once.
+ */
+export type ResizeEdge =
+  | 'North'
+  | 'South'
+  | 'East'
+  | 'West'
+  | 'NorthEast'
+  | 'NorthWest'
+  | 'SouthEast'
+  | 'SouthWest';
+
+export interface WindowChrome {
+  /**
+   * Where the buttons go, read from the desktop's own setting rather than
+   * assumed. Ubuntu puts three on the right, stock GNOME puts one there, and
+   * plenty of people move them left. Guessing is what makes an app feel foreign
+   * on someone else's machine.
+   */
+  buttons(): Promise<WindowButtonLayout>;
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe;
+  /**
+   * Begins a resize drag from one edge.
+   *
+   * Needed because an undecorated window has no borders of its own to grab.
+   * Dropping the title bar means taking on what the title bar came with.
+   */
+  startResize(edge: ResizeEdge): Promise<void>;
 }

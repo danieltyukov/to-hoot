@@ -2,13 +2,19 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the to-hoot window is allowed to ask the shell for.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
     "autostart:default",
     "notification:default",
     "fs:default",
@@ -20,9 +26,15 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://api.github.com/*" },
-        { "url": "https://script.google.com/*" },
-        { "url": "https://script.googleusercontent.com/*" }
+        {
+          "url": "https://api.github.com/*"
+        },
+        {
+          "url": "https://script.google.com/*"
+        },
+        {
+          "url": "https://script.googleusercontent.com/*"
+        }
       ]
     }
   ]
