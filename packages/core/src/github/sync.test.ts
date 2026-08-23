@@ -451,6 +451,19 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   return res.status === 204 ? undefined : res.json();
 }
 
+/**
+ * Waits until a path is actually readable at the head, so a test can rely on it
+ * being there. This establishes a precondition; it never retries an assertion.
+ */
+async function waitForPath(client: GitHubClient, path: string): Promise<void> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const tree = await client.listTree((await client.getRef()).sha);
+    if (tree.some(e => e.path === path)) return;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error(`${path} never became readable at the head`);
+}
+
 describe.skipIf(!TOKEN)('SyncEngine against a real repository', () => {
   let scratch: { owner: string; repo: string } | undefined;
   // Deliberately no `branch`: the client has to work out for itself what this
@@ -494,24 +507,40 @@ describe.skipIf(!TOKEN)('SyncEngine against a real repository', () => {
     expect(Object.keys(replay(await a.pull()).tasks).sort()).toEqual(['t1', 't2']);
   }, 120_000);
 
-  it('rejects a deletion for a path the parent commit does not have', async () => {
-    // Live behaviour, previously unverified: GitHub answers 422
-    // GitRPC::BadObjectState. It is what makes the compare-and-swap load
-    // bearing rather than merely tidy: the engine computes its deletion list
-    // from the tree it read at the head it then swaps against, so the list can
-    // only ever name paths the parent commit has. Without the swap, a
-    // compaction retry could carry a stale deletion and fail the whole commit.
+  it('rejects the whole commit when its tree deletes a path the parent does not have', async () => {
+    // Live behaviour, previously unverified. It is what makes the C1 compare
+    // and swap load bearing rather than merely tidy: the engine computes its
+    // deletion list from the tree it read at the head it then swaps against, so
+    // the list can only ever name paths the parent commit has. Without the
+    // swap, a compaction retry could carry a stale deletion and lose the entire
+    // commit, snapshot and events together.
     const client = new GitHubClient(nodeHttp, config);
     await client.commitFiles('seed a doomed file', [{ path: 'doomed.json', content: '1' }]);
-    await expect(
-      client.commitFiles('delete a path that was never here', [], ['never-here.json'], (await client.getRef()).sha),
-    ).rejects.toThrow(/every deletion must name a path the base tree actually has/);
+    // Establish the precondition by reading it back rather than assuming the
+    // write has settled: reads are served by replicas that can still be a
+    // commit behind, especially on a repository created seconds ago.
+    await waitForPath(client, 'doomed.json');
 
-    // The same commit naming only what exists goes through.
+    // No expectedHead on purpose. The property under test belongs to the API,
+    // not to the swap, and swapping against a separately read head can lose to
+    // that same replica lag and report a conflict instead, which would mask it.
     await expect(
-      client.commitFiles('delete the doomed file', [], ['doomed.json'], (await client.getRef()).sha),
-    ).resolves.toBe('ok');
+      client.commitFiles(
+        'delete a path that was never here',
+        [{ path: 'written-anyway.json', content: 'x' }],
+        ['never-here.json'],
+      ),
+    ).rejects.toThrow(/deletion|BadObjectState|422/i);
+
+    // The WHOLE commit failed rather than the one bad entry: the file the same
+    // tree carried was never written. Absence is the safe thing to assert under
+    // replica lag, which can hide a write but cannot invent one.
     const tree = await client.listTree((await client.getRef()).sha);
-    expect(tree.some(e => e.path === 'doomed.json')).toBe(false);
+    expect(tree.some(e => e.path === 'written-anyway.json')).toBe(false);
+    expect(tree.some(e => e.path === 'doomed.json')).toBe(true);
+
+    // A deletion naming only what the parent has still goes through.
+    await waitForPath(client, 'doomed.json');
+    await expect(client.commitFiles('delete the doomed file', [], ['doomed.json'])).resolves.toBe('ok');
   }, 120_000);
 });

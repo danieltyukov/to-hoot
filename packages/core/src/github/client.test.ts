@@ -258,6 +258,20 @@ describe('GitHubClient', () => {
     expect(tree.body.base_tree).toBe('commit-1');
   });
 
+  it('says what a rejected deletion means, since the API message does not', async () => {
+    // Verified live: deleting a path the base tree lacks is answered with
+    // `422 GitRPC::BadObjectState`, and the whole commit is lost, not the entry.
+    http.replyOnce('POST', 422, { message: 'GitRPC::BadObjectState' });
+    await expect(client.commitFiles('msg', [], ['gone.json'])).rejects.toThrow(
+      /every deletion must name a path the base tree actually has/,
+    );
+  });
+
+  it('leaves a 422 that has nothing to do with deletions alone', async () => {
+    http.replyOnce('POST', 422, { message: 'something else entirely' });
+    await expect(client.createTree('base', [{ path: 'a', content: 'x' }])).rejects.toThrow(/something else entirely/);
+  });
+
   it('lists a whole tree in one recursive request and ignores directory entries', async () => {
     http.tree = [
       { path: 'events', type: 'tree', sha: 't1' },
