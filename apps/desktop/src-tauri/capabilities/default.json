@@ -1,0 +1,29 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the to-hoot window is allowed to ask the shell for.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "autostart:default",
+    "notification:default",
+    "fs:default",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "store:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.github.com/*" },
+        { "url": "https://script.google.com/*" },
+        { "url": "https://script.googleusercontent.com/*" }
+      ]
+    }
+  ]
+}

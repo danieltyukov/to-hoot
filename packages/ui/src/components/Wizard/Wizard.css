@@ -1,0 +1,137 @@
+.wizard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.wizard-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-steps {
+  display: flex;
+  gap: 2px;
+}
+
+.wizard-step {
+  min-height: 26px;
+  padding-inline: 9px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--faint);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.wizard-step:hover,
+.wizard-step[data-visited] {
+  color: var(--muted);
+}
+
+.wizard-step[aria-current='step'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.wizard-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+  padding: 20px 16px 28px;
+}
+
+.step-lead {
+  color: var(--muted);
+}
+
+.step-note {
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.step-rule {
+  height: 0;
+  margin: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.step-list,
+.step-numbered {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.step-list li,
+.step-numbered li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Numbered by hand rather than by list-style, because the numbers have to line
+   up with the prose rather than hang beside a block that contains a code pane. */
+.step-numbered {
+  counter-reset: step;
+}
+
+.step-numbered li {
+  counter-increment: step;
+  padding-inline-start: 26px;
+  position: relative;
+}
+
+.step-numbered li::before {
+  content: counter(step);
+  position: absolute;
+  inset-inline-start: 0;
+  top: 1px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-tint);
+  color: var(--accent-hover);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.step-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wizard-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.wizard-spacer {
+  flex: 1 1 auto;
+}
+
+.wizard-next {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}

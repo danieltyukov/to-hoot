@@ -1,0 +1,18 @@
+{
+  "name": "@to-hoot/apps-script",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run typecheck && node esbuild.config.js",
+    "smoke": "npm run build && node smoke.mjs",
+    "push": "npm run build && npx --yes @google/clasp@^3 push",
+    "create": "npx --yes @google/clasp@^3 create-script --type standalone --title \"to-hoot calendar bridge\" --rootDir dist",
+    "deploy": "npm run build && npx --yes @google/clasp@^3 create-deployment --description \"to-hoot calendar bridge\"",
+    "deployments": "npx --yes @google/clasp@^3 list-deployments"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}

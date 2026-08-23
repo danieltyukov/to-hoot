@@ -1,0 +1,31 @@
+.wordmark {
+  font-size: var(--fs-large);
+  font-weight: 600;
+  letter-spacing: var(--ls-h2);
+  /* A single line, and the pupils are positioned against this box, so the box
+     has to be the type size rather than the paragraph leading. */
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wordmark-eye {
+  position: relative;
+  font-style: normal;
+}
+
+/*
+ * Sits in the counter of the `o`. Measured against the em box, not the glyph:
+ * with line-height 1 the baseline falls near 0.79em, and the counter centre of
+ * this face sits about a quarter of an em above it.
+ */
+.wordmark-eye::after {
+  content: '';
+  position: absolute;
+  top: 60%;
+  left: 50%;
+  width: 0.17em;
+  height: 0.17em;
+  margin: -0.085em 0 0 -0.085em;
+  border-radius: 50%;
+  background: currentColor;
+}

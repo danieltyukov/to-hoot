@@ -1,0 +1,7 @@
+/* Set in the serif, which is the only place running text appears in a UI that is
+   otherwise all labels. That contrast is what makes one sentence enough. */
+.empty {
+  padding: 22px 12px;
+  font-size: var(--fs-base);
+  color: var(--muted);
+}

@@ -1,0 +1,163 @@
+/*
+ * Design tokens. Every colour, size, radius and duration the app uses is
+ * declared here once; nothing downstream writes a literal.
+ *
+ * Theme handling has one rule that is easy to get wrong: no colour may have its
+ * only definition inside a media query. The full light palette is declared on
+ * bare `:root`, and each dark block redefines only what changes. A media query
+ * that is the sole home of a token leaves that token undefined for anyone whose
+ * system preference does not match, and the failure is invisible until someone
+ * with the other setting opens the app.
+ *
+ * The three dark paths, in cascade order:
+ *   1. `:root` carries light, always, for everyone.
+ *   2. System dark applies, unless the user explicitly chose light.
+ *   3. An explicit dark choice applies last, so it wins over system light.
+ *
+ * The two dark blocks must stay identical. `tokens.test.ts` asserts that, since
+ * drift between them is the standard way this pattern rots.
+ *
+ * The fonts are subsets, which the OFL treats as modifications, so they carry
+ * renamed families. See scripts/fetch-fonts.sh and the OFL.txt beside each file.
+ */
+
+@font-face {
+  font-family: 'To-Hoot Sans';
+  src: url('./fonts/sans/tohoot-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'To-Hoot Serif';
+  src: url('./fonts/serif/tohoot-serif.woff2') format('woff2');
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'To-Hoot Mono';
+  src: url('./fonts/mono/tohoot-mono.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Paper and clay. One accent hue at two lightnesses, so it keeps its identity
+     when the theme inverts. Green is spoken for by the completed state, which
+     is why the accent is never in that hue family. */
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --border: #e8e3db;
+  --border-strong: #d6cfc4;
+  --text: #1c1b19;
+  --muted: #6b665f;
+  --faint: #767068;
+  --accent: #c2603f;
+  --accent-hover: #a94f31;
+  --accent-tint: #f8ece7;
+  --success: #3d7350;
+  --danger: #b23b32;
+
+  /* Not a colour so much as a scrim: the text colour at a few percent. It adds
+     no hue, which is why it is allowed alongside a palette that is closed. */
+  --hover: rgba(28, 27, 25, 0.045);
+  --pressed: rgba(28, 27, 25, 0.08);
+
+  /*
+   * The rule is two radii: 6px for controls, 10px for panels. Only the control
+   * radius is a token, because nothing is a panel yet: the shell is full-bleed
+   * panes separated by hairlines, with no floating surface to round. The panel
+   * radius returns as --r-panel with the first thing that needs it, at 10px.
+   */
+  --r-control: 6px;
+
+  --dur-quick: 100ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+
+  --font-sans: 'To-Hoot Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-serif: 'To-Hoot Serif', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-mono: 'To-Hoot Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 15px, not 16px. A dense list reads better a notch down, and every other
+     step is measured from it. */
+  --fs-micro: 11px;
+  --fs-mini: 12px;
+  --fs-small: 13px;
+  --fs-base: 15px;
+  --fs-large: 17px;
+  --fs-h2: 19px;
+  --fs-h1: 24px;
+  --ls-micro: 0.07em;
+  --ls-h2: -0.025em;
+  --ls-h1: -0.03em;
+
+  --row-h: 36px;
+  --sidebar-w: 208px;
+  --sidebar-min: 180px;
+  --sidebar-max: 240px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #12110f;
+    --surface: #191816;
+    --border: #2b2926;
+    --border-strong: #3b3833;
+    --text: #ece8e2;
+    --muted: #98928a;
+    --faint: #8a847c;
+    --accent: #d97757;
+    --accent-hover: #e58e70;
+    --accent-tint: #2b1d17;
+    --success: #77a888;
+    --danger: #d9736a;
+    --hover: rgba(236, 232, 226, 0.06);
+    --pressed: rgba(236, 232, 226, 0.1);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #12110f;
+  --surface: #191816;
+  --border: #2b2926;
+  --border-strong: #3b3833;
+  --text: #ece8e2;
+  --muted: #98928a;
+  --faint: #8a847c;
+  --accent: #d97757;
+  --accent-hover: #e58e70;
+  --accent-tint: #2b1d17;
+  --success: #77a888;
+  --danger: #d9736a;
+  --hover: rgba(236, 232, 226, 0.06);
+  --pressed: rgba(236, 232, 226, 0.1);
+  color-scheme: dark;
+}
+
+/* A finger needs more than 36px. This is the one place row height changes. */
+@media (pointer: coarse) {
+  :root {
+    --row-h: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

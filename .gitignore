@@ -1,0 +1,22 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo
+apps/desktop/src-tauri/target/
+# The Android project is committed: the manifest and the release signing
+# configuration are source, not build output. What Gradle and `cap sync`
+# generate inside it is ignored by the .gitignore files Capacitor wrote into
+# apps/mobile/android/ and apps/mobile/android/app/.
+apps/mobile/android/.kotlin/
+apps/mobile/.gradle/
+apps/apps-script/dist/
+site/dist/
+.dev.vars*
+.env*
+.clasp.json
+keystore.properties
+*.jks
+*.keystore
+.DS_Store

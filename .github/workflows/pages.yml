@@ -1,0 +1,66 @@
+name: Pages
+
+# Set Pages to build from "GitHub Actions" once, in the repository settings.
+# With the default "Deploy from a branch" the deploy step fails with a 404 that
+# does not say which setting is wrong.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'packages/ui/src/tokens.css'
+      - 'packages/ui/src/fonts/**'
+      - 'packages/ui/public/favicon.svg'
+      - 'docs/img/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a queued one is not cancelled: cancelling a running
+# deploy can leave the site half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - uses: actions/configure-pages@v6
+
+      # The site imports packages/ui/src/tokens.css and the two screenshots from
+      # docs/img, both outside its own root, which is why the whole repository
+      # is checked out rather than a sparse copy of site/. The paths filter above
+      # lists everything it reads for the same reason.
+      - run: npm ci
+        working-directory: site
+
+      - run: npm run build
+        working-directory: site
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

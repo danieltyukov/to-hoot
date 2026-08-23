@@ -1,0 +1,20 @@
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding-inline: 8px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.theme-toggle[aria-pressed='true'] {
+  color: var(--text);
+}

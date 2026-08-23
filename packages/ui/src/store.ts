@@ -1,0 +1,914 @@
+import * as disk from './persistence.js';
+import {
+  DEFAULT_PROJECT_ID,
+  DEFAULT_SETTINGS,
+  Tracker,
+  cloneSettings,
+  dayStr,
+  newEvent,
+  replay,
+  taskTotalTime,
+  toSyncable,
+  isValidDeviceId,
+  ulid,
+  validateSettings,
+  type Event,
+  type FileStore,
+  type IdleGap,
+  type KeyValueStore,
+  type Settings,
+  type State,
+  type Theme,
+} from '@to-hoot/core';
+
+/*
+ * The app's state, for Phase 3: an event log in memory, replayed on every
+ * change. Sync, persistence and compaction arrive later and attach here.
+ *
+ * The log is the only write path, exactly as it is in core. Nothing mutates
+ * state, so the UI cannot invent a shape the replayed state would never produce,
+ * and the moment a real transport is wired in there is nothing to reconcile.
+ *
+ * Two things are deliberately outside the log:
+ *   - The device id, which must differ per device. It lives in local storage,
+ *     generated on first run. Two devices sharing one would write the same event
+ *     paths, and the whole merge model rests on them not colliding.
+ *   - The theme, which is also written to the log so it syncs, but is read back
+ *     from local storage at boot. The log is not persisted yet, so without the
+ *     local copy the theme would reset on every reload.
+ */
+
+const DEVICE_KEY = 'to-hoot:device';
+const THEME_KEY = 'to-hoot:theme';
+
+/**
+ * Where the full settings live, secrets included.
+ *
+ * The platform key-value store, never the event log. A token written to the log
+ * is a token pushed to the data repository and pulled down by every other
+ * device, which turns one leaked credential into a permanent one in a git
+ * history. `toSyncable` is what decides which fields are allowed to travel.
+ */
+const SETTINGS_KEY = 'settings';
+
+/** Set once the wizard has been finished or dismissed. */
+const SETUP_KEY = 'setup-done';
+
+/**
+ * How often accrued time is written to the log while a timer runs.
+ *
+ * One event per second would be correct and unusable: an hour of tracking would
+ * be 3600 events to sync, merge and replay. The display does not wait for it,
+ * because time since the last flush is added at read time.
+ */
+export const FLUSH_MS = 30_000;
+
+/*
+ * Colours a new project or tag can take.
+ *
+ * Six, spread round the wheel but all held to the same muted, earthy register as
+ * the interface, so a list of projects reads as one palette rather than as a set
+ * of highlighter pens. Every one clears 3:1 against both the light and the dark
+ * background, which is the non-text threshold a 6px dot has to meet. None is in
+ * the blue-to-purple arc: that is where the stock framework colours live, and
+ * where this design deliberately does not go.
+ */
+export const ENTITY_COLORS = [
+  '#c2603f',
+  '#8a6d3b',
+  '#5f7346',
+  '#3d7350',
+  '#4a6670',
+  '#a4494f',
+] as const;
+
+/** Cycles, so consecutive projects never come out the same colour. */
+function nextColor(index: number): string {
+  return ENTITY_COLORS[index % ENTITY_COLORS.length]!;
+}
+
+export interface Snapshot {
+  state: State;
+  /** The full settings, secrets included. Local only; see SETTINGS_KEY. */
+  settings: Settings;
+  /** False until the wizard has been finished or dismissed. */
+  setupDone: boolean;
+  events: readonly Event[];
+  runningTaskId: string | null;
+  /** The clock reading this snapshot was taken at. Advances every display tick. */
+  now: number;
+  theme: Theme;
+  /** Milliseconds accrued to the running task but not yet in the log. */
+  pendingMs: number;
+  /** When the pending stretch started, for drawing it on the timeline. */
+  pendingSince: number | null;
+  /**
+   * A stretch of wall clock that was taken back out and not yet answered.
+   *
+   * The rule from the spec is subtract first, then ask: the time is already out
+   * of the totals while the question is open, so the numbers on screen are
+   * honest whether or not anyone ever answers.
+   */
+  idleGap: IdleGap | null;
+  /**
+   * Set when the app cannot safely write to disk.
+   *
+   * Two causes, both meaning the same thing to the user: the log on disk could
+   * not be read, or a write failed. In either case what is in memory is the
+   * only good copy, and the app says so rather than carrying on quietly.
+   */
+  storageError: string | null;
+}
+
+export interface StoreOptions {
+  now?: () => number;
+  /** Where the log and its cache live. Absent means nothing is persisted. */
+  files?: FileStore | undefined;
+  /** Injected so tests are not writing to a shared browser store. */
+  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Where settings and secrets are kept. Absent means they are not persisted. */
+  vault?: KeyValueStore | undefined;
+  seed?: readonly Event[];
+}
+
+function readStorage(storage: StoreOptions['storage'], key: string): string | null {
+  // A browser with site data blocked throws on access rather than returning
+  // null, and a theme preference is not worth failing to boot over.
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(storage: StoreOptions['storage'], key: string, value: string): void {
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    /* ignore: see readStorage */
+  }
+}
+
+function isTheme(v: unknown): v is Theme {
+  return v === 'light' || v === 'dark' || v === 'system';
+}
+
+/**
+ * A state to fold new events onto, with the watermark taken off.
+ *
+ * `replay` discards every event at or below `coversThrough`, which is right for
+ * events that came out of the repository and wrong for events that did not.
+ * ULIDs order by time, so a device whose clock runs ahead pushes a watermark
+ * greater than an id this device is about to mint, and the fold would then drop
+ * the user's own action from the state while still writing it to the log and
+ * pushing it. The action would simply never appear.
+ *
+ * Only ever applied to a state whose events are known to be disjoint from the
+ * ones about to be replayed onto it: freshly minted local ones, or the log a
+ * push has not acknowledged. A base that does overlap its log keeps its
+ * watermark, because there the watermark is the only thing that stops the
+ * overlap being applied twice.
+ */
+function foldBase(state: State | undefined): State | undefined {
+  if (state === undefined || state.coversThrough === undefined) return state;
+  const { coversThrough: _dropped, ...rest } = state;
+  return rest;
+}
+
+function isEventish(value: unknown): value is Event {
+  return typeof (value as Event | null)?.id === 'string';
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+export class Store {
+  private readonly nowFn: () => number;
+  private readonly storage: StoreOptions['storage'];
+  private readonly vault: KeyValueStore | undefined;
+  private readonly files: FileStore | undefined;
+  /**
+   * What accounts for everything the log no longer does, ready to hand to
+   * `replay` as it stands.
+   *
+   * Two things fill it, and the difference is carried in the field rather than
+   * at the call sites, because getting it wrong at a call site is a silent
+   * wrong answer rather than an error:
+   *
+   *   the cache read at boot, watermark intact. The log on disk still holds
+   *   the events the cache covers, so base and log overlap, and `coversThrough`
+   *   is exactly what keeps the overlap from being applied a second time. It is
+   *   also exact here: this device wrote both files from one state.
+   *
+   *   a remote state a sync adopted, watermark stripped. The log is truncated
+   *   to what no push has acknowledged, so nothing in it is in the base, and
+   *   the repository's watermark can sit above an id this device is about to
+   *   mint. See `foldBase`.
+   */
+  private base: State | undefined;
+  /**
+   * Log events the base's watermark must not filter out.
+   *
+   * A watermark is a promise that everything at or below it is folded into the
+   * state. That promise is true of the repository's own events and false of
+   * this device's unpushed ones, which sort below it whenever another device's
+   * clock ran ahead. The set names the exceptions, so the watermark can stay on
+   * and still do its real job, which is to stop an event the base already holds
+   * being applied to it a second time.
+   *
+   * Bounded by the clock skew between devices, so a handful of ids at most, and
+   * it never needs to survive a restart: by then the cache covers the whole log
+   * and no exception applies.
+   */
+  private exempt = new Set<string>();
+  /**
+   * Set when the log on disk cannot be read, and cleared only by the user
+   * choosing to start a new one.
+   *
+   * Separate from `writeFailure` because they are different facts with
+   * different lifetimes. A failed write is transient and clears itself on the
+   * next success. An unreadable log stays true until somebody acts on it, and
+   * it is what stops the app writing over the only copy of unsynced work. They
+   * were one field, so a write that recovered announced the damage was over.
+   */
+  private logUnreadable: string | null = null;
+  /** The greatest event id a push has acknowledged. Below it, the repo has a copy. */
+  private pushedThrough: string | undefined;
+  /** Events appended since the cache was last rewritten. */
+  private sinceCache = 0;
+  private writing: Promise<void> = Promise.resolve();
+  /** The last write error, so a recovery can clear the notice it raised. */
+  private writeFailure: unknown = null;
+  /**
+   * The id every event this device writes is stamped with, and the folder its
+   * events land in under events/<deviceId>/.
+   *
+   * Not readonly: it starts as a generated ULID so a device that has never been
+   * named still writes somewhere unique, and becomes the name the user chose as
+   * soon as they choose one. There used to be two of these, a ULID here and a
+   * name in settings that nothing read, so the wizard's promise about where
+   * events would be written was true of nothing.
+   */
+  private deviceId: string;
+  private tracker!: Tracker;
+  private readonly listeners = new Set<() => void>();
+
+  private log: Event[] = [];
+  private snapshot: Snapshot;
+  private flushedAt: number | null = null;
+
+  constructor(opts: StoreOptions = {}) {
+    this.nowFn = opts.now ?? Date.now;
+    this.storage =
+      opts.storage === undefined
+        ? typeof localStorage === 'undefined'
+          ? null
+          : localStorage
+        : opts.storage;
+
+    this.vault = opts.vault;
+    this.files = opts.files;
+
+    const stored = readStorage(this.storage, DEVICE_KEY);
+    this.deviceId = stored ?? ulid();
+    if (stored === null) writeStorage(this.storage, DEVICE_KEY, this.deviceId);
+
+    this.log = [...(opts.seed ?? [])];
+
+    const savedTheme = readStorage(this.storage, THEME_KEY);
+    const state = replay(this.log);
+    // Left unset. A generated ULID in this field would show up pre-filled in
+    // the wizard as a 26-character string nobody typed, which is exactly what a
+    // real user would keep.
+    const settings = cloneSettings(DEFAULT_SETTINGS);
+    this.snapshot = {
+      state,
+      settings,
+      setupDone: false,
+      events: this.log,
+      runningTaskId: null,
+      now: this.nowFn(),
+      theme: isTheme(savedTheme) ? savedTheme : state.settings.theme,
+      pendingMs: 0,
+      pendingSince: null,
+      idleGap: null,
+      storageError: null,
+    };
+    // After the snapshot, because the Tracker is built from the settings on it.
+    this.tracker = this.newTracker();
+  }
+
+  /**
+   * Reads settings out of the platform store.
+   *
+   * Separate from the constructor because it is asynchronous and the app has to
+   * render before it finishes. Until it does, the defaults apply, which is the
+   * same thing a first run looks like.
+   */
+  async load(): Promise<void> {
+    if (this.files !== undefined) {
+      const { events, state, cached, base, damaged } = await disk.load(this.files);
+      this.log = events;
+      // Kept, not just used once. Anything that replays the whole log later
+      // needs the state the boot replayed it onto, or it rebuilds the history
+      // from whatever the log still happens to hold.
+      this.base = base;
+      // Only what is in front of the cache has to be replayed next time.
+      this.sinceCache = cached ? 0 : events.length;
+      this.logUnreadable = damaged ?? null;
+      this.publish({
+        state,
+        events,
+        // Stops every later write to the log. An unreadable file is the only
+        // copy of whatever had not synced, and overwriting it makes the loss
+        // permanent, which is the one outcome worth refusing to save over.
+        storageError: damaged ?? null,
+      });
+    }
+    if (this.vault === undefined) return;
+    /*
+     * A vault that refuses to answer leaves the defaults in place rather than
+     * taking the boot down with it.
+     *
+     * The caller chains the first sync onto this promise, so a rejection here
+     * skipped the sync as well, which meant one unreadable settings key stopped
+     * the work already on disk from ever reaching the repository. Defaults are
+     * a bad settings screen; no sync is lost work.
+     */
+    let raw: string | null = null;
+    let setup: string | null = null;
+    try {
+      [raw, setup] = await Promise.all([this.vault.get(SETTINGS_KEY), this.vault.get(SETUP_KEY)]);
+    } catch {
+      return;
+    }
+    const patch: Partial<Snapshot> = { setupDone: setup === 'true' };
+    if (raw !== null) {
+      const parsed = safeJson(raw);
+      const result = validateSettings(parsed);
+      // A settings file that fails validation is kept out rather than partly
+      // applied. Half-loading it is how a bad value ends up written back over
+      // a good one.
+      if (result.ok) {
+        patch.settings = result.value;
+        this.adoptDeviceId(result.value.deviceId);
+        this.retrackIfNeeded(this.snapshot.settings, result.value);
+        if (isTheme(result.value.theme)) patch.theme = result.value.theme;
+      }
+    }
+    this.publish(patch);
+  }
+
+  /**
+   * Merges a settings patch, persists all of it locally, and syncs the part
+   * that is allowed to travel.
+   *
+   * The split is the whole point. `toSyncable` drops the GitHub token, the
+   * calendar secret, the worker URL (it carries a path secret) and the device
+   * identity, and only what survives that goes into the event log.
+   */
+  saveSettings(patch: Partial<Settings>): void {
+    const merged: Settings = {
+      ...this.snapshot.settings,
+      ...patch,
+      github: { ...this.snapshot.settings.github, ...patch.github },
+      calendar: { ...this.snapshot.settings.calendar, ...patch.calendar },
+      worker: { ...this.snapshot.settings.worker, ...patch.worker },
+    };
+    if (patch.deviceId !== undefined) this.adoptDeviceId(patch.deviceId.trim());
+    this.retrackIfNeeded(this.snapshot.settings, merged);
+    void this.vault?.set(SETTINGS_KEY, JSON.stringify(merged));
+    if (patch.theme !== undefined) writeStorage(this.storage, THEME_KEY, patch.theme);
+
+    const syncable = toSyncable(merged);
+    this.commit(
+      [
+        this.event('update', 'settings', 'app', {
+          theme: syncable.theme,
+          dayStartOffsetMs: syncable.dayStartOffsetMs,
+          idleThresholdMs: syncable.idleThresholdMs,
+          workdayStart: syncable.workdayStart,
+          workdayEnd: syncable.workdayEnd,
+          github: syncable.github,
+          calendar: syncable.calendar,
+        }),
+      ],
+      { settings: merged, theme: merged.theme },
+    );
+  }
+
+  /**
+   * Answers an idle gap.
+   *
+   * `null` means it was a break and nothing is credited. A task id credits it
+   * there, which is how "I was reading about this on paper" gets recorded. No
+   * argument gives it back to whatever was running when the gap opened, which
+   * is not necessarily what is running now.
+   */
+  resolveIdle(taskId?: string | null): void {
+    const gap = this.snapshot.idleGap;
+    if (gap === null) return;
+    // Cleared first so `publish` is free to take the next one out of the queue.
+    // Answering one question is what makes room for the next, rather than
+    // discarding it.
+    this.commit(this.tracker.resolveIdle(gap, taskId), { idleGap: null });
+  }
+
+  /** Records that the wizard is done, so it does not open again. */
+  finishSetup(): void {
+    void this.vault?.set(SETUP_KEY, 'true');
+    this.publish({ setupDone: true });
+  }
+
+  /** The whole log, for the export button. */
+  exportJson(): string {
+    return JSON.stringify({ version: 1, exported: this.nowFn(), events: this.log }, null, 2);
+  }
+
+  /**
+   * Merges an exported log back in.
+   *
+   * Merged rather than replaced, and replay dedupes by event id, so importing
+   * the same file twice is harmless and importing another device's export is a
+   * merge rather than an overwrite.
+   *
+   * Through `merge` rather than `commit`, because an imported event is an event
+   * from elsewhere in every sense that matters here: it carries whatever
+   * timestamp it was minted with, so it can sort anywhere in the log, and only
+   * a replay of the whole log puts it in its place. Folded onto the end it
+   * would win every last-write-wins field it touches simply for having been
+   * imported last, which would quietly rewrite the history the file was meant
+   * to restore.
+   */
+  importJson(text: string): { ok: true; added: number } | { ok: false; error: string } {
+    const parsed = safeJson(text);
+    const events = (parsed as { events?: unknown } | undefined)?.events;
+    if (!Array.isArray(events)) return { ok: false, error: 'That file has no events in it.' };
+    return { ok: true, added: this.merge(events.filter(isEventish)) };
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  getSnapshot = (): Snapshot => this.snapshot;
+
+  /** Tracked time including subtasks, with the unflushed stretch added on. */
+  trackedFor = (taskId: string): number => {
+    const stored = taskTotalTime(this.snapshot.state, taskId);
+    return taskId === this.snapshot.runningTaskId ? stored + this.snapshot.pendingMs : stored;
+  };
+
+  addTask(title: string, patch: Record<string, unknown> = {}): string {
+    const id = ulid();
+    const now = this.nowFn();
+    this.commit([
+      this.event('create', 'task', id, {
+        title,
+        projectId: DEFAULT_PROJECT_ID,
+        isDone: false,
+        timeEstimate: 0,
+        dueDay: dayStr(now, this.snapshot.state.settings.dayStartOffsetMs),
+        ...patch,
+      }),
+    ]);
+    return id;
+  }
+
+  toggleDone(taskId: string, done: boolean): void {
+    // Finishing the running task stops the timer, and stops it first, so the
+    // seconds since the last flush land on the task that earned them instead of
+    // being thrown away by the act of finishing.
+    const stopping = done && this.snapshot.runningTaskId === taskId;
+    const stopped = stopping ? this.stopEvents() : [];
+    this.commit(
+      [
+        ...stopped,
+        this.event('update', 'task', taskId, { isDone: done, doneOn: done ? this.nowFn() : null }),
+      ],
+      stopping ? { runningTaskId: null } : {},
+    );
+  }
+
+  start(taskId: string): void {
+    const events = this.tracker.start(taskId);
+    this.flushedAt = this.nowFn();
+    this.commit(events, { runningTaskId: taskId });
+  }
+
+  stop(): void {
+    this.commit(this.stopEvents(), { runningTaskId: null });
+  }
+
+  /**
+   * One turn of the clock.
+   *
+   * Two rates in one call: the display moves every tick so a running timer is
+   * visibly running, and the log is written every FLUSH_MS so it stays a log
+   * rather than a stream.
+   */
+  tick(): void {
+    const now = this.nowFn();
+    if (this.snapshot.runningTaskId !== null && this.flushedAt !== null) {
+      if (now - this.flushedAt >= FLUSH_MS) {
+        const events = this.tracker.onTick();
+        this.flushedAt = now;
+        this.commit(events);
+        return;
+      }
+    }
+    this.publish({});
+  }
+
+  setTheme(theme: Theme): void {
+    // Written to the log so it syncs, and to local storage so it survives a
+    // reload before any log has been loaded.
+    writeStorage(this.storage, THEME_KEY, theme);
+    this.commit([this.event('update', 'settings', 'app', { theme })], { theme });
+  }
+
+  /** The id this device stamps its events with. The wizard states this. */
+  get device(): string {
+    return this.deviceId;
+  }
+
+  /**
+   * A Tracker carrying the settings that decide what a tracked second means.
+   *
+   * `dayOffsetMs` is the one that was missing, and it was not cosmetic. The
+   * offset is honoured everywhere time is READ (Today, the consistency grid,
+   * the MCP tools), but the day a `timeDelta` is stamped with is decided inside
+   * the Tracker. Without it, a second tracked after midnight but before the
+   * offset was written under day D and read back under D-1: the work vanished
+   * from the day it belonged to and appeared on one the user had finished.
+   *
+   * `idleThresholdMs` had no effect at all, so a machine that slept for an hour
+   * banked the hour as work whatever the user had configured.
+   */
+  private newTracker(settings: Settings = this.snapshot.settings): Tracker {
+    return new Tracker({
+      deviceId: this.deviceId,
+      now: this.nowFn,
+      dayOffsetMs: settings.dayStartOffsetMs,
+      idleThresholdMs: settings.idleThresholdMs,
+    });
+  }
+
+  /**
+   * Rebuilds the Tracker when a setting it was constructed with changes.
+   *
+   * The Tracker reads these once, so a settings change that did not rebuild it
+   * would apply everywhere except where the time is actually stamped. Stopping
+   * first banks the seconds since the last flush under the old settings, which
+   * is where they were earned.
+   */
+  private retrackIfNeeded(before: Settings, after: Settings): void {
+    if (
+      before.dayStartOffsetMs === after.dayStartOffsetMs &&
+      before.idleThresholdMs === after.idleThresholdMs
+    ) {
+      return;
+    }
+    if (this.snapshot.runningTaskId !== null) this.stop();
+    this.tracker = this.newTracker(after);
+  }
+
+  /**
+   * Adopts a new device name.
+   *
+   * The running timer is stopped first so the seconds since the last flush are
+   * banked under the id that earned them, and because the Tracker stamps events
+   * with the id it was built with: keeping the old one would write the next
+   * delta to the previous folder.
+   */
+  private adoptDeviceId(next: string): void {
+    if (next === '' || next === this.deviceId || !isValidDeviceId(next)) return;
+    if (this.snapshot.runningTaskId !== null) this.stop();
+    this.deviceId = next;
+    writeStorage(this.storage, DEVICE_KEY, next);
+    this.tracker = this.newTracker();
+  }
+
+  /** A field-level change to a task. The detail view is the main caller. */
+  patchTask(taskId: string, patch: Record<string, unknown>): void {
+    this.commit([this.event('update', 'task', taskId, patch)]);
+  }
+
+  addSubtask(parentId: string, title: string): string {
+    return this.addTask(title, { parentId });
+  }
+
+  deleteTask(taskId: string): void {
+    const stopping = this.snapshot.runningTaskId === taskId;
+    const stopped = stopping ? this.stopEvents() : [];
+    this.commit(
+      [...stopped, this.event('delete', 'task', taskId, {})],
+      stopping ? { runningTaskId: null } : {},
+    );
+  }
+
+  addProject(title: string): string {
+    const id = ulid();
+    this.commit([
+      this.event('create', 'project', id, {
+        title,
+        color: nextColor(Object.keys(this.snapshot.state.projects).length),
+        isArchived: false,
+      }),
+    ]);
+    return id;
+  }
+
+  addTag(title: string): string {
+    const id = ulid();
+    this.commit([
+      this.event('create', 'tag', id, {
+        title,
+        color: nextColor(Object.keys(this.snapshot.state.tags).length),
+      }),
+    ]);
+    return id;
+  }
+
+  private stopEvents(): Event[] {
+    const events = this.tracker.stop();
+    this.flushedAt = null;
+    return events;
+  }
+
+  private event(
+    type: 'create' | 'update' | 'delete',
+    entity: 'task' | 'project' | 'tag' | 'settings',
+    entityId: string,
+    payload: unknown,
+  ): Event {
+    return newEvent({ deviceId: this.deviceId, type, entity, entityId, payload, ts: this.nowFn() });
+  }
+
+  /**
+   * Appends locally-made events and folds them onto the state.
+   *
+   * Folded forward rather than replayed from the beginning. Replay's merge is
+   * last-write-wins in `(ts, deviceId, id)` order, and a locally-made event
+   * always sorts after everything already folded, so folding it onto the
+   * current state gives the same answer as replaying the log. It is also the
+   * difference between a constant cost per action and one that grows with the
+   * length of the log: this runs on every tick of a running timer.
+   *
+   * Events arriving from another device are NOT folded this way; they can sort
+   * anywhere, so `merge` below replays.
+   */
+  /**
+   * Replays the whole log onto the base, which is the only correct answer once
+   * events can sort anywhere.
+   *
+   * The watermark stays on the base and the filtering happens here, because
+   * `replay` applies one rule to every event and this needs two: an event from
+   * outside is filtered by the watermark, and one of this device's own that
+   * merely sorts below it is not. `foldBase` then strips the watermark only
+   * because it has already been applied.
+   */
+  private replayAll(): State {
+    const covered = this.base?.coversThrough;
+    if (covered === undefined) return replay([...this.log], this.base);
+    const applicable = this.log.filter(e => e.id > covered || this.exempt.has(e.id));
+    return replay(applicable, foldBase(this.base));
+  }
+
+  private commit(events: readonly Event[], patch: Partial<Snapshot> = {}): void {
+    if (events.length === 0) {
+      this.publish(patch);
+      return;
+    }
+    this.log = [...this.log, ...events];
+    this.sinceCache += events.length;
+    // Minted here, so not in the base whatever its id says. Without this the
+    // fold shows the user their action and the next full replay takes it away.
+    const covered = this.base?.coversThrough;
+    if (covered !== undefined) {
+      for (const event of events) if (event.id <= covered) this.exempt.add(event.id);
+    }
+    this.publish({ ...patch, state: replay([...events], foldBase(this.snapshot.state)), events: this.log });
+    this.persist();
+  }
+
+  /**
+   * Folds in events from elsewhere, which means replaying.
+   *
+   * A remote event can carry any timestamp, so it can sort before events
+   * already applied, and last-write-wins only gives the right answer if the
+   * whole log is ordered together. This is the one path that pays for a full
+   * replay, and it runs on a sync rather than on a keystroke.
+   */
+  merge(remote: readonly Event[]): number {
+    const known = new Set(this.log.map(e => e.id));
+    const fresh = remote.filter(e => typeof e?.id === 'string' && !known.has(e.id));
+    if (fresh.length === 0) return 0;
+    this.log = [...this.log, ...fresh];
+    this.sinceCache += fresh.length;
+    // Onto the base, not from nothing. Replaying the log alone would discard
+    // everything the base accounts for and the log no longer holds, which after
+    // a sync or a boot from a compacted log is most of the user's history.
+    this.publish({ state: this.replayAll(), events: this.log });
+    this.persist();
+    return fresh.length;
+  }
+
+  /**
+   * Takes the repository's view as the base and keeps local work on top of it.
+   *
+   * `pullState` rather than the raw events, because once the repository has
+   * compacted, the events alone no longer describe it: the snapshot is part of
+   * the answer. Rebasing what this device has not yet pushed onto that state is
+   * both the merge and the local compaction, since everything below the push
+   * watermark is now represented by the state rather than by a log entry.
+   */
+  adoptRemote(remote: State): void {
+    const keep = this.pending();
+    this.log = keep;
+    this.sinceCache = 0;
+    this.base = remote;
+    // The unpushed events that sort below the repository's watermark. They are
+    // this device's own and are genuinely not in the snapshot, so they are the
+    // exceptions the watermark must not touch.
+    this.exempt = new Set(
+      remote.coversThrough === undefined
+        ? []
+        : keep.filter(e => e.id <= remote.coversThrough!).map(e => e.id),
+    );
+    this.publish({ state: this.replayAll(), events: keep });
+    // Forced, so the cache on disk describes the state that was just adopted
+    // rather than one several syncs behind it.
+    this.persist(true);
+  }
+
+  /** Events no push has acknowledged. These are the only copy this device has. */
+  pending(): Event[] {
+    return disk.unpushed(this.log, this.pushedThrough);
+  }
+
+  /**
+   * Records that everything up to `watermark` is in the repository.
+   *
+   * The local log is then truncated to what is above it, because below it this
+   * is no longer the only copy. Until a push says so, nothing is dropped.
+   */
+  markPushed(watermark: string | undefined): void {
+    if (watermark === undefined) return;
+    this.pushedThrough = watermark;
+    this.log = disk.unpushed(this.log, watermark);
+    this.publish({ events: this.log });
+    this.persist(true);
+  }
+
+  /**
+   * Writes the log, and rewrites the cache when enough has accumulated in front
+   * of it. Serialised through one promise so two rapid changes cannot interleave
+   * and leave a half-written file.
+   */
+  private persist(force = false): void {
+    const files = this.files;
+    if (files === undefined) return;
+    /*
+     * Nothing is written at all while the log cannot be read, the cache
+     * included.
+     *
+     * The log because those bytes are the only copy of whatever has not synced.
+     * The cache because it describes a log this app cannot read, so it buys
+     * nothing, and because the notice on screen tells the user nothing is being
+     * saved. A file written behind that sentence makes it a lie.
+     */
+    if (this.logUnreadable !== null) return;
+    const events = this.log;
+    const state = this.snapshot.state;
+    /*
+     * The watermark is captured here, with the state it belongs to, not read
+     * again when the write runs.
+     *
+     * Writes are queued behind one promise, so more events can be appended
+     * between scheduling and writing. Reading the watermark later paired a state
+     * with an id greater than anything it accounted for, and the next boot
+     * filtered out the events in between: one lost task per cache rewrite,
+     * silently.
+     */
+    const covers = this.covers();
+    const rewriteCache = force || this.sinceCache >= disk.CACHE_EVERY;
+    if (rewriteCache) this.sinceCache = 0;
+
+    this.writing = this.writing.then(async () => {
+      /*
+       * Cache first, then the log. The ordering is the whole safety property.
+       *
+       * A cache newer than the log is always safe: replay discards everything
+       * at or below the watermark, so log entries the cache already accounts
+       * for are simply dropped. A log newer than the cache is not: after
+       * `markPushed` or `adoptRemote` the log no longer holds the events the
+       * cache is supposed to carry, and if the cache write is the one that
+       * fails, the pair describes nothing at all.
+       *
+       * Writing the cache first also means a failure there stops the log write,
+       * so the fuller log stays on disk rather than being replaced by a
+       * truncated one that nothing accounts for.
+       */
+      try {
+        if (rewriteCache) await disk.writeCache(files, covers, state);
+        await disk.writeLog(files, events);
+        if (this.writeFailure !== null) this.publish({ storageError: null });
+        this.writeFailure = null;
+      } catch (err) {
+        this.writeFailure = err;
+        this.publish({
+          storageError: `Could not save to disk: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    });
+  }
+
+  /** The greatest event id the current state accounts for. */
+  private covers(): string | undefined {
+    const inLog = disk.watermarkOf(this.log);
+    if (inLog === undefined) return this.pushedThrough;
+    if (this.pushedThrough === undefined) return inLog;
+    return inLog > this.pushedThrough ? inLog : this.pushedThrough;
+  }
+
+  /**
+   * Starts a new log, keeping the unreadable one.
+   *
+   * The only way out of a damaged log, and deliberately a decision the user
+   * makes rather than something the app does on their behalf: the file it moves
+   * aside may be the only place their unsynced work still exists.
+   */
+  async startFreshLog(): Promise<string | null> {
+    const files = this.files;
+    if (files === undefined) return null;
+    // Behind the same queue as every other write, so it cannot move the file
+    // out from under one that is already in flight.
+    let kept: string | null = null;
+    this.writing = this.writing.then(async () => {
+      kept = await disk.setLogAside(files, this.nowFn());
+    });
+    await this.writing;
+
+    /*
+     * The log in memory is kept, not cleared.
+     *
+     * Everything in it was typed during the degraded session, and the damaged
+     * flag is precisely what stopped it being written, so this is the only copy
+     * that has ever existed. Clearing it here would be the app doing the exact
+     * loss the degraded mode was protecting against, one click after telling
+     * the user it had protected them.
+     */
+    this.sinceCache = this.log.length;
+    this.writeFailure = null;
+    this.logUnreadable = null;
+    this.publish({ storageError: null });
+    this.persist(true);
+    await this.flush();
+    return kept;
+  }
+
+  /** Waits for every queued write. Called before anything that must not lose them. */
+  async flush(): Promise<void> {
+    await this.writing;
+  }
+
+  private publish(patch: Partial<Snapshot>): void {
+    const now = this.nowFn();
+    /*
+     * One question at a time, and never over the top of an unanswered one.
+     *
+     * Gaps queue inside the Tracker. Taking a second while the first is still
+     * on screen replaced it, and the first was then never asked about and its
+     * time never credited: exactly the silent loss the subtract-first design
+     * exists to prevent. A gap left in the queue is asked about as soon as the
+     * current one is answered.
+     */
+    const holding = 'idleGap' in patch ? patch.idleGap : this.snapshot.idleGap;
+    const gap = holding === null || holding === undefined ? this.tracker.takeGap() : null;
+    const merged = {
+      ...this.snapshot,
+      ...patch,
+      ...(gap === null ? {} : { idleGap: gap }),
+      now,
+    };
+    const running = merged.runningTaskId !== null && this.flushedAt !== null;
+    this.snapshot = {
+      ...merged,
+      pendingMs: running ? Math.max(0, now - this.flushedAt!) : 0,
+      pendingSince: running ? this.flushedAt : null,
+    };
+    for (const listener of this.listeners) listener();
+  }
+}
+
+/** A store with no log and no browser storage. Used by tests and by SSR. */
+export function emptyStore(): Store {
+  return new Store({ storage: null });
+}

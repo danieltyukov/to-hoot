@@ -1,0 +1,87 @@
+name: Bug report
+description: Something behaves differently from how it is documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem, do not open an issue. Use the Security
+        tab and "Report a vulnerability" instead, as described in SECURITY.md.
+
+        Do not paste a GitHub token, an Apps Script `/exec` URL, or a Worker URL
+        into this form. All three are credentials.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where it happened. Pick every one you have reproduced it on.
+      multiple: true
+      options:
+        - Linux desktop (AppImage)
+        - Linux desktop (deb)
+        - Android (APK)
+        - Browser (npm run dev)
+        - MCP server (Claude Code)
+        - Cloudflare Worker (Claude web)
+        - Apps Script calendar bridge
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release tag, or the commit SHA if you built from source.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and version
+      placeholder: Ubuntu 24.04, or Android 15 on a Pixel 7
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, in order, starting from a state you can describe.
+      placeholder: |
+        1. Start a timer on a task
+        2. Lock the phone for ten minutes
+        3. Reopen the app
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors, if any
+      description: >
+        Desktop logs go to the terminal when you run the binary directly.
+        Android logs come from `adb logcat`. The MCP server writes every log line
+        to stderr. Redact any token before pasting.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: sync
+    attributes:
+      label: Configuration
+      options:
+        - label: Sync to a GitHub data repository is set up
+        - label: The Apps Script calendar bridge is set up
+        - label: An MCP server is connected
+        - label: More than one device writes to the same data repository

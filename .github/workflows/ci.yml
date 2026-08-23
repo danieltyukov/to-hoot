@@ -1,0 +1,100 @@
+name: CI
+
+# Standard GitHub-hosted runners throughout. Actions minutes are free and
+# unmetered on a public repository with standard runners; a larger runner bills
+# even on a public repository, so `runs-on` never names one.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+# A second push to the same branch cancels the first. The last commit is the one
+# whose result anybody acts on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, unit tests, Playwright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Deliberately before the Apps Script bundle is built, so this runs in the
+      # exact state a fresh clone is in: no dist/ anywhere. That is the first
+      # thing anyone cloning this does, and it is the state the wizard's
+      # placeholder path exists for.
+      #
+      # Core needs no build either: vitest aliases @to-hoot/core to its source.
+      # TypeScript still resolves it through the export map, so the typecheck
+      # above is what keeps the published entry points honest.
+      - name: Unit tests, in the state a fresh clone is in
+        run: npm test
+
+      # Nothing else in CI covers this bundle, and clasp v3 no longer transpiles
+      # TypeScript, so what reaches Google has to build here or a broken bridge
+      # ships unnoticed.
+      #
+      # After the unit tests and before Playwright on purpose: the two suites
+      # then cover both states between them, the placeholder above and the real
+      # bridge source below.
+      - name: Build the Apps Script bundle
+        run: npm run build -w @to-hoot/apps-script
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: packages/ui
+
+      # The E2E config starts `vite preview` against a real build rather than
+      # the dev server, so this covers the bundle that ships.
+      - name: Playwright
+        run: npm run test:e2e
+
+      - name: Upload the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            packages/ui/playwright-report/
+            packages/ui/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  site:
+    name: Site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      # The site is outside the workspace, with its own lockfile. It is built
+      # here as well as in pages.yml because it imports the application's
+      # tokens.css from outside its own root: moving or renaming that file
+      # breaks the site, and a pull request should say so rather than the next
+      # deploy discovering it.
+      - run: npm ci
+        working-directory: site
+
+      - run: npm run build
+        working-directory: site

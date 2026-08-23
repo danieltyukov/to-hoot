@@ -1,0 +1,17 @@
+{
+  "name": "@to-hoot/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "to-hoot-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@to-hoot/core": "*",
+    "zod": "^4.4.0"
+  }
+}

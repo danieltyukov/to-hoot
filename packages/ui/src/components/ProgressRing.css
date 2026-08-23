@@ -1,0 +1,19 @@
+.ring {
+  flex: 0 0 auto;
+  /* Twelve o'clock, not three. */
+  transform: rotate(-90deg);
+}
+
+/* border-strong, not border: at zero the track is the whole mark, and a
+   hairline that faint reads as a shape still loading rather than a gauge. */
+.ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+}
+
+.ring-value {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease);
+}

@@ -1,0 +1,70 @@
+.settings {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding-inline: 12px;
+  text-align: start;
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.settings-toggle:hover {
+  background-color: var(--hover);
+}
+
+.settings-title {
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+
+.settings-summary {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.settings-content {
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.settings-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-choice .button[aria-pressed='true'] {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+
+.settings-sync {
+  gap: 8px;
+  padding-bottom: 0;
+}

@@ -1,0 +1,165 @@
+/*
+ * One task row. Hairline separators, no card, no shadow: the list is dense and a
+ * box per item turns forty tasks into forty boxes.
+ */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--row-h);
+  padding-inline: 10px;
+  padding-inline-start: calc(10px + var(--depth, 0) * 22px);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-base) var(--ease);
+}
+
+.row[data-depth='1'] {
+  --depth: 1;
+}
+
+.row:hover {
+  background-color: var(--hover);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+/* Completed work fades back rather than disappearing: it stays on the list for
+   the day it was finished, and a struck-through line is the record of that. */
+.row[data-done] {
+  color: var(--muted);
+}
+
+.row[data-done] .row-title {
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+  text-decoration-thickness: 1px;
+}
+
+.row-check {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-control);
+  color: var(--success);
+}
+
+.check-ring {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  transition:
+    fill var(--dur-quick) var(--ease),
+    stroke var(--dur-quick) var(--ease);
+}
+
+.row-check:hover .check-ring {
+  stroke: var(--muted);
+}
+
+/* pathLength="1" on the glyph is what makes a dash of 1 mean "the whole line". */
+.check-tick {
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dur-quick) var(--ease) 60ms;
+}
+
+/* The whole completion gesture finishes in 160ms: the ring fills, then the check
+   strokes in behind it. Nothing scales, nothing bounces, nothing is thrown. */
+.row[data-done] .check-ring {
+  fill: var(--success);
+  stroke: var(--success);
+}
+
+.row[data-done] .check-tick {
+  stroke-dashoffset: 0;
+}
+
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+  font-size: var(--fs-base);
+  color: inherit;
+}
+
+.row-project {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+/* A dot and a name, not a filled pill. Tags get pills; projects get this, so the
+   two taxonomies never look like the same thing. */
+.row-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.row-time {
+  flex: 0 0 auto;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  min-width: 46px;
+  text-align: end;
+}
+
+.row[data-running] .row-time {
+  color: var(--accent-hover);
+}
+
+.row-timer {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-control);
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+/* Hidden until the row is in play, but never removed: an absent control cannot
+   be focused, and the mobile tests address it by name whether or not it shows. */
+.row:hover .row-timer,
+.row:focus-within .row-timer,
+.row[data-running] .row-timer {
+  opacity: 1;
+}
+
+.row-timer:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.row[data-running] .row-timer {
+  color: var(--accent);
+}
+
+@media (pointer: coarse) {
+  .row-timer {
+    opacity: 1;
+  }
+}

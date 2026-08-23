@@ -1,0 +1,30 @@
+# The one that matters on Android: a timer must survive the app going away.
+#
+# The WebView is suspended within seconds of the app leaving the foreground, so
+# nothing in JavaScript is counting while the app is in the background. Elapsed
+# time is recomputed from the wall clock on resume, and this flow is what would
+# catch a regression back to an interval timer: a counter that only advances
+# while visible comes back reading roughly what it read on the way out.
+appId: com.tohoot.app
+---
+- launchApp:
+    clearState: true
+- tapOn: "New task"
+- inputText: "Long running work"
+- pressKey: Enter
+- tapOn: "Start timer for Long running work"
+- assertVisible: "^0:0[0-9]$"
+- pressKey: Home
+# Maestro has no sleep command, and this wait is the whole point of the flow:
+# the app has to be away long enough that a timer which stopped counting comes
+# back visibly behind the clock.
+- evalScript: ${(() => { const until = Date.now() + 70000; while (Date.now() < until); return 'waited' })()}
+# stopApp: false, or Maestro restarts the process and there is no resume to test.
+- launchApp:
+    stopApp: false
+- assertVisible: "Stop timer for Long running work"
+# Past a minute, which it can only be if the elapsed time came from the clock
+# rather than from ticks the suspended WebView never received. Anchored, so it
+# cannot be satisfied by a timeline hour label like 11:00 or 21:00.
+- assertVisible: "^1:[0-9][0-9]$"
+- takeScreenshot: timer-after-resume

@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 danieltyukov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+The three bundled fonts are not covered by the licence above. They are subsets
+of upstream families, redistributed under the SIL Open Font License 1.1, and
+each keeps its upstream notice verbatim beside the file:
+
+  packages/ui/src/fonts/sans/    Instrument Sans, OFL 1.1, packages/ui/src/fonts/sans/OFL.txt
+  packages/ui/src/fonts/serif/   Newsreader, OFL 1.1, packages/ui/src/fonts/serif/OFL.txt
+  packages/ui/src/fonts/mono/    JetBrains Mono, OFL 1.1, packages/ui/src/fonts/mono/OFL.txt
+
+Subsetting is a modification, and the OFL reserves the original family name for
+unmodified versions, so the subsets ship under renamed families: To-Hoot Sans,
+To-Hoot Serif and To-Hoot Mono. See scripts/fetch-fonts.sh.

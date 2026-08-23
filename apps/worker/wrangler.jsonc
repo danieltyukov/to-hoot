@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "to-hoot-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Belt and braces. Under the `workerd` export condition the MCP server
+  // package resolves to its own shims and the bundle pulls in no Node built-in
+  // at all, but the flag costs nothing and covers a dependency that starts to.
+  // v2 is the current flag; the older `nodejs_compat` is the 2023 shim.
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "observability": { "enabled": true }
+
+  // Deliberately absent:
+  //
+  //   durable_objects  `McpAgent` is deprecated and feature frozen, and this
+  //                    endpoint is stateless: `createMcpHandler` builds one
+  //                    instance per request and keeps nothing between them.
+  //   kv_namespaces    Nothing is cached across isolates. What is worth
+  //                    keeping is held at module scope and rebuilt whenever
+  //                    the isolate is recycled.
+  //   migrations       There is no Durable Object class to migrate.
+  //
+  // Secrets are set out of band, never in this file:
+  //
+  //   wrangler secret put MCP_PATH_SECRET
+  //   wrangler secret put GITHUB_TOKEN
+  //   wrangler secret put GITHUB_OWNER
+  //   wrangler secret put GITHUB_REPO
+  //
+  // ALLOWED_HOSTNAMES is not a secret and may go in `vars`, but it is left
+  // unset here because the deployed hostname is not known until deploy time.
+}

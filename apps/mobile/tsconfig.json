@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "types": [],
+    // apps/mobile is deliberately not an npm workspace, so the Capacitor CLI
+    // sees a flat node_modules. Core is a type-only import here, resolved by
+    // path rather than by a package link.
+    "paths": { "@to-hoot/core": ["../../packages/core/src/index.ts"] }
+  },
+  "include": ["src/**/*.ts"]
+}

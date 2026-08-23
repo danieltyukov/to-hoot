@@ -151,8 +151,13 @@ Five rules that are load-bearing:
 4. **`calendarWritten` is the idempotency ledger.** Write-back pushes
    `timeSpentOnDay[day] - calendarWritten[day]` and never a total. A repeated
    sync is a no-op.
-5. **Parent roll-up is incremental.** A child's delta is added to the parent, not
-   recomputed by walking children.
+5. **Parent totals are derived, not stored.** A parent's total time is computed at
+   read time as its own `timeSpentOnDay` sum plus each child's. It is never stored on
+   the parent and never emitted as a second event. Under a replay architecture a
+   stored roll-up can double count (if a delta is replayed twice, or emitted for both
+   child and parent) and can drift from `timeSpentOnDay`; a derived total can do
+   neither. This is a deliberate departure from super-productivity, whose incremental
+   roll-up follows from its stored-state model rather than from the data.
 
 ### Project, Tag, and Today
 
@@ -316,7 +321,7 @@ which is more than a background timer can claim on modern Android.
 
 ## 8. Calendar
 
-A Google Apps Script web app owned by `contact@danieltyukov.com`, deployed as
+A Google Apps Script web app owned by `your-calendar-account@example.com`, deployed as
 "Execute as: Me", "Who has access: Anyone".
 
 ### Interface
@@ -636,7 +641,7 @@ never committed:
     Apps Script shared secret      generated in-app
     Worker URL and path secret     user's own deployment, optional
 
-The repository contains no personal identifiers. `contact@danieltyukov.com`
+The repository contains no personal identifiers. `your-calendar-account@example.com`
 appears nowhere in code; it is one user's setting value.
 
 ## 17. The project site
@@ -722,7 +727,10 @@ Google requires a human to create and authorize a script, so this cannot be full
 automated. The wizard makes it mechanical:
 
 1. Generates a random shared secret and shows the complete, ready-to-paste Apps
-   Script source with that secret already in place, with a copy button.
+   Script source with a copy button. The secret is **not** substituted into the
+   source. It is shown separately, to be added as a Script Property named
+   `TO_HOOT_SECRET`, because `clasp push` uploads source to a Google-hosted
+   project and a secret baked into source would be exposed twice over.
 2. Links to `script.google.com`, and lists the exact clicks: new project, paste,
    enable the Calendar advanced service, deploy as web app, execute as me, anyone
    with access.

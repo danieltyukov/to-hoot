@@ -1,0 +1,167 @@
+/*
+ * The day grid. Positions come from timeline-layout.ts as inline styles; this
+ * file is colour, type and the shape of each piece.
+ */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-inline-start: 1px solid var(--border);
+}
+
+.timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.timeline-totals {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: var(--fs-mini);
+  color: var(--text);
+}
+
+.timeline-sep {
+  color: var(--faint);
+}
+
+.timeline-grid {
+  position: relative;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.timeline-body {
+  position: relative;
+}
+
+.hour {
+  position: absolute;
+  inset-inline: 0;
+  height: 0;
+}
+
+/* Right-aligned and nudged up, so the label reads as sitting on the line rather
+   than hanging below it. The grid's top padding is what keeps the first one
+   from being clipped by the scroll container.
+
+   10px is below the type scale on purpose: this is the one place in the app
+   where a label has to disappear until it is looked for. */
+.hour-label {
+  position: absolute;
+  inset-inline-start: 0;
+  display: block;
+  padding-inline-end: 8px;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: end;
+  color: var(--faint);
+}
+
+.hour-line {
+  position: absolute;
+  inset-inline-end: 0;
+  border-top: 1px solid var(--border);
+}
+
+.lane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.lane-events {
+  inset-inline-end: 8px;
+}
+
+/* The specified radius is 5px, which on a 9px-wide pill the browser clamps to
+   4.5px anyway. Writing the full round says what the shape actually is and
+   keeps the radius audit meaningful. */
+.tracked-pill {
+  position: absolute;
+  border-radius: 999px;
+}
+
+/* An event carries a hairline all round and a thicker edge in the project
+   colour, so the project is legible without the whole box being tinted. */
+.event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-inline-start-width: 2.5px;
+  border-radius: var(--r-control);
+  background: var(--surface);
+  font-size: var(--fs-mini);
+  line-height: 1.25;
+}
+
+/* Under about 34px there is no second line to put the time on. Putting it there
+   anyway is not a subtle overflow; the time simply disappears. */
+.event[data-inline-time] {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.event-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.event-time {
+  flex: 0 0 auto;
+  font-size: var(--fs-micro);
+  color: var(--muted);
+}
+
+.now {
+  position: absolute;
+  inset-inline: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.now-line {
+  position: absolute;
+  inset-inline-end: 0;
+  border-top: 1px solid var(--accent);
+}
+
+.now-dot {
+  position: absolute;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/*
+ * The chip uses accent-hover rather than accent: filled, with surface-coloured
+ * text on it, accent clears 4.5:1 only in dark. accent-hover clears it in both,
+ * being the darker clay on light and the lighter clay on dark.
+ */
+.now-chip {
+  position: absolute;
+  inset-inline-end: 8px;
+  top: -9px;
+  padding: 1px 5px;
+  border-radius: var(--r-control);
+  background: var(--accent-hover);
+  color: var(--surface);
+  font-size: var(--fs-micro);
+  line-height: 16px;
+}
