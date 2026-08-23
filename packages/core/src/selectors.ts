@@ -103,8 +103,16 @@ export function plannedToday(state: State, now: number = Date.now()): number {
   return todayTasks(state, now).reduce((sum, t) => sum + t.timeEstimate, 0);
 }
 
-/** The last `days` logical days, oldest first so the most recent is last. */
-function dayWindow(days: number, now: number, offsetMs: number): string[] {
+/**
+ * The last `days` logical days, oldest first so the most recent is last.
+ *
+ * Exported because the consistency grid has to label the same window these
+ * numbers are counted over. It was duplicated in the UI for a while and the two
+ * copies had already drifted: the copy was missing the clamp, so a negative or
+ * fractional `days` produced a window of a different length from the array it
+ * was labelling, and the labels would have slid off the data silently.
+ */
+export function dayWindow(days: number, now: number, offsetMs = 0): string[] {
   const count = Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 0;
   const base = new Date(now - offsetMs);
   const out: string[] = [];
