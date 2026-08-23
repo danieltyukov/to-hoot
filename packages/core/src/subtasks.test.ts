@@ -76,3 +76,27 @@ describe('subtask cap resolution', () => {
     expect(s.tasks.a).toBeUndefined();
   });
 });
+
+describe('deleting a parent', () => {
+  it('leaves the children reachable as roots instead of dangling', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, entityId: 'p', type: 'create', payload: { title: 'p', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 2, entityId: 'c1', type: 'create', payload: { title: 'c1', projectId: 'inbox', parentId: 'p' } }),
+      ev({ id: '3', ts: 3, entityId: 'c2', type: 'create', payload: { title: 'c2', projectId: 'inbox', parentId: 'p' } }),
+      ev({ id: '4', ts: 4, entityId: 'p', type: 'delete', payload: {} }),
+    ]);
+    expect(s.tasks.p).toBeUndefined();
+    // A view that renders roots as !parentId must still find them.
+    const roots = Object.values(s.tasks).filter(t => !t.parentId).map(t => t.id).sort();
+    expect(roots).toEqual(['c1', 'c2']);
+    expect(s.tasks.c1.parentId).toBeUndefined();
+    expect(s.tasks.c2.parentId).toBeUndefined();
+  });
+
+  it('clears a parentId that points at a task the log never created', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, entityId: 'orphan', type: 'create', payload: { title: 'o', projectId: 'inbox', parentId: 'never-created' } }),
+    ]);
+    expect(s.tasks.orphan.parentId).toBeUndefined();
+  });
+});

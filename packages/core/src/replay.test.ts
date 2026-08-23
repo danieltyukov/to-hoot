@@ -58,6 +58,46 @@ describe('replay', () => {
     expect(s.tasks.t1.title).toBe('z');
   });
 
+  it('applies a duplicated event once, because sync delivers at least once', () => {
+    const evs = [
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 5, type: 'timeDelta', payload: { day: '2026-08-23', ms: 1000 } }),
+      ev({ id: '3', ts: 6, payload: { title: 'b' } }),
+    ];
+    const once = replay(evs);
+    // A push that succeeded but whose response was lost gets retried, so the
+    // same event id arrives twice. Last write wins survives that; a delta does
+    // not, and the duplicate would be invisible.
+    const twice = replay([evs[0]!, evs[1]!, evs[2]!, evs[1]!, evs[2]!]);
+    expect(twice).toEqual(once);
+    expect(twice.tasks.t1.timeSpentOnDay['2026-08-23']).toBe(1000);
+  });
+
+  it('lets a create after a delete bring the entity back', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'first', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 3, type: 'timeDelta', payload: { day: '2026-08-23', ms: 5000 } }),
+      ev({ id: '3', ts: 5, type: 'delete', payload: {} }),
+      ev({ id: '4', ts: 9, type: 'create', payload: { title: 'again', projectId: 'inbox' } }),
+      ev({ id: '5', ts: 10, payload: { notes: 'after' } }),
+    ]);
+    expect(s.tasks.t1.title).toBe('again');
+    expect(s.tasks.t1.notes).toBe('after');
+    // The time belonged to the deleted task, not to the one that took its id.
+    expect(s.tasks.t1.timeSpent).toBe(0);
+  });
+
+  it('still loses an update that falls between a delete and a later create', () => {
+    const s = replay([
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'first', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 5, type: 'delete', payload: {} }),
+      ev({ id: '3', ts: 7, payload: { title: 'ghost', notes: 'ghost' } }),
+      ev({ id: '4', ts: 9, type: 'create', payload: { title: 'again', projectId: 'inbox' } }),
+    ]);
+    expect(s.tasks.t1.title).toBe('again');
+    expect(s.tasks.t1.notes).toBeUndefined();
+  });
+
   it('mutual exclusion: setting dueWithTime clears dueDay', () => {
     const s = replay([
       ev({ id: '1', ts: 1, type: 'create', payload: { title: 'a', projectId: 'inbox', dueDay: '2026-08-23' } }),
@@ -163,5 +203,33 @@ describe('replay determinism', () => {
     expect(Object.keys(state.tasks).length).toBeGreaterThan(0);
     const tracked = Object.values(state.tasks).reduce((sum, t) => sum + t.timeSpent, 0);
     expect(tracked).toBeGreaterThan(0);
+  });
+});
+
+function permutations(items: Event[]): Event[][] {
+  if (items.length <= 1) return [items];
+  const out: Event[][] = [];
+  for (let i = 0; i < items.length; i++) {
+    const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+    for (const tail of permutations(rest)) out.push([items[i]!, ...tail]);
+  }
+  return out;
+}
+
+describe('delete and re-create determinism', () => {
+  it('converges under all 720 permutations of a log that deletes and re-creates', () => {
+    const evs = [
+      ev({ id: '1', ts: 1, type: 'create', payload: { title: 'first', projectId: 'inbox' } }),
+      ev({ id: '2', ts: 3, type: 'timeDelta', payload: { day: '2026-08-23', ms: 5000 } }),
+      ev({ id: '3', ts: 5, type: 'delete', payload: {} }),
+      ev({ id: '4', ts: 9, type: 'create', payload: { title: 'again', projectId: 'inbox' } }),
+      ev({ id: '5', ts: 10, payload: { notes: 'after' } }),
+      ev({ id: '6', ts: 11, type: 'timeDelta', payload: { day: '2026-08-23', ms: 7000 } }),
+    ];
+    const perms = permutations(evs);
+    expect(perms).toHaveLength(720);
+    const reference = replay(evs);
+    expect(reference.tasks.t1.timeSpent).toBe(7000);
+    for (const perm of perms) expect(replay(perm)).toEqual(reference);
   });
 });

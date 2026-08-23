@@ -20,6 +20,7 @@
 
 import type { Event } from './events.js';
 import { compareEvents, isWellFormed } from './events.js';
+import type { EventType } from './events.js';
 import { newTask, type Project, type Tag, type Task } from './models.js';
 import { cloneState, emptyState, type State } from './state.js';
 
@@ -221,22 +222,9 @@ function tsOf(e: Event): number {
  */
 export function replay(events: Event[], base?: State): State {
   const state = base ? cloneState(base) : emptyState();
-  const sorted = events.filter(isWellFormed).sort(compareEvents);
+  const sorted = dedupeById(events.filter(isWellFormed).sort(compareEvents));
 
-  // Rule 4. Collected before anything is applied, so a delete beats an update
-  // that carries a later timestamp.
-  const tombstoned = new Set<string>();
-  for (const e of sorted) {
-    if (e.type === 'delete' && e.entity !== 'settings') tombstoned.add(entityKey(e));
-  }
-  for (const key of tombstoned) {
-    const [entity, id] = splitKey(key);
-    if (entity === 'task') delete state.tasks[id];
-    else if (entity === 'project') delete state.projects[id];
-    else if (entity === 'tag') delete state.tags[id];
-  }
-
-  const effective = effectiveParents(declaredParents(sorted, tombstoned));
+  const effective = effectiveParents(declaredParents(sorted, finallyDeleted(sorted)));
 
   // An entity referenced before its create event has been applied is only
   // materialised if the log actually creates it. Without this a delta whose
@@ -249,15 +237,70 @@ export function replay(events: Event[], base?: State): State {
     created.add(entityKey(e));
   }
 
+  // Rule 4. Deletes are applied in the total order and leave a tombstone, so an
+  // update that sorts after a delete loses to it however late its timestamp is.
+  // Only a create that sorts strictly after the delete clears the tombstone:
+  // without that, an id would be poisoned forever, undo-delete would be
+  // impossible, and compaction could never drop a delete event.
+  const tombstoned = new Set<string>();
   for (const e of sorted) {
     const key = entityKey(e);
-    if (tombstoned.has(key)) continue;
-    if (e.type === 'create' && declaresIllegalParent(e, effective)) continue;
+    if (e.type === 'delete') {
+      if (e.entity === 'settings') continue; // settings always exist
+      removeEntity(state, e);
+      tombstoned.add(key);
+      continue;
+    }
+    if (e.type === 'create') {
+      if (declaresIllegalParent(e, effective)) continue;
+      tombstoned.delete(key);
+    } else if (tombstoned.has(key)) {
+      continue;
+    }
     applyEvent(state, e, created.has(key), effective);
   }
 
   normalize(state);
   return state;
+}
+
+/**
+ * Keeps the first copy of each event id under the total order.
+ *
+ * Sync is at-least-once by nature: a push that reaches the server but whose
+ * response is lost is retried, and the same event arrives twice. For a
+ * last-write-wins field that is harmless, applying the same value twice. For a
+ * `timeDelta` it is not, because the increments that make concurrent tracking
+ * correct also make a duplicate add a second time, silently and permanently.
+ */
+function dedupeById(sorted: Event[]): Event[] {
+  const seen = new Set<string>();
+  const out: Event[] = [];
+  for (const e of sorted) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    out.push(e);
+  }
+  return out;
+}
+
+/** Entities whose last create-or-delete in the log is the delete. */
+function finallyDeleted(sorted: Event[]): Set<string> {
+  const last = new Map<string, EventType>();
+  for (const e of sorted) {
+    if (e.type === 'create' || e.type === 'delete') last.set(entityKey(e), e.type);
+  }
+  const out = new Set<string>();
+  for (const [key, type] of last) {
+    if (type === 'delete') out.add(key);
+  }
+  return out;
+}
+
+function removeEntity(state: State, e: Event): void {
+  if (e.entity === 'task') delete state.tasks[e.entityId];
+  else if (e.entity === 'project') delete state.projects[e.entityId];
+  else if (e.entity === 'tag') delete state.tags[e.entityId];
 }
 
 function splitKey(key: string): [string, string] {
@@ -401,6 +444,14 @@ function applySettingsEvent(state: State, e: Event, payload: Record_): void {
  */
 function normalize(state: State): void {
   const tasks = Object.values(state.tasks);
+
+  // A parent that was deleted leaves its children pointing at nothing. Left
+  // alone they would appear in no subTaskIds and in no list of roots, which
+  // reads as data loss even though the rows are still there. Promote them.
+  for (const task of tasks) {
+    if (task.parentId === undefined) continue;
+    if (task.parentId === task.id || state.tasks[task.parentId] === undefined) delete task.parentId;
+  }
 
   for (const task of tasks) {
     let total = 0;
