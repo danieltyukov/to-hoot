@@ -13,6 +13,7 @@
 import type { Http, HttpResponse } from '../platform.js';
 import {
   MAX_DELETE_IDS,
+  MAX_LIST_DAYS,
   MAX_WRITE_ENTRIES,
   type BridgeErrorCode,
   type BridgeEvent,
@@ -46,14 +47,30 @@ export type CalendarErrorCode =
   | 'bad-response'
   | 'too-many-pages';
 
+/**
+ * What a multi-batch call had already done when it failed. The ledger advances
+ * only for writes that landed, so dropping this would mean writing those blocks
+ * again on the next sync rather than moving on.
+ */
+export interface PartialProgress {
+  written?: WriteResult[];
+  deleted?: string[];
+  missing?: string[];
+}
+
 export class CalendarBridgeError extends Error {
+  /** Set when some batches succeeded before this failure. */
+  readonly partial: PartialProgress | undefined;
+
   constructor(
     readonly code: CalendarErrorCode,
     readonly status: number | undefined,
     message: string,
+    partial?: PartialProgress,
   ) {
     super(message);
     this.name = 'CalendarBridgeError';
+    this.partial = partial;
   }
 }
 
@@ -71,6 +88,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Re-throws a batch failure with what the earlier batches had already done.
+ * A new error rather than a mutated one, since `partial` is readonly.
+ */
+function withPartial(err: unknown, partial: PartialProgress): unknown {
+  if (!(err instanceof CalendarBridgeError)) return err;
+  return new CalendarBridgeError(err.code, err.status, err.message, partial);
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -107,6 +133,18 @@ export class CalendarBridgeClient {
    * return nothing at all.
    */
   async listEvents(options: ListEventsOptions): Promise<BridgeEvent[]> {
+    // Checked here as well as in the script: a bad window is a caller bug, and
+    // finding out costs a round trip and an error the user cannot act on.
+    if (!Number.isFinite(options.from)) {
+      throw new CalendarBridgeError('bad-request', undefined, 'listEvents needs a finite `from` in epoch milliseconds');
+    }
+    if (!Number.isInteger(options.days) || options.days < 1 || options.days > MAX_LIST_DAYS) {
+      throw new CalendarBridgeError(
+        'bad-request',
+        undefined,
+        `listEvents needs a whole number of days between 1 and ${MAX_LIST_DAYS}, not ${options.days}`,
+      );
+    }
     const maxPages = Math.max(1, options.maxPages ?? DEFAULT_MAX_PAGES);
     const events: BridgeEvent[] = [];
     let pageToken: string | undefined;
@@ -140,9 +178,19 @@ export class CalendarBridgeClient {
   async writeLog(entries: readonly WriteLogEntry[]): Promise<WriteResult[]> {
     const written: WriteResult[] = [];
     for (const batch of chunk(entries, MAX_WRITE_ENTRIES)) {
-      const answer = await this.post({ action: 'writeLog', entries: batch });
+      let answer: BridgeOk;
+      try {
+        answer = await this.post({ action: 'writeLog', entries: batch });
+      } catch (err) {
+        throw withPartial(err, { written });
+      }
       if (answer.action !== 'writeLog' || !Array.isArray(answer.written)) {
-        throw new CalendarBridgeError('bad-response', undefined, 'the bridge answered writeLog with something else');
+        throw new CalendarBridgeError(
+          'bad-response',
+          undefined,
+          'the bridge answered writeLog with something else',
+          { written },
+        );
       }
       written.push(...answer.written);
     }
@@ -154,9 +202,19 @@ export class CalendarBridgeClient {
     const deleted: string[] = [];
     const missing: string[] = [];
     for (const batch of chunk(toHootIds, MAX_DELETE_IDS)) {
-      const answer = await this.post({ action: 'deleteLog', toHootIds: batch });
+      let answer: BridgeOk;
+      try {
+        answer = await this.post({ action: 'deleteLog', toHootIds: batch });
+      } catch (err) {
+        throw withPartial(err, { deleted, missing });
+      }
       if (answer.action !== 'deleteLog') {
-        throw new CalendarBridgeError('bad-response', undefined, 'the bridge answered deleteLog with something else');
+        throw new CalendarBridgeError(
+          'bad-response',
+          undefined,
+          'the bridge answered deleteLog with something else',
+          { deleted, missing },
+        );
       }
       deleted.push(...answer.deleted);
       missing.push(...answer.missing);

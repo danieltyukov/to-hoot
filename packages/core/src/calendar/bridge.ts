@@ -39,6 +39,8 @@ export const MAX_PAGE_SIZE = 250;
  */
 export const MAX_WRITE_ENTRIES = 50;
 export const MAX_DELETE_IDS = 100;
+/** How many events sharing one toHootId a single write will clean up. */
+export const MAX_DUPLICATE_CLEANUP = 25;
 /** Google rejects longer summaries; a task title is truncated, never dropped. */
 const MAX_SUMMARY_CHARS = 1000;
 const MAX_ID_CHARS = 200;
@@ -117,6 +119,11 @@ export interface WriteResult {
   eventId: string;
   /** False when an existing event was updated in place. */
   created: boolean;
+  /**
+   * Duplicates carrying the same id that were cleaned up during this write.
+   * Absent when there were none, which is every ordinary write.
+   */
+  duplicatesRemoved?: number;
 }
 
 export interface ListEventsOk {
@@ -425,7 +432,10 @@ export function lookupOptionsFor(toHootId: string): ListOptions {
     privateExtendedProperty: `${TO_HOOT_ID_KEY}=${toHootId}`,
     singleEvents: true,
     showDeleted: false,
-    maxResults: 2,
+    // More than one match means a previous run half failed. The page is sized
+    // to clean up a realistic pile in one pass; anything beyond it is cleaned
+    // up by the next sync, since every write does this lookup again.
+    maxResults: MAX_DUPLICATE_CLEANUP,
   };
 }
 
@@ -441,6 +451,9 @@ export function logEventResource(entry: WriteLogEntry): EventResource {
   }
   return resource;
 }
+
+/** An event that came back from the API, so its id is known to be there. */
+type StoredEvent = RawCalendarEvent & { id: string };
 
 interface TimePoint {
   ms: number;
@@ -497,13 +510,22 @@ export function pickLogCalendar(entries: CalendarListEntry[], name: string): str
   return owned?.id;
 }
 
-function findByToHootId(calendar: CalendarPort, calendarId: string, toHootId: string): RawCalendarEvent | undefined {
+/**
+ * Every event carrying this id, not just the first.
+ *
+ * There should only ever be one. Two means an earlier run inserted and then
+ * failed before it could be told what it had done, and the extra is an orphan:
+ * once the ledger moves on, the app has no reason to look at that day again and
+ * the stale event sits on the user's calendar forever. So each write cleans up
+ * what it finds, which is the only place that can.
+ */
+function findAllByToHootId(calendar: CalendarPort, calendarId: string, toHootId: string): StoredEvent[] {
   const page = calendar.list(calendarId, lookupOptionsFor(toHootId));
-  const items = page.items ?? [];
-  for (const item of items) {
-    if (item.status !== 'cancelled' && typeof item.id === 'string') return item;
+  const found: StoredEvent[] = [];
+  for (const item of page.items ?? []) {
+    if (item.status !== 'cancelled' && typeof item.id === 'string') found.push(item as StoredEvent);
   }
-  return undefined;
+  return found;
 }
 
 function handleListEvents(request: ListEventsRequest, calendar: CalendarPort): ListEventsOk {
@@ -526,11 +548,18 @@ function handleWriteLog(request: WriteLogRequest, calendar: CalendarPort): Write
   const calendarId = calendar.logCalendarId();
   const written: WriteResult[] = [];
   for (const entry of request.entries) {
-    const existing = findByToHootId(calendar, calendarId, entry.toHootId);
+    const [existing, ...duplicates] = findAllByToHootId(calendar, calendarId, entry.toHootId);
     const resource = logEventResource(entry);
-    if (existing && typeof existing.id === 'string') {
+    if (existing) {
       const updated = calendar.update(calendarId, existing.id, resource);
-      written.push({ toHootId: entry.toHootId, eventId: updated.id ?? existing.id, created: false });
+      for (const duplicate of duplicates) calendar.remove(calendarId, duplicate.id);
+      const result: WriteResult = {
+        toHootId: entry.toHootId,
+        eventId: updated.id ?? existing.id,
+        created: false,
+      };
+      if (duplicates.length > 0) result.duplicatesRemoved = duplicates.length;
+      written.push(result);
     } else {
       const inserted = calendar.insert(calendarId, resource);
       written.push({ toHootId: entry.toHootId, eventId: inserted.id ?? '', created: true });
@@ -544,13 +573,15 @@ function handleDeleteLog(request: DeleteLogRequest, calendar: CalendarPort): Del
   const deleted: string[] = [];
   const missing: string[] = [];
   for (const toHootId of request.toHootIds) {
-    const existing = findByToHootId(calendar, calendarId, toHootId);
-    if (existing && typeof existing.id === 'string') {
-      calendar.remove(calendarId, existing.id);
-      deleted.push(toHootId);
-    } else {
+    const existing = findAllByToHootId(calendar, calendarId, toHootId);
+    if (existing.length === 0) {
       missing.push(toHootId);
+      continue;
     }
+    // All of them: leaving a duplicate behind here is what makes an orphan
+    // permanent, since the ledger key goes away with the delete.
+    for (const event of existing) calendar.remove(calendarId, event.id);
+    deleted.push(toHootId);
   }
   return { ok: true, action: 'deleteLog', calendarId, deleted, missing };
 }

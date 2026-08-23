@@ -143,6 +143,49 @@ describe('WriteQueue', () => {
     expect(api.calls.map(c => c.payload)).toContain('retry');
   });
 
+  it('releases the slot even when onError itself throws', async () => {
+    // An onError that throws is the caller's bug, but paying for it with a
+    // permanently leaked concurrency slot is this queue's bug: three of them
+    // would wedge it for the rest of the session.
+    const api = controllable();
+    const q = new WriteQueue(api.write, {
+      onError: () => {
+        throw new Error('the error handler blew up');
+      },
+    });
+    for (const id of ['t1', 't2', 't3', 't4']) q.enqueue(id, id);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(q.runningCount).toBe(3);
+
+    api.calls[0]!.reject(new Error('rate limited'));
+    api.calls[1]!.reject(new Error('rate limited'));
+    await settle();
+
+    expect(api.calls.map(c => c.id)).toEqual(['t1', 't2', 't3', 't4']);
+    expect(q.runningCount).toBe(2);
+    expect(q.errorCount).toBe(2);
+
+    api.calls[2]!.resolve();
+    api.calls[3]!.resolve();
+    await settle();
+    expect(q.runningCount).toBe(0);
+    await expect(q.idle()).resolves.toBeUndefined();
+  });
+
+  it('writes anyway when editing never settles', async () => {
+    // Without a ceiling on the debounce, someone typing steadily in a title
+    // field starves the write for as long as they keep typing.
+    const api = controllable();
+    const q = new WriteQueue(api.write);
+    for (let i = 0; i < 10; i++) {
+      q.enqueue('t1', `v${i}`);
+      await vi.advanceTimersByTimeAsync(900);
+    }
+    expect(api.calls.length).toBeGreaterThanOrEqual(1);
+    // The ceiling is 5000ms from the first edit, and v5 was queued at 4500.
+    expect(api.calls[0]!.payload).toBe('v5');
+  });
+
   it('flush skips the debounce and resolves once the queue has drained', async () => {
     const api = controllable();
     const q = new WriteQueue(api.write);

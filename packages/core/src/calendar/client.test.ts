@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Http, HttpRequest, HttpResponse } from '../platform.js';
-import { MAX_WRITE_ENTRIES } from './bridge.js';
+import { MAX_DELETE_IDS, MAX_LIST_DAYS, MAX_WRITE_ENTRIES } from './bridge.js';
 import { CalendarBridgeClient, CalendarBridgeError } from './client.js';
 
 const EXEC_URL = 'https://script.google.com/macros/s/AKfycb-example/exec';
@@ -177,6 +177,22 @@ describe('CalendarBridgeClient writeLog', () => {
     expect(mock.calls[1]!.body.entries).toHaveLength(1);
   });
 
+  it('keeps what landed when a later batch fails', async () => {
+    // The ledger only advances for writes that landed. Throwing away the first
+    // batch's results means writing those blocks again on the next sync.
+    const entries = Array.from({ length: MAX_WRITE_ENTRIES + 1 }, (_, i) => entry(i));
+    const landed = [{ toHootId: 't0::2026-08-23', eventId: 'ev-1', created: true }];
+    const mock = new MockHttp()
+      .reply({ ok: true, action: 'writeLog', calendarId: 'c', written: landed })
+      .reply({ ok: false, code: 'calendar-error', error: 'Rate Limit Exceeded' });
+
+    const err = await clientFor(mock)
+      .writeLog(entries)
+      .catch((e: unknown) => e);
+    expect((err as CalendarBridgeError).code).toBe('calendar-error');
+    expect((err as CalendarBridgeError).partial?.written).toEqual(landed);
+  });
+
   it('makes no request at all for an empty batch', async () => {
     const mock = new MockHttp();
     await expect(clientFor(mock).writeLog([])).resolves.toEqual([]);
@@ -190,5 +206,30 @@ describe('CalendarBridgeClient deleteLog', () => {
     const mock = new MockHttp().reply({ ok: true, action: 'deleteLog', deleted: ['a'], missing: ['b'] });
     await expect(clientFor(mock).deleteLog(['a', 'b'])).resolves.toEqual({ deleted: ['a'], missing: ['b'] });
     expect(mock.calls[0]!.body.toHootIds).toEqual(['a', 'b']);
+  });
+
+  it('keeps what an earlier batch deleted when a later one fails', async () => {
+    const ids = Array.from({ length: MAX_DELETE_IDS + 1 }, (_, i) => `t${i}::2026-08-23`);
+    const mock = new MockHttp()
+      .reply({ ok: true, action: 'deleteLog', deleted: ['t0::2026-08-23'], missing: ['t1::2026-08-23'] })
+      .reply({ ok: false, code: 'calendar-error', error: 'Rate Limit Exceeded' });
+
+    const err = await clientFor(mock)
+      .deleteLog(ids)
+      .catch((e: unknown) => e);
+    expect((err as CalendarBridgeError).partial?.deleted).toEqual(['t0::2026-08-23']);
+    expect((err as CalendarBridgeError).partial?.missing).toEqual(['t1::2026-08-23']);
+  });
+});
+
+describe('CalendarBridgeClient argument checks', () => {
+  it('refuses a window the script would reject anyway, without the round trip', async () => {
+    const mock = new MockHttp();
+    const client = clientFor(mock);
+    for (const days of [0, -1, 1.5, MAX_LIST_DAYS + 1]) {
+      await expect(client.listEvents({ from: 0, days })).rejects.toMatchObject({ code: 'bad-request' });
+    }
+    await expect(client.listEvents({ from: Number.NaN, days: 1 })).rejects.toMatchObject({ code: 'bad-request' });
+    expect(mock.calls).toHaveLength(0);
   });
 });

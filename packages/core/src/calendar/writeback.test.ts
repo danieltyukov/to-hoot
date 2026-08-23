@@ -77,6 +77,14 @@ describe('planWriteback', () => {
     expect(actions.map(a => a.day)).toEqual(['2026-08-23']);
   });
 
+  it('ignores a day key that is not a plain YYYY-MM-DD', () => {
+    // A malformed key cannot correspond to a real write, and `logIdFor` is only
+    // unambiguous while the day half cannot contain the separator.
+    expect(planWriteback(task({ '2026-8-3': HOUR }), { anchorFor })).toEqual([]);
+    expect(planWriteback(task({}, { 'nonsense': HOUR }), { anchorFor })).toEqual([]);
+    expect(planWriteback(task({}, { 't1::2026-08-23': HOUR }), { anchorFor })).toEqual([]);
+  });
+
   it('never writes a block from a corrupt number', () => {
     const broken = task({ [DAY]: Number.NaN }, { [DAY]: HOUR });
     expect(planWriteback(broken, { anchorFor })).toEqual([]);
@@ -107,6 +115,14 @@ describe('applyWriteback', () => {
 
   it('is a no-op for an empty action list', () => {
     expect(applyWriteback({ [DAY]: HOUR }, [])).toEqual({ [DAY]: HOUR });
+  });
+
+  it('prunes a zero, which records nothing and would otherwise never leave', () => {
+    expect(applyWriteback({ [DAY]: 0, '2026-08-22': HOUR }, [])).toEqual({ '2026-08-22': HOUR });
+  });
+
+  it('prunes a key that could never have come from a real write', () => {
+    expect(applyWriteback({ nonsense: HOUR, [DAY]: Number.NaN }, [])).toEqual({});
   });
 });
 

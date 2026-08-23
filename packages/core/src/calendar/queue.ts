@@ -19,10 +19,18 @@
 export const DEFAULT_DEBOUNCE_MS = 1000;
 /** Google's per-user quota is the ceiling; three is comfortably under it. */
 export const DEFAULT_MAX_CONCURRENT = 3;
+/**
+ * How long a debounce may keep deferring a write. Without a ceiling, an entity
+ * edited every 900 ms is never written at all, and a tracked hour sits on the
+ * device while the user watches a calendar that never fills in.
+ */
+export const DEFAULT_MAX_WAIT_MS = 5000;
 
 export interface WriteQueueOptions {
   debounceMs?: number;
   maxConcurrent?: number;
+  /** Ceiling on the debounce, per entity. Never below `debounceMs`. */
+  maxWaitMs?: number;
   /**
    * Called for every failed write. Without one, failures are still counted and
    * the last is kept on `lastError`, because a write-back that quietly stops
@@ -35,12 +43,16 @@ export type WriteFn<P> = (entityId: string, payload: P) => Promise<void> | void;
 
 interface Pending<P> {
   payload: P;
+  /** Restarted by every edit. */
   timer: ReturnType<typeof setTimeout>;
+  /** Started once and never restarted, so editing cannot defer forever. */
+  ceiling: ReturnType<typeof setTimeout>;
 }
 
 export class WriteQueue<P> {
   private readonly write: WriteFn<P>;
   private readonly debounceMs: number;
+  private readonly maxWaitMs: number;
   private readonly maxConcurrent: number;
   private readonly onError: ((entityId: string, err: unknown) => void) | undefined;
 
@@ -58,6 +70,7 @@ export class WriteQueue<P> {
   constructor(write: WriteFn<P>, options: WriteQueueOptions = {}) {
     this.write = write;
     this.debounceMs = Math.max(0, options.debounceMs ?? DEFAULT_DEBOUNCE_MS);
+    this.maxWaitMs = Math.max(this.debounceMs, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
     this.maxConcurrent = Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
     this.onError = options.onError;
   }
@@ -83,15 +96,18 @@ export class WriteQueue<P> {
     if (existing) clearTimeout(existing.timer);
     this.ready.delete(entityId);
     const timer = setTimeout(() => this.promote(entityId), this.debounceMs);
-    this.pending.set(entityId, { payload, timer });
+    // The ceiling is deliberately NOT restarted: it dates from the first edit
+    // of this run, which is what makes it a ceiling rather than a longer
+    // debounce.
+    const ceiling = existing?.ceiling ?? setTimeout(() => this.promote(entityId), this.maxWaitMs);
+    this.pending.set(entityId, { payload, timer, ceiling });
   }
 
   /** Drops a queued write that has not started. Returns whether there was one. */
   cancel(entityId: string): boolean {
     const existing = this.pending.get(entityId);
     if (existing) {
-      clearTimeout(existing.timer);
-      this.pending.delete(entityId);
+      this.clearPending(entityId, existing);
       this.settleIfIdle();
       return true;
     }
@@ -109,8 +125,7 @@ export class WriteQueue<P> {
    */
   flush(): Promise<void> {
     for (const [entityId, entry] of [...this.pending]) {
-      clearTimeout(entry.timer);
-      this.pending.delete(entityId);
+      this.clearPending(entityId, entry);
       this.ready.set(entityId, entry.payload);
     }
     this.pump();
@@ -131,7 +146,10 @@ export class WriteQueue<P> {
    */
   dispose(): void {
     this.disposed = true;
-    for (const entry of this.pending.values()) clearTimeout(entry.timer);
+    for (const entry of this.pending.values()) {
+      clearTimeout(entry.timer);
+      clearTimeout(entry.ceiling);
+    }
     this.pending.clear();
     this.ready.clear();
     this.settleIfIdle();
@@ -141,10 +159,17 @@ export class WriteQueue<P> {
     return this.pending.size === 0 && this.ready.size === 0 && this.running.size === 0;
   }
 
+  /** Either timer may fire first, so both are always cleared together. */
+  private clearPending(entityId: string, entry: Pending<P>): void {
+    clearTimeout(entry.timer);
+    clearTimeout(entry.ceiling);
+    this.pending.delete(entityId);
+  }
+
   private promote(entityId: string): void {
     const entry = this.pending.get(entityId);
     if (!entry) return;
-    this.pending.delete(entityId);
+    this.clearPending(entityId, entry);
     this.ready.set(entityId, entry.payload);
     this.pump();
   }
@@ -176,17 +201,28 @@ export class WriteQueue<P> {
     } catch (err) {
       result = Promise.reject(err);
     }
-    result
-      .then(
-        () => undefined,
-        (err: unknown) => {
+    // Both settlements release the slot, and neither one is allowed to be
+    // skipped: `.then(ok, fail).then(release)` looks equivalent but drops the
+    // release when `fail` itself throws, and an onError that throws would then
+    // leak a concurrency slot per failure until the queue stops moving.
+    result.then(
+      () => this.release(entityId),
+      (err: unknown) => {
+        try {
           this.report(entityId, err);
-        },
-      )
-      .then(() => {
-        this.running.delete(entityId);
-        this.pump();
-      });
+        } catch {
+          // The callback is the caller's code and its failure is theirs to
+          // find. The write's own error is already on `lastError`, and losing
+          // the queue is not an acceptable price for reporting it.
+        }
+        this.release(entityId);
+      },
+    );
+  }
+
+  private release(entityId: string): void {
+    this.running.delete(entityId);
+    this.pump();
   }
 
   private report(entityId: string, err: unknown): void {

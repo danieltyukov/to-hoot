@@ -19,6 +19,9 @@
 import type { Task } from '../models.js';
 import type { WriteLogEntry } from './bridge.js';
 
+const DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const HH_MM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
 /** Not a character a ULID or a "YYYY-MM-DD" can contain, so the id never collides. */
 export const LOG_ID_SEPARATOR = '::';
 
@@ -69,6 +72,17 @@ export interface PlanOptions {
   days?: readonly string[];
 }
 
+/**
+ * Days are "YYYY-MM-DD" and nothing else. A key of any other shape cannot have
+ * come from `dayStr`, so there is no calendar block behind it, and acting on
+ * one would send a delete for an event that was never written. It also keeps
+ * `logIdFor` unambiguous, which rests on the day half never containing the
+ * separator.
+ */
+function isDayKey(day: string): boolean {
+  return DAY_PATTERN.test(day);
+}
+
 /** A finite number, or undefined for a value that must not become a calendar write. */
 function finite(value: number | undefined): number | undefined {
   if (value === undefined) return 0;
@@ -84,6 +98,7 @@ export function planWriteback(task: TrackedTask, options: PlanOptions): Writebac
   const actions: WritebackAction[] = [];
 
   for (const day of [...new Set(days)].sort()) {
+    if (!isDayKey(day)) continue;
     const total = finite(task.timeSpentOnDay[day]);
     const written = finite(task.calendarWritten[day]);
     if (total === undefined || written === undefined) continue;
@@ -124,16 +139,20 @@ export function applyWriteback(
   calendarWritten: Readonly<Record<string, number>>,
   applied: readonly WritebackAction[],
 ): Record<string, number> {
-  const out: Record<string, number> = { ...calendarWritten };
+  const out: Record<string, number> = {};
+  // A zero records that nothing is on the calendar for that day, which is what
+  // an absent key already says. Kept, it never leaves again: the delta is zero,
+  // so no action is ever planned for that day to clear it. Same for a key that
+  // could not have come from a real write.
+  for (const [day, ms] of Object.entries(calendarWritten)) {
+    if (isDayKey(day) && Number.isFinite(ms) && ms > 0) out[day] = ms;
+  }
   for (const action of applied) {
     if (action.kind === 'delete') delete out[action.day];
     else out[action.day] = action.totalMs;
   }
   return out;
 }
-
-const DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-const HH_MM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /**
  * Local epoch milliseconds for "HH:MM" on a "YYYY-MM-DD" day, from the local

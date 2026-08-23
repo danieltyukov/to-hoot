@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_LIST_DAYS,
   MAX_WRITE_ENTRIES,
@@ -36,6 +36,20 @@ class FakePort implements CalendarPort {
   private nextId = 1;
   private page: RawCalendarEvent[] = [];
   private nextPageToken: string | undefined;
+
+  /**
+   * Puts an event in the store as if a previous run had written it. Two of
+   * these sharing a toHootId is what a half-failed run leaves behind.
+   */
+  seedExisting(id: string, toHootId: string, summary: string): void {
+    this.events.set(id, {
+      id,
+      summary,
+      start: { dateTime: '2026-08-23T09:00:00Z' },
+      end: { dateTime: '2026-08-23T10:00:00Z' },
+      extendedProperties: { private: { toHootId } },
+    });
+  }
 
   /** Seeds what the next `list` window returns, as the real service would. */
   seedWindow(items: RawCalendarEvent[], nextPageToken?: string): void {
@@ -108,9 +122,22 @@ describe('constantTimeEquals', () => {
     expect(constantTimeEquals('a-gen', SECRET)).toBe(false);
   });
 
-  it('compares every character rather than bailing at the first mismatch', () => {
-    // A first-character mismatch and a last-character mismatch must be
-    // indistinguishable in the work done, which is the whole point.
+  it('reads every character of both strings, whichever one differs', () => {
+    // Counting the reads rather than timing them, which would be flaky. An
+    // implementation that returned at the first difference would read fewer
+    // characters for a mismatch at the front than at the back, and `===` would
+    // read none at all. This is white box on purpose: the property under test
+    // is how the comparison is done, not what it answers.
+    const spy = vi.spyOn(String.prototype, 'charCodeAt');
+    constantTimeEquals('abcdef', 'zbcdef');
+    const differsAtFront = spy.mock.calls.length;
+    spy.mockClear();
+    constantTimeEquals('abcdef', 'abcdez');
+    const differsAtBack = spy.mock.calls.length;
+    spy.mockRestore();
+
+    expect(differsAtFront).toBe(12);
+    expect(differsAtBack).toBe(12);
     expect(constantTimeEquals('abcdef', 'zbcdef')).toBe(false);
     expect(constantTimeEquals('abcdef', 'abcdez')).toBe(false);
   });
@@ -299,6 +326,41 @@ describe('handleBridgeRequest writeLog', () => {
     run({ action: 'writeLog', entries: [entry] }, port);
     run({ action: 'writeLog', entries: [entry] }, port);
     expect(port.events.size).toBe(1);
+  });
+});
+
+describe('handleBridgeRequest duplicate cleanup', () => {
+  const entry = { toHootId: 't1::2026-08-23', title: 'Write the report', start: 1_755_936_000_000, end: 1_755_939_600_000 };
+
+  it('keeps one event and removes the duplicates a half-failed run left behind', () => {
+    const port = new FakePort();
+    port.seedExisting('dup-1', entry.toHootId, 'old one');
+    port.seedExisting('dup-2', entry.toHootId, 'old two');
+
+    const res = run({ action: 'writeLog', entries: [entry] }, port);
+    expect([...port.events.values()].map(e => e.summary)).toEqual(['Write the report']);
+    expect(port.removed).toEqual(['dup-2']);
+    expect(res.ok && res.action === 'writeLog' ? res.written : []).toEqual([
+      { toHootId: entry.toHootId, eventId: 'dup-1', created: false, duplicatesRemoved: 1 },
+    ]);
+  });
+
+  it('cleans up however many duplicates there are, not just the second', () => {
+    const port = new FakePort();
+    for (const n of [1, 2, 3]) port.seedExisting(`dup-${n}`, entry.toHootId, `old ${n}`);
+    run({ action: 'writeLog', entries: [entry] }, port);
+    expect(port.events.size).toBe(1);
+    expect(port.removed).toEqual(['dup-2', 'dup-3']);
+  });
+
+  it('deleteLog removes every duplicate, so nothing is left orphaned', () => {
+    const port = new FakePort();
+    for (const n of [1, 2, 3]) port.seedExisting(`dup-${n}`, 't1::2026-08-23', `old ${n}`);
+    const res = run({ action: 'deleteLog', toHootIds: ['t1::2026-08-23'] }, port);
+    expect(port.events.size).toBe(0);
+    expect(port.removed).toEqual(['dup-1', 'dup-2', 'dup-3']);
+    // The id is reported once, however many events carried it.
+    expect(res.ok && res.action === 'deleteLog' ? res.deleted : []).toEqual(['t1::2026-08-23']);
   });
 });
 
