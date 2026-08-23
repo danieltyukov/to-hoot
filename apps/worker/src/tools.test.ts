@@ -71,6 +71,9 @@ function stubGitHub(): void {
           headers: { 'content-type': 'application/json', etag: 'W/"e1"' },
         });
 
+      // The client resolves the branch from the repository when none is
+      // configured, so this is the first request a cold client makes.
+      if (url.pathname === '/repos/o/r') return json(200, { default_branch: 'main' });
       if (url.pathname === '/repos/o/r/commits') {
         // Honour the conditional GET, the way GitHub does. Without this the
         // Worker re-reads the tree on every refresh and the request counts
@@ -169,6 +172,8 @@ describe('a read through the Worker', () => {
     expect(body.plannedMinutes).toBe(45);
 
     expect(calls.map(c => c.path)).toEqual([
+      // Resolving the default branch, once per client rather than per request.
+      '/repos/o/r',
       '/repos/o/r/commits',
       '/repos/o/r/git/trees/c1',
       '/repos/o/r/git/blobs/snap1',
@@ -202,9 +207,11 @@ describe('a write through the Worker', () => {
       'POST /repos/o/r/git/commits',
       'PATCH /repos/o/r/git/refs/heads/main',
     ]);
-    // Three to read the snapshot, one conditional GET on the append's refresh,
-    // then the four the commit costs. Eight of the fifty the free tier allows.
-    expect(calls).toHaveLength(8);
+    // One to resolve the branch, three to read the snapshot, one conditional
+    // GET on the append's refresh, then the four the commit costs. Nine of the
+    // fifty the free tier allows, and the branch lookup is cached on the
+    // client, so a warm isolate spends eight.
+    expect(calls).toHaveLength(9);
   });
 
   it('reports a refusal as a tool error and commits nothing', async () => {

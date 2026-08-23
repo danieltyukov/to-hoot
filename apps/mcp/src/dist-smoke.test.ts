@@ -16,9 +16,7 @@
 // same time: that the shebang entry actually starts, and that nothing writes a
 // non-protocol line to stdout, which no source-level test can observe.
 
-import { spawn } from 'node:child_process';
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -100,11 +98,11 @@ function drive(): Promise<Exchange> {
 let exchange: Exchange;
 
 beforeAll(async () => {
-  // Build if the artifact is missing, so the test is meaningful on a fresh
-  // checkout rather than quietly skipping the one thing it exists to check.
-  if (!existsSync(entry)) {
-    execFileSync('npx', ['tsc', '-b', appDir], { cwd: repoRoot, stdio: 'inherit' });
-  }
+  // ALWAYS build, never "build if missing". Building only when the artifact is
+  // absent means that after any source edit this drives the previous build and
+  // passes, which is precisely the stale-artifact failure it exists to catch.
+  // `tsc -b` is incremental, so when nothing changed this costs a stat sweep.
+  execFileSync('npx', ['tsc', '-b', appDir], { cwd: repoRoot, stdio: 'inherit' });
   exchange = await drive();
 }, 120_000);
 

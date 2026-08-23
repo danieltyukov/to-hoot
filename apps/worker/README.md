@@ -40,7 +40,9 @@ of it. With no `ALLOWED_HOSTNAMES` set the Host check is a no-op, since
 Cloudflare only routes a hostname to a Worker configured for it, but the Origin
 check still refuses a page on another origin.
 
-One conditional GET per tool call. The Worker reads the prebuilt snapshot and
+One conditional GET per tool call once the isolate is warm. A cold client also
+resolves the repository's default branch, once, unless `GITHUB_BRANCH` is set.
+The Worker reads the prebuilt snapshot and
 never replays the event log: the free tier allows 10ms of CPU per request, and
 awaiting a fetch costs none of it while folding hundreds of events costs real
 CPU. It never compacts either, because compaction reads everything and the
