@@ -8,6 +8,7 @@ import {
   replay,
   taskTotalTime,
   toSyncable,
+  isValidDeviceId,
   ulid,
   validateSettings,
   type Event,
@@ -143,8 +144,18 @@ export class Store {
   private readonly nowFn: () => number;
   private readonly storage: StoreOptions['storage'];
   private readonly vault: KeyValueStore | undefined;
-  private readonly deviceId: string;
-  private readonly tracker: Tracker;
+  /**
+   * The id every event this device writes is stamped with, and the folder its
+   * events land in under events/<deviceId>/.
+   *
+   * Not readonly: it starts as a generated ULID so a device that has never been
+   * named still writes somewhere unique, and becomes the name the user chose as
+   * soon as they choose one. There used to be two of these, a ULID here and a
+   * name in settings that nothing read, so the wizard's promise about where
+   * events would be written was true of nothing.
+   */
+  private deviceId: string;
+  private tracker: Tracker;
   private readonly listeners = new Set<() => void>();
 
   private log: Event[] = [];
@@ -166,14 +177,15 @@ export class Store {
     this.deviceId = stored ?? ulid();
     if (stored === null) writeStorage(this.storage, DEVICE_KEY, this.deviceId);
 
-    this.tracker = new Tracker({ deviceId: this.deviceId, now: this.nowFn });
+    this.tracker = this.newTracker();
     this.log = [...(opts.seed ?? [])];
 
     const savedTheme = readStorage(this.storage, THEME_KEY);
     const state = replay(this.log);
+    // Left unset. A generated ULID in this field would show up pre-filled in
+    // the wizard as a 26-character string nobody typed, which is exactly what a
+    // real user would keep.
     const settings = cloneSettings(DEFAULT_SETTINGS);
-    settings.deviceId = this.deviceId;
-    settings.deviceName = this.deviceId;
     this.snapshot = {
       state,
       settings,
@@ -209,6 +221,7 @@ export class Store {
       // a good one.
       if (result.ok) {
         patch.settings = result.value;
+        this.adoptDeviceId(result.value.deviceId);
         if (isTheme(result.value.theme)) patch.theme = result.value.theme;
       }
     }
@@ -231,6 +244,7 @@ export class Store {
       calendar: { ...this.snapshot.settings.calendar, ...patch.calendar },
       worker: { ...this.snapshot.settings.worker, ...patch.worker },
     };
+    if (patch.deviceId !== undefined) this.adoptDeviceId(patch.deviceId.trim());
     void this.vault?.set(SETTINGS_KEY, JSON.stringify(merged));
     if (patch.theme !== undefined) writeStorage(this.storage, THEME_KEY, patch.theme);
 
@@ -360,6 +374,31 @@ export class Store {
     // reload before any log has been loaded.
     writeStorage(this.storage, THEME_KEY, theme);
     this.commit([this.event('update', 'settings', 'app', { theme })], { theme });
+  }
+
+  /** The id this device stamps its events with. The wizard states this. */
+  get device(): string {
+    return this.deviceId;
+  }
+
+  private newTracker(): Tracker {
+    return new Tracker({ deviceId: this.deviceId, now: this.nowFn });
+  }
+
+  /**
+   * Adopts a new device name.
+   *
+   * The running timer is stopped first so the seconds since the last flush are
+   * banked under the id that earned them, and because the Tracker stamps events
+   * with the id it was built with: keeping the old one would write the next
+   * delta to the previous folder.
+   */
+  private adoptDeviceId(next: string): void {
+    if (next === '' || next === this.deviceId || !isValidDeviceId(next)) return;
+    if (this.snapshot.runningTaskId !== null) this.stop();
+    this.deviceId = next;
+    writeStorage(this.storage, DEVICE_KEY, next);
+    this.tracker = this.newTracker();
   }
 
   /** A field-level change to a task. The detail view is the main caller. */

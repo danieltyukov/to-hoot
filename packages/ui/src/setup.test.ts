@@ -246,13 +246,89 @@ describe.each([
 
     expect(result).toMatchObject({ status: 'ok' });
     expect(result.status === 'ok' && result.detail).toContain(branch);
-    // Every request went to the branch that was read, not to a guessed one.
-    for (const req of seen) expect(req.url).not.toMatch(/heads\/(?!(main|master)\b)/);
+    // Every ref request went to THIS branch. The earlier version of this
+    // assertion accepted main or master either way, which is to say it accepted
+    // the bug it was written to catch.
+    const refs = seen.filter(r => /heads\//.test(r.url));
+    expect(refs.length).toBeGreaterThan(0);
+    for (const req of refs) expect(req.url).toContain(`heads/${branch}`);
+  });
+});
+
+/*
+ * The failure this whole layer exists to prevent, driven end to end.
+ *
+ * With a literal `main` against a `master` repository: the ref read 404s, the
+ * client reads that as "no commits yet", and the commit goes in parentless and
+ * creates an orphan refs/heads/main beside the user's real data. The test
+ * reports success. Every part of that is silent.
+ */
+describe('a master repository never grows a main branch', () => {
+  function masterRepo(): { http: Http; seen: HttpRequest[] } {
+    return transport([
+      [/\/repos\/o\/r$/, json(200, { default_branch: 'master', private: true })],
+      // main does not exist here. This is the 404 that used to read as "empty".
+      [req => req.url.includes('/git/ref/heads/main'), json(404, { message: 'Not Found' })],
+      [req => req.url.includes('/git/ref/heads/master'), json(200, { object: { sha: 'headsha' } })],
+      [/\/git\/trees$/, json(201, { sha: 'treesha' })],
+      [/\/git\/commits$/, json(201, { sha: 'commitsha' })],
+      [req => req.method === 'PATCH', json(200, {})],
+      [/\/commits\?/, json(200, [{ sha: 'commitsha' }])],
+      [
+        /\/git\/trees\/commitsha/,
+        json(200, { truncated: false, tree: [{ path: README_PATH, sha: 'blobsha', type: 'blob' }] }),
+      ],
+      [
+        /\/git\/blobs\/blobsha/,
+        json(200, {
+          content: btoa(readmeFor({ owner: 'o', repo: 'r', branch: 'master' })),
+          encoding: 'base64',
+        }),
+      ],
+    ]);
+  }
+
+  it('resolves the branch itself when none is stored yet', async () => {
+    // An empty branch is handed to the client as "resolve it", which is what
+    // turns a first-run setup on a master repository into a correct one.
+    const { http, seen } = masterRepo();
+    const result = await testSync(http, 'token', { owner: 'o', repo: 'r', branch: '' });
+
+    expect(result).toMatchObject({ status: 'ok', value: { branch: 'master' } });
+    expect(seen.some(r => r.url.endsWith('/repos/o/r'))).toBe(true);
+    expect(seen.some(r => r.url.includes('heads/main'))).toBe(false);
+  });
+
+  it('creates no ref, because the branch it writes to already exists', async () => {
+    const { http, seen } = masterRepo();
+    await testSync(http, 'token', { owner: 'o', repo: 'r', branch: '' });
+
+    // POST /git/refs is the orphan-branch call. It must not happen here.
+    expect(seen.filter(r => r.url.endsWith('/git/refs'))).toEqual([]);
+    // The commit has a parent, so it is on the user's history rather than beside it.
+    const commit = seen.find(r => r.url.endsWith('/git/commits'))!;
+    expect(JSON.parse(commit.body!).parents).toEqual(['headsha']);
+  });
+
+  it('hands the resolved branch back so the caller can store it', async () => {
+    // The bug was reading it and dropping it. This is what makes it stick.
+    const { http } = masterRepo();
+    const result = await testSync(http, 'token', { owner: 'o', repo: 'r', branch: '' });
+    expect(result.status === 'ok' && result.value.branch).toBe('master');
+    expect(result.status === 'ok' && result.detail).toContain('on master');
   });
 });
 
 describe('testSync failures', () => {
   const target = { owner: 'o', repo: 'r', branch: 'main' };
+
+  it('separates a refused read from a refused write', async () => {
+    // Both are 403. Telling someone their token cannot write, when in fact it
+    // cannot read, sends them to grant a permission they already have.
+    const { http } = transport([[/\/git\/ref\//, json(403, { message: 'Resource not accessible' })]]);
+    const result = await testSync(http, 't', target);
+    expect(result.status === 'error' && result.detail).toContain('may not read');
+  });
 
   it('separates a token that cannot write from one that is invalid', async () => {
     const forbidden = transport([[/\/git\/ref\//, json(403, { message: 'Resource not accessible' })]]);
@@ -309,20 +385,75 @@ describe('testCalendar', () => {
     expect(result.status).toBe('error');
   });
 
-  it('distinguishes a missing property from a wrong secret', async () => {
-    // An unconfigured deployment refuses a correct secret too, so telling
-    // someone their secret is wrong sends them to re-copy a right one.
-    const http = bridge({ ok: false, code: 'unauthorized', error: 'secret rejected' });
-    const result = await testCalendar(http, url, 's');
-    expect(result.status).toBe('error');
-    expect(result.status === 'error' && result.hint).toContain('TO_HOOT_SECRET is not set');
-    expect(result.status === 'error' && result.hint).toContain('unconfigured deployment refuses a correct secret');
+  /*
+   * The distinction the wizard claims to make, made for real.
+   *
+   * The POST answers `unauthorized` for both a missing property and a wrong
+   * value, so the response alone cannot tell them apart. The script's own doGet
+   * can: it takes no secret, carries no calendar data, and reports whether the
+   * property was ever set. It exists for this and was not being called.
+   */
+  it('names a missing Script Property before a secret is even sent', async () => {
+    const { http, seen } = transport([
+      [
+        req => req.method === 'GET',
+        json(200, { ok: true, secretConfigured: false, calendarServiceEnabled: true }),
+      ],
+    ]);
+    const result = await testCalendar(http, url, 'anything');
+
+    expect(result.status === 'error' && result.detail).toBe(
+      'The deployment has no TO_HOOT_SECRET property set.',
+    );
+    // And it never sent the secret to a deployment that cannot check it.
+    expect(seen.filter(r => r.method === 'POST')).toEqual([]);
   });
 
-  it('names the advanced service when Calendar is not enabled', async () => {
+  it('says the secret is wrong when the probe says the property is set', async () => {
+    const { http } = transport([
+      [
+        req => req.method === 'GET',
+        json(200, { ok: true, secretConfigured: true, calendarServiceEnabled: true }),
+      ],
+      [req => req.method === 'POST', json(200, { ok: false, code: 'unauthorized', error: 'no' })],
+    ]);
+    const result = await testCalendar(http, url, 'wrong');
+    expect(result.status === 'error' && result.detail).toBe(
+      'The secret does not match the one on the deployment.',
+    );
+  });
+
+  it('names the advanced service from the probe, before the call fails', async () => {
+    const { http } = transport([
+      [
+        req => req.method === 'GET',
+        json(200, { ok: true, secretConfigured: true, calendarServiceEnabled: false }),
+      ],
+    ]);
+    const result = await testCalendar(http, url, 's');
+    expect(result.status === 'error' && result.hint).toContain('Google Calendar API under Services');
+  });
+
+  it('hedges honestly when the probe itself cannot be read', async () => {
+    // Without the probe the two cases genuinely cannot be told apart from here,
+    // and saying so beats picking the likelier one and being confidently wrong.
+    const http = bridge({ ok: false, code: 'unauthorized', error: 'secret rejected' });
+    const result = await testCalendar(http, url, 's');
+    expect(result.status === 'error' && result.hint).toContain('is not set on the deployment at all');
+    expect(result.status === 'error' && result.hint).toContain('could not be read');
+  });
+
+  it('names the advanced service when the call itself reports it off', async () => {
     const http = bridge({ ok: false, code: 'calendar-service-disabled', error: 'Calendar is off' });
     const result = await testCalendar(http, url, 's');
     expect(result.status === 'error' && result.hint).toContain('advanced service');
+  });
+
+  it('never leaves a raw library message as the thing the reader sees', async () => {
+    const http = bridge({ ok: false, code: 'bad-response', error: 'the bridge said something odd' });
+    const result = await testCalendar(http, url, 's');
+    expect(result.status === 'error' && result.detail).toBe('The calendar check failed.');
+    expect(result.status === 'error' && result.hint).toBe('The bridge said something odd.');
   });
 
   it('recognises a sign-in page for what it is', async () => {
@@ -367,6 +498,17 @@ describe('the generated commands', () => {
     expect(mcpAddCommand('/home/someone/to-hoot/apps/mcp/dist/index.js')).toBe(
       'claude mcp add to-hoot -- node /home/someone/to-hoot/apps/mcp/dist/index.js',
     );
+  });
+
+  it('names the branch only when there is one worth naming', () => {
+    // Empty means the Worker should fall back to its own default. Emitting the
+    // binding with no value would set it to nothing.
+    expect(wranglerCommands({ pathSecret: 'a', owner: 'o', repo: 'r', branch: '' })).not.toContain(
+      'GITHUB_BRANCH',
+    );
+    expect(
+      wranglerCommands({ pathSecret: 'a', owner: 'o', repo: 'r', branch: 'master' }),
+    ).toContain('GITHUB_BRANCH      # master');
   });
 
   it('fills the wrangler commands in with real values', () => {

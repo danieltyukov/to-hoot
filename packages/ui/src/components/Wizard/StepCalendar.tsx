@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { Http, Settings } from '@to-hoot/core';
 import APPS_SCRIPT_SOURCE from 'virtual:apps-script-source';
 
@@ -43,10 +43,20 @@ export function StepCalendar({ http, settings, onSave }: StepCalendarProps) {
   const [bridgeState, runBridge] = useCheck();
   const [icsState, runIcs] = useCheck();
 
+  // Persisted as soon as it exists, not only once a check passes. The value is
+  // local, it is what the instructions above tell someone to paste, and a
+  // secret that survives only a successful test is one that vanishes from the
+  // screen someone was copying it from.
+  useEffect(() => {
+    if (settings.calendar.secret === '') {
+      onSave({ calendar: { ...settings.calendar, secret } });
+    }
+  }, [settings.calendar, secret, onSave]);
+
   const rotate = (): void => {
     const next = generateSecret();
     setSecret(next);
-    onSave({ calendar: { ...settings.calendar, secret: next, execUrl } });
+    onSave({ calendar: { ...settings.calendar, secret: next } });
   };
 
   return (
@@ -79,9 +89,9 @@ export function StepCalendar({ http, settings, onSave }: StepCalendarProps) {
             hint={
               <>
                 Generated on this device and never sent anywhere except to your own script. It is
-                deliberately not written into the source above: <span className="mono">clasp push</span>{' '}
-                uploads that source to a Google-hosted project, so a secret inside it would be
-                exposed twice over.
+                deliberately not in the source above: the script only ever reads it from this
+                property, and source pasted into a Google-hosted project is one more place a
+                secret would sit for no benefit.
               </>
             }
           />
@@ -112,6 +122,7 @@ export function StepCalendar({ http, settings, onSave }: StepCalendarProps) {
       </ol>
 
       <TestConnection
+        label="Test calendar"
         state={bridgeState}
         disabled={execUrl.trim() === ''}
         onTest={() =>

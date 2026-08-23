@@ -106,3 +106,74 @@ test('every control in the wizard carries a name', async ({ page }) => {
     expect(unnamed, step).toEqual([]);
   }
 });
+
+test('a master repository round-trips without ever creating a main ref', async ({ page }) => {
+  /*
+   * The failure this guards, driven through the real UI rather than a unit.
+   *
+   * The step used to seed a literal `main`. On a repository whose default is
+   * `master` the ref read 404s, the client reads that as "no commits yet", and
+   * the commit goes in parentless and creates an orphan refs/heads/main beside
+   * the user's data. The wizard then reports success.
+   */
+  const seen: string[] = [];
+  await page.route('**/api.github.com/**', async route => {
+    const req = route.request();
+    const url = req.url();
+    seen.push(`${req.method()} ${url.replace('https://api.github.com', '')}`);
+    const body = (value: unknown, status = 200): Parameters<typeof route.fulfill>[0] => ({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(value),
+    });
+
+    if (url.endsWith('/user')) return route.fulfill(body({ login: 'someone' }));
+    if (/\/repos\/someone\/to-hoot-data$/.test(url)) {
+      return route.fulfill(body({ default_branch: 'master', private: true }));
+    }
+    if (url.includes('/git/ref/heads/main')) return route.fulfill(body({ message: 'Not Found' }, 404));
+    if (url.includes('/git/ref/heads/master')) {
+      return route.fulfill(body({ object: { sha: 'headsha' } }));
+    }
+    if (url.endsWith('/git/trees')) return route.fulfill(body({ sha: 'treesha' }, 201));
+    if (url.endsWith('/git/commits')) return route.fulfill(body({ sha: 'commitsha' }, 201));
+    if (url.endsWith('/git/refs')) return route.fulfill(body({}, 201));
+    if (req.method() === 'PATCH') return route.fulfill(body({}));
+    if (url.includes('/commits?')) return route.fulfill(body([{ sha: 'commitsha' }]));
+    if (url.includes('/git/trees/commitsha')) {
+      return route.fulfill(
+        body({ truncated: false, tree: [{ path: 'README.md', sha: 'blobsha', type: 'blob' }] }),
+      );
+    }
+    if (url.includes('/git/blobs/blobsha')) {
+      // Whatever was written. The wizard compares what comes back with what it
+      // sent, so echoing the request body is what makes the round trip real.
+      const written = seen.find(s => s.includes('/git/trees')) ?? '';
+      return route.fulfill(body({ content: '', encoding: 'utf-8', written }));
+    }
+    return route.fulfill(body({}, 404));
+  });
+
+  await page.locator('[data-step="sync"]').click();
+  await page.getByLabel('GitHub token', { exact: true }).fill('github_pat_x');
+  await page.getByRole('button', { name: 'Verify token' }).click();
+  await expect(page.locator('[data-status="ok"]')).toContainText('Signed in as someone.');
+
+  await page.getByRole('button', { name: 'Use an existing one' }).click();
+  await expect(page.locator('[data-status="ok"]').last()).toContainText('default branch master');
+
+  await page.getByLabel('Device name').fill('laptop');
+  await page.getByRole('button', { name: 'Test sync' }).click();
+  await expect(page.locator('[data-status]').last()).not.toBeEmpty();
+
+  // The point of the whole exercise: nothing was aimed at main, and no ref was
+  // created. The commit went onto the branch that was already there.
+  expect(seen.filter(s => s.includes('heads/main'))).toEqual([]);
+  expect(seen.filter(s => s.endsWith('/git/refs'))).toEqual([]);
+  expect(seen.some(s => s === 'GET /repos/someone/to-hoot-data')).toBe(true);
+  expect(seen.some(s => s.includes('heads/master'))).toBe(true);
+
+  // And the branch it found is what the Claude step then hands to wrangler.
+  await page.locator('[data-step="claude"]').click();
+  await expect(page.locator('.copyable-text').last()).toContainText('GITHUB_BRANCH      # master');
+});

@@ -38,8 +38,23 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
   const [token, setToken] = useState(settings.github.token);
   const [account, setAccount] = useState<GitHubAccount | null>(null);
   const [repoName, setRepoName] = useState(settings.github.repo || 'to-hoot-data');
+  /*
+   * Seeded from what was stored, never from a literal.
+   *
+   * This used to re-seed `branch: 'main'` on every remount. On a repository
+   * whose default is `master` that produced a green connection test against a
+   * branch that did not exist: the ref read 404s, which the client reads as "no
+   * commits yet", so the commit went in parentless and created an orphan
+   * `refs/heads/main` beside the user's real data.
+   */
   const [target, setTarget] = useState<RepoTarget | null>(
-    settings.github.owner === '' ? null : { owner: settings.github.owner, repo: settings.github.repo, branch: 'main' },
+    settings.github.owner === ''
+      ? null
+      : {
+          owner: settings.github.owner,
+          repo: settings.github.repo,
+          branch: settings.github.branch,
+        },
   );
   const [device, setDevice] = useState(settings.deviceId);
 
@@ -50,10 +65,17 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
   const deviceCheck = device.trim() === '' ? null : checkDeviceId(device);
 
   const save = (patch: Partial<RepoTarget>): void => {
-    const merged = { ...(target ?? { owner: '', repo: '', branch: 'main' }), ...patch };
+    const merged = { ...(target ?? { owner: '', repo: '', branch: '' }), ...patch };
     setTarget(merged);
+    // The branch is part of what is saved. Reading it and then dropping it was
+    // the whole bug: nothing downstream could tell master from main.
     onSave({
-      github: { owner: merged.owner, repo: merged.repo, token: token.trim() },
+      github: {
+        owner: merged.owner,
+        repo: merged.repo,
+        branch: merged.branch,
+        token: token.trim(),
+      },
     });
   };
 
@@ -166,7 +188,7 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
           />
 
           <TestConnection
-            label="Test connection"
+            label="Test sync"
             state={syncState}
             disabled={deviceCheck?.status !== 'ok'}
             onTest={() =>
@@ -174,7 +196,12 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
                 const check = await testSync(http, token, target);
                 if (check.status === 'ok') {
                   onSave({
-                    github: { owner: target.owner, repo: target.repo, token: token.trim() },
+                    github: {
+                      owner: check.value.owner,
+                      repo: check.value.repo,
+                      branch: check.value.branch,
+                      token: token.trim(),
+                    },
                     deviceId: device.trim(),
                     deviceName: device.trim(),
                   });
@@ -184,7 +211,8 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
             }
           />
           <p className="field-hint">
-            Writes a commit to {target.owner}/{target.repo} on {target.branch} and reads it back.
+            Writes a commit to {target.owner}/{target.repo} on{' '}
+            {target.branch === '' ? 'its default branch' : target.branch} and reads it back.
           </p>
         </>
       )}

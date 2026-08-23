@@ -85,6 +85,17 @@ const go = async (user: ReturnType<typeof userEvent.setup>, step: string): Promi
  * "Administration: write"), which is a sign the copy is consistent and a
  * nuisance for a document-wide text query.
  */
+/** aria-label, an associated label element, or the control's own text. */
+function accessibleName(el: Element): string {
+  const aria = el.getAttribute('aria-label');
+  if (aria !== null && aria !== '') return aria;
+  if (el.id !== '') {
+    const label = document.querySelector(`label[for="${el.id}"]`);
+    if (label !== null) return label.textContent?.trim() ?? '';
+  }
+  return el.textContent?.trim() ?? '';
+}
+
 async function resultText(): Promise<string> {
   const found = await waitFor(() => {
     const done = [...document.querySelectorAll('[data-status]')];
@@ -118,8 +129,21 @@ describe('Wizard', () => {
       await user.click(screen.getByRole('button', { name: 'Skip this' }));
     }
     expect(onDone).toHaveBeenCalledOnce();
-    // Nothing was configured on the way past.
-    expect(saved).toEqual([]);
+
+    /*
+     * Nothing is configured on the way past. Generated secrets are the one
+     * exception and are kept deliberately: the value shown on screen has to be
+     * the value that is stored, or someone who copied it into Google would find
+     * the app had forgotten it.
+     */
+    const merged = Object.assign({}, ...saved) as Partial<Settings>;
+    expect(merged.github?.owner ?? '').toBe('');
+    expect(merged.calendar?.execUrl ?? '').toBe('');
+    expect(merged.worker?.url ?? '').toBe('');
+    expect(merged.deviceId ?? '').toBe('');
+    for (const patch of saved) {
+      expect(Object.keys(patch).every(k => k === 'calendar' || k === 'worker')).toBe(true);
+    }
   });
 
   it('offers to create the private data repo through the API', async () => {
@@ -188,12 +212,12 @@ describe('Wizard', () => {
     await user.type(name, 'my laptop');
     expect(name).toHaveAttribute('aria-invalid', 'true');
     // The check cannot be run at all until the name is usable.
-    expect(screen.getByRole('button', { name: 'Test connection' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
 
     await user.clear(name);
     await user.type(name, 'my-laptop');
     expect(screen.getByText('Events will be written under events/my-laptop/.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
   });
 
   it('renders the Apps Script source with no secret in it, and the secret separately', async () => {
@@ -275,9 +299,9 @@ describe('Wizard', () => {
       screen.getByLabelText('Deployment URL'),
       'https://script.google.com/macros/s/AK/exec',
     );
-    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+    await user.click(screen.getByRole('button', { name: 'Test calendar' }));
 
-    expect(await screen.findByText(/TO_HOOT_SECRET is not set/)).toBeInTheDocument();
+    expect(await resultText()).toContain('is not set on the deployment at all');
   });
 
   it('shows real events when the calendar bridge works', async () => {
@@ -299,8 +323,8 @@ describe('Wizard', () => {
       screen.getByLabelText('Deployment URL'),
       'https://script.google.com/macros/s/AK/exec',
     );
-    await user.click(screen.getByRole('button', { name: 'Test connection' }));
-    expect(await screen.findByText(/Standup at 14:30/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Test calendar' }));
+    expect(await resultText()).toContain('Standup at 14:30');
   });
 
   it('offers the read-only feed as a simpler way in', async () => {
@@ -333,7 +357,7 @@ describe('Wizard', () => {
       screen.getByLabelText('Endpoint URL'),
       'https://to-hoot-mcp.someone.workers.dev/mcp/abc',
     );
-    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+    await user.click(screen.getByRole('button', { name: 'Test endpoint' }));
 
     await waitFor(() => expect(screen.getByText(/1 tools: list_tasks/)).toBeInTheDocument());
     expect(JSON.parse(seen.at(-1)!.body!)).toMatchObject({ method: 'tools/list' });
@@ -343,9 +367,17 @@ describe('Wizard', () => {
     const { user, container } = setup();
     for (const step of ['local', 'sync', 'calendar', 'claude']) {
       await go(user, step);
+      const names: string[] = [];
       for (const control of container.querySelectorAll('button, input, select, textarea')) {
         expect(control, `${step}: ${control.outerHTML.slice(0, 80)}`).toHaveAccessibleName();
+        names.push(accessibleName(control));
       }
+      // Named is not enough: a suite that addresses controls by name needs the
+      // names to be unique on screen. Three buttons called "Test connection"
+      // are individually named and collectively unusable.
+      expect(new Set(names).size, `${step}: duplicate names in ${names.join(', ')}`).toBe(
+        names.length,
+      );
     }
   });
 });

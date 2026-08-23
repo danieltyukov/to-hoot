@@ -140,9 +140,9 @@ describe('Settings', () => {
     // down by every other device, permanently, in a git history.
     const { store } = setup();
     store.saveSettings({
-      github: { owner: 'someone', repo: 'data', token: 'github_pat_SECRET' },
+      github: { owner: 'someone', repo: 'data', branch: 'master', token: 'github_pat_SECRET' },
       calendar: { execUrl: 'https://script.google.com/x/exec', secret: 'CALENDARSECRET', icsUrl: '' },
-      worker: { url: 'https://x.workers.dev/mcp/PATHSECRET' },
+      worker: { url: 'https://x.workers.dev/mcp/PATHSECRET', pathSecret: 'PATHSECRET' },
     });
 
     const log = JSON.stringify(store.getSnapshot().events);
@@ -155,14 +155,59 @@ describe('Settings', () => {
     expect(store.getSnapshot().settings.github.token).toBe('github_pat_SECRET');
   });
 
+  it('stamps events with the name the wizard promised, not a hidden ULID', async () => {
+    /*
+     * There used to be two identities: a generated ULID that every event was
+     * stamped with, and a settings.deviceId that nothing read. The wizard's
+     * "Events will be written under events/<name>/" was therefore true of
+     * nothing, and the field pre-filled with the raw 26-character ULID, which
+     * is what a real user would have kept.
+     */
+    const { store } = setup();
+    expect(store.getSnapshot().settings.deviceId).toBe('');
+
+    store.saveSettings({ deviceId: 'laptop', deviceName: 'laptop' });
+    store.addTask('Rewire the bench');
+
+    const written = store.getSnapshot().events.filter(e => e.entity === 'task');
+    expect(written.length).toBeGreaterThan(0);
+    for (const event of written) expect(event.deviceId).toBe('laptop');
+  });
+
+  it('refuses to adopt a device name that is not a path segment', () => {
+    const { store } = setup();
+    const before = store.device;
+    store.saveSettings({ deviceId: 'my laptop' });
+    // The settings field records what was asked for; the identity does not move
+    // to something that would write events where no reader looks.
+    expect(store.device).toBe(before);
+  });
+
+  it('banks the running time before moving to a new device name', async () => {
+    // The Tracker stamps with the id it was built with, so the timer is stopped
+    // first and the seconds land under the id that earned them.
+    const { store } = setup();
+    const id = store.addTask('Rewire the bench');
+    store.start(id);
+    store.saveSettings({ deviceId: 'laptop' });
+
+    expect(store.getSnapshot().runningTaskId).toBeNull();
+    expect(store.device).toBe('laptop');
+  });
+
   it('reads settings back from the platform store on the next start', async () => {
     const vault = memoryStore();
     const first = new Store({ storage: null, vault });
-    first.saveSettings({ github: { owner: 'someone', repo: 'data', token: 'tok' }, theme: 'dark' });
+    first.saveSettings({
+      github: { owner: 'someone', repo: 'data', branch: 'master', token: 'tok' },
+      theme: 'dark',
+    });
 
     const second = new Store({ storage: null, vault });
     await second.load();
     expect(second.getSnapshot().settings.github.token).toBe('tok');
+    // The branch too: re-deriving it is what produced an orphan main branch.
+    expect(second.getSnapshot().settings.github.branch).toBe('master');
     expect(second.getSnapshot().theme).toBe('dark');
   });
 

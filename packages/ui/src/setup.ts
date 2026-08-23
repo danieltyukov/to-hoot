@@ -1,7 +1,9 @@
 import {
+  BranchNotFoundError,
   CalendarBridgeClient,
   DEVICE_ID_RULE,
   GitHubClient,
+  RepositoryNotVisibleError,
   httpStatusOf,
   isValidDeviceId,
   type BridgeEvent,
@@ -285,6 +287,9 @@ export async function createDataRepo(
   };
 }
 
+/** The Script Property the deployed bridge reads its secret from. */
+export const SECRET_PROPERTY_NAME = 'TO_HOOT_SECRET';
+
 export const README_PATH = 'README.md';
 
 /** What the connection test writes. Also what a curious visitor to the repo reads. */
@@ -327,11 +332,19 @@ export async function testSync(
     owner: target.owner,
     repo: target.repo,
     token,
-    branch: target.branch,
+    // Empty is handed over as undefined, which makes the client resolve the
+    // repository's own default and cache it. Passing a guessed name instead is
+    // how a `master` repository ends up with an orphan `main`.
+    ...(target.branch === '' ? {} : { branch: target.branch }),
   });
-  const expected = readmeFor(target);
 
   try {
+    // Whatever the client will actually use, resolved before anything is
+    // written, so the README and the saved setting name the same branch.
+    const branch = await client.branchName();
+    const resolved: RepoTarget = { ...target, branch };
+    const expected = readmeFor(resolved);
+
     const outcome = await client.commitFiles('to-hoot: set up data repository', [
       { path: README_PATH, content: expected },
     ]);
@@ -357,8 +370,8 @@ export async function testSync(
     }
     return {
       status: 'ok',
-      detail: `Wrote and read back ${README_PATH} on ${target.branch}.`,
-      value: target,
+      detail: `Wrote and read back ${README_PATH} on ${branch}.`,
+      value: resolved,
     };
   } catch (err) {
     return { status: 'error', ...syncFailure(err, target) };
@@ -367,16 +380,38 @@ export async function testSync(
 
 function syncFailure(err: unknown, target: RepoTarget): { detail: string; hint?: string } {
   const status = httpStatusOf(err);
+  const method = (err as { method?: unknown } | null)?.method;
+
   if (status === 401) return { detail: 'GitHub rejected the token.', hint: 'Expired or revoked.' };
   if (status === 403) {
+    // Which request was refused decides which permission is missing. Telling
+    // someone their token cannot write, when in fact it cannot read, sends them
+    // to grant a permission they already have.
+    return method === 'GET'
+      ? {
+          detail: 'The token may not read this repository.',
+          hint: 'A fine-grained token needs Contents: read and write, and this repository has to be in its list.',
+        }
+      : {
+          detail: 'The token may read this repository but not write to it.',
+          hint: 'A fine-grained token needs Contents: read and write on this repository.',
+        };
+  }
+  if (err instanceof BranchNotFoundError) {
     return {
-      detail: 'The token may read this repository but not write to it.',
-      hint: 'A fine-grained token needs Contents: read and write on this repository.',
+      detail: `This repository has no branch called ${err.branch}.`,
+      hint: `Its default branch is ${err.defaultBranch}. Select the repository again to pick that up.`,
+    };
+  }
+  if (err instanceof RepositoryNotVisibleError) {
+    return {
+      detail: `${target.owner}/${target.repo} is not visible to this token.`,
+      hint: 'It may not exist, may have been renamed, or the token may no longer cover it.',
     };
   }
   if (status === 404) {
     return {
-      detail: `Nothing found at ${target.owner}/${target.repo} on ${target.branch}.`,
+      detail: `Nothing found at ${target.owner}/${target.repo}.`,
       hint: 'Check the repository still exists and the token still covers it.',
     };
   }
@@ -394,13 +429,48 @@ function transportMessage(err: unknown): string {
   return `Could not reach GitHub: ${messageOf(err)}`;
 }
 
+export interface DeploymentProbe {
+  secretConfigured: boolean;
+  calendarServiceEnabled: boolean;
+}
+
+/**
+ * Asks the deployment about itself, before sending it a secret.
+ *
+ * The script's `doGet` answers this unauthenticated and carries no calendar
+ * data, deliberately: a GET reaches Google with its query string in the logs, so
+ * it takes no secret and can therefore say nothing worth stealing. What it does
+ * say is the two things that are invisible from outside, and that is what turns
+ * a hedged "one of these two things" into an answer.
+ *
+ * Null when the probe itself could not be read, which the POST below will then
+ * report on its own terms.
+ */
+export async function probeDeployment(http: Http, execUrl: string): Promise<DeploymentProbe | null> {
+  try {
+    const res = await http({ url: execUrl.trim(), method: 'GET' });
+    if (res.status !== 200) return null;
+    const body: unknown = JSON.parse(await res.text());
+    if (typeof body !== 'object' || body === null) return null;
+    const { secretConfigured, calendarServiceEnabled } = body as Record<string, unknown>;
+    if (typeof secretConfigured !== 'boolean') return null;
+    return {
+      secretConfigured,
+      calendarServiceEnabled: calendarServiceEnabled === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Calls the calendar bridge for real and names the failure.
  *
- * The four failures below are indistinguishable to anyone reading a generic
- * error, and each has a completely different fix. An unconfigured deployment in
- * particular refuses a correct secret, so someone who pasted the right secret
- * would otherwise be told it was wrong and go round in circles.
+ * The failures below are indistinguishable to anyone reading a generic error,
+ * and each has a completely different fix. The one that cannot be told apart
+ * from the response alone is a deployment with no secret set, because it refuses
+ * a correct secret exactly as it refuses a wrong one, so the probe above is
+ * asked first and its answer is what makes the message definite.
  */
 export async function testCalendar(
   http: Http,
@@ -415,6 +485,22 @@ export async function testCalendar(
       hint: 'It ends in /exec and comes from Deploy, Manage deployments.',
     };
   }
+  const probe = await probeDeployment(http, execUrl);
+  if (probe !== null && !probe.secretConfigured) {
+    return {
+      status: 'error',
+      detail: 'The deployment has no TO_HOOT_SECRET property set.',
+      hint: 'Project Settings, Script Properties. Until it is there the script refuses every request, including one carrying the right secret.',
+    };
+  }
+  if (probe !== null && !probe.calendarServiceEnabled) {
+    return {
+      status: 'error',
+      detail: 'The deployment cannot reach Calendar.',
+      hint: 'In the Apps Script editor, add Google Calendar API under Services, then redeploy.',
+    };
+  }
+
   const client = new CalendarBridgeClient(http, { execUrl: execUrl.trim(), secret });
   try {
     const events = await client.listEvents({ from: now, days: 7 });
@@ -427,7 +513,7 @@ export async function testCalendar(
       value: events,
     };
   } catch (err) {
-    return { status: 'error', ...calendarFailure(err) };
+    return { status: 'error', ...calendarFailure(err, probe) };
   }
 }
 
@@ -438,18 +524,27 @@ function describe(event: BridgeEvent): string {
   return `${event.title} at ${hh}:${mm}`;
 }
 
-function calendarFailure(err: unknown): { detail: string; hint?: string } {
+function calendarFailure(
+  err: unknown,
+  probe: DeploymentProbe | null,
+): { detail: string; hint?: string } {
   const code = (err as { code?: unknown } | null)?.code;
   const status = (err as { status?: unknown } | null)?.status;
 
   if (code === 'unauthorized') {
-    return {
-      detail: 'The script refused the secret.',
-      // The one case people cannot diagnose on their own: a deployment with no
-      // property set refuses every request, including a correct secret, so
-      // "wrong secret" would send them to re-copy a value that was already right.
-      hint: 'Either the secret does not match, or TO_HOOT_SECRET is not set as a Script Property at all. Check the property first: an unconfigured deployment refuses a correct secret too.',
-    };
+    // With a probe in hand this is definite: the deployment said the property
+    // is set, so the only thing left is that the value does not match. Without
+    // one, the two cases genuinely cannot be told apart from here, and saying
+    // so is better than picking the likelier of them.
+    return probe?.secretConfigured === true
+      ? {
+          detail: 'The secret does not match the one on the deployment.',
+          hint: `The deployment has ${SECRET_PROPERTY_NAME} set, so copy the value above into it again.`,
+        }
+      : {
+          detail: 'The script refused the secret.',
+          hint: `Either the value does not match, or ${SECRET_PROPERTY_NAME} is not set on the deployment at all. The probe that would tell these apart could not be read.`,
+        };
   }
   if (code === 'calendar-service-disabled') {
     return {
@@ -475,7 +570,17 @@ function calendarFailure(err: unknown): { detail: string; hint?: string } {
   if (typeof status === 'number' && status >= 400) {
     return { detail: `The deployment answered ${status}.`, hint: messageOf(err) };
   }
-  return { detail: messageOf(err) };
+  // Sentence-cased, because the underlying message is written for a log rather
+  // than for the person reading this panel.
+  return { detail: 'The calendar check failed.', hint: sentence(messageOf(err)) };
+}
+
+/** A library message, turned into something that reads as a sentence. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === '') return 'No further detail.';
+  const capped = trimmed[0]!.toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
 
 /** A read-only alternative for anyone who only wants to see their events. */
@@ -517,7 +622,9 @@ export function wranglerCommands(input: {
     `npx wrangler secret put GITHUB_REPO       # ${input.repo}`,
     'npx wrangler secret put GITHUB_TOKEN      # the token from step 2',
   ];
-  if (input.branch !== FALLBACK_BRANCH) {
+  // Only when it differs from the Worker's own default, and only when it is
+  // actually known: an empty value here would set the binding to nothing.
+  if (input.branch !== '' && input.branch !== FALLBACK_BRANCH) {
     lines.push(`npx wrangler secret put GITHUB_BRANCH      # ${input.branch}`);
   }
   lines.push('npx wrangler deploy');

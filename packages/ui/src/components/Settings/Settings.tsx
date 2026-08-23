@@ -294,7 +294,9 @@ function Data({
         ) : (
           <>
             Compaction happens during sync, which is not set up, so the log simply stays as it is.
-            It is small: a year of ordinary use is a few thousand events.
+            It grows with tracking rather than with tasks: time is written every thirty seconds
+            while a timer runs, so two hours a day is around ninety thousand events a year, a few
+            tens of megabytes. Export it if that matters to you.
           </>
         )}
       </p>

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { Http, Settings } from '@to-hoot/core';
 
 import { Copyable, SecretField, TestConnection, TextField, useCheck } from '../fields.js';
@@ -28,7 +28,26 @@ export function StepClaude({ http, settings, onSave, mcpServerPath }: StepClaude
   const ids = useId();
   const field = (name: string): string => `${ids}-${name}`;
 
-  const [pathSecret, setPathSecret] = useState(() => generateSecret());
+  /*
+   * Generated once and stored, not on every mount.
+   *
+   * Regenerating it here meant reopening this step showed a different
+   * MCP_PATH_SECRET from the endpoint URL sitting beside it, so following the
+   * commands quietly broke the endpoint that was already saved.
+   */
+  const [pathSecret, setPathSecret] = useState(() => settings.worker.pathSecret || generateSecret());
+
+  useEffect(() => {
+    if (settings.worker.pathSecret === '') {
+      onSave({ worker: { ...settings.worker, pathSecret } });
+    }
+  }, [settings.worker, pathSecret, onSave]);
+
+  const rotatePath = (): void => {
+    const next = generateSecret();
+    setPathSecret(next);
+    onSave({ worker: { ...settings.worker, pathSecret: next } });
+  };
   const [workerUrl, setWorkerUrl] = useState(settings.worker.url);
   const [state, run] = useCheck();
 
@@ -37,7 +56,10 @@ export function StepClaude({ http, settings, onSave, mcpServerPath }: StepClaude
     pathSecret,
     owner: settings.github.owner || '<owner>',
     repo: settings.github.repo || '<repo>',
-    branch: 'main',
+    // From settings, not a literal. Hardcoding main here omitted GITHUB_BRANCH
+    // from the deploy block on a master repository, so the Worker that serves
+    // Claude on the web ran against a branch the app never writes to.
+    branch: settings.github.branch,
   });
 
   return (
@@ -75,7 +97,7 @@ export function StepClaude({ http, settings, onSave, mcpServerPath }: StepClaude
         hint="Generated here. The endpoint is /mcp/<secret>, so the URL is the credential: treat it like a password."
       />
       <div className="step-actions">
-        <button type="button" className="button" onClick={() => setPathSecret(generateSecret())}>
+        <button type="button" className="button" onClick={rotatePath}>
           Generate a new path secret
         </button>
       </div>
@@ -93,12 +115,15 @@ export function StepClaude({ http, settings, onSave, mcpServerPath }: StepClaude
       />
 
       <TestConnection
+        label="Test endpoint"
         state={state}
         disabled={workerUrl.trim() === ''}
         onTest={() =>
           run(async () => {
             const check = await testWorker(http, workerUrl);
-            if (check.status === 'ok') onSave({ worker: { url: workerUrl.trim() } });
+            if (check.status === 'ok') {
+              onSave({ worker: { url: workerUrl.trim(), pathSecret } });
+            }
             return check;
           })
         }
