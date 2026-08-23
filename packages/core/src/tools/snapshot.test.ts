@@ -255,6 +255,42 @@ describe('snapshotBackend', () => {
     );
   });
 
+  /**
+   * The free tier allows 50 subrequests per request. `commitFiles` is four HTTP
+   * requests however many files it carries (ref, tree, commit, ref update), so
+   * the fake's one call is weighted as four here.
+   */
+  function subrequests(repo: FakeRepo): number {
+    return repo.calls.latestCommit + repo.calls.listTree + repo.calls.getBlob + 4 * repo.commits.length;
+  }
+
+  it('stays far inside the 50-subrequest budget, even losing every ref race but the last', async () => {
+    const repo = new FakeRepo();
+    repo.putSnapshot(emptyState());
+    const backend = backendOn(repo);
+    // Every retry re-reads: a new head, a new tree, and a snapshot blob that
+    // also changed, which is the most expensive shape a write can take.
+    repo.conflictsLeft = 2;
+
+    await backend.loadState();
+    await backend.append([taskEvent('01A', 'a', { title: 'Alpha' })]);
+
+    expect(repo.commits).toHaveLength(3);
+    expect(subrequests(repo)).toBeLessThanOrEqual(25);
+  });
+
+  it('costs one conditional GET for a read when nothing has moved', async () => {
+    const repo = new FakeRepo();
+    repo.putSnapshot(emptyState());
+    const backend = backendOn(repo);
+    await backend.loadState();
+    const before = subrequests(repo);
+
+    await backend.loadState();
+
+    expect(subrequests(repo) - before).toBe(1);
+  });
+
   it('refuses to write an event with no id', async () => {
     const repo = new FakeRepo();
     repo.putSnapshot(emptyState());

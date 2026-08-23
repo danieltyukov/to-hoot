@@ -12,7 +12,7 @@ import { GitHubClient, SyncEngine, type Event, type State } from '@to-hoot/core'
 import { fetchHttp, toolContext, type ToolBackend } from '@to-hoot/core/tools';
 
 import { parseConfig } from './config.js';
-import { createServer } from './server.js';
+import { LEGACY_POSTURE, createServer } from './server.js';
 import { fileTimerStore } from './timers.js';
 
 // Node sends console.log, .info and .debug to stdout; .error and .warn already
@@ -60,12 +60,10 @@ function main(): void {
 
   console.error(`to-hoot mcp: serving ${github.owner}/${github.repo} as ${deviceId}`);
 
-  // `legacy: 'serve'` is the SDK default and stays that way on purpose: Claude's
-  // clients still open with the 2025 handshake, and 'reject' would answer every
-  // one of them with an unsupported-protocol-version error while passing every
-  // local test.
+  // The posture is `LEGACY_POSTURE` rather than a literal so `legacy.test.ts`
+  // drives the real handshake through the same value. See that constant.
   serveStdio(() => createServer(ctx), {
-    legacy: 'serve',
+    legacy: LEGACY_POSTURE,
     onerror: err => console.error(`to-hoot mcp: ${err.message}`),
   });
 }
