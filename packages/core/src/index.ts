@@ -11,3 +11,4 @@ export * from './selectors.js';
 export * from './platform.js';
 export * from './settings.js';
 export * from './github/client.js';
+export * from './github/sync.js';
