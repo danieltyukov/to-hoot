@@ -20,13 +20,17 @@
 //      a loser re-reads and rebuilds its write against the winner's commit.
 
 import { SCHEMA_VERSION, type Event } from '../events.js';
-import { DEVICE_ID_RULE, isValidDeviceId, DEFAULT_PROJECT_ID, newTask, ulid, type Project, type Tag, type Task } from '../models.js';
+import { DEVICE_ID_RULE, isValidDeviceId, ulid } from '../models.js';
 import { replay } from '../replay.js';
-import { emptyState, type State } from '../state.js';
-import { toSyncable, validateSettings, type SyncableSettings } from '../settings.js';
+import type { State } from '../state.js';
 import { isEmptyRepository, type RepoClient, type TreeFile } from './client.js';
+import { SNAPSHOT_PATH, parseSnapshot, type SnapshotFile } from './snapshot.js';
 
-export const SNAPSHOT_PATH = 'snapshot.json';
+// One hydrator, shared with the Worker's snapshot backend. Two readers of the
+// same bytes producing two states is the disagreement the total order exists to
+// prevent; see the note at the top of ./snapshot.ts.
+export { SNAPSHOT_PATH, parseSnapshot, parseSnapshotState, hydrateState } from './snapshot.js';
+export type { SnapshotFile } from './snapshot.js';
 export const META_PATH = 'meta.json';
 export const EVENTS_PREFIX = 'events/';
 /** Events past the snapshot before the next sync folds them in. */
@@ -40,20 +44,6 @@ export class SyncConflictError extends Error {
     super(message);
     this.name = 'SyncConflictError';
   }
-}
-
-/**
- * What `snapshot.json` holds, byte for byte identical to the immutable copy it
- * names in `file`. The fixed path is what a cold start and the Worker read; the
- * immutable copy is what makes a concurrent compactor harmless, since two
- * compactors write different filenames and only one of them wins the ref.
- */
-export interface SnapshotFile {
-  schemaVersion: number;
-  /** The immutable copy of this payload: `snapshot-<seq>-<rand>.json`. */
-  file: string;
-  seq: number;
-  state: State;
 }
 
 export interface DeviceRecord {
@@ -478,118 +468,6 @@ function parseMeta(text: string): MetaFile {
   return { schemaVersion: num(raw['schemaVersion'], SCHEMA_VERSION), devices };
 }
 
-/**
- * Refuses a snapshot this build does not understand rather than loading part of
- * it. A partial load writes back over good data on the next compaction, and the
- * device that does it is this user's own phone running a build from months ago.
- */
-function parseSnapshot(text: string): SnapshotFile {
-  const raw: unknown = JSON.parse(text);
-  if (!isRecord(raw)) throw new Error(`${SNAPSHOT_PATH} is not an object`);
-  const version = raw['schemaVersion'];
-  if (version !== SCHEMA_VERSION) {
-    throw new Error(
-      `${SNAPSHOT_PATH} declares schema version ${String(version)}, and this build understands ${SCHEMA_VERSION}: refusing to hydrate it`,
-    );
-  }
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    file: typeof raw['file'] === 'string' ? raw['file'] : '',
-    seq: num(raw['seq'], 0),
-    state: hydrateState(raw['state']),
-  };
-}
-
-/**
- * Rebuilds state from a snapshot payload. Every field added after v1 is optional
- * with a default, so a missing field takes its default rather than failing: an
- * older device's snapshot has to stay loadable.
- */
-function hydrateState(raw: unknown): State {
-  if (!isRecord(raw)) throw new Error('snapshot state is not an object');
-  const state = emptyState();
-  for (const [id, value] of entries(raw['tasks'])) state.tasks[id] = hydrateTask(id, value);
-  for (const [id, value] of entries(raw['projects'])) state.projects[id] = hydrateProject(id, value);
-  for (const [id, value] of entries(raw['tags'])) state.tags[id] = hydrateTag(id, value);
-  state.todayOrder = strings(raw['todayOrder']);
-  state.settings = hydrateSettings(raw['settings']);
-  if (typeof raw['coversThrough'] === 'string') state.coversThrough = raw['coversThrough'];
-  return state;
-}
-
-function entries(raw: unknown): [string, Record<string, unknown>][] {
-  if (!isRecord(raw)) return [];
-  const out: [string, Record<string, unknown>][] = [];
-  for (const [id, value] of Object.entries(raw)) {
-    if (isRecord(value)) out.push([id, value]);
-  }
-  return out;
-}
-
-function hydrateTask(id: string, raw: Record<string, unknown>): Task {
-  const created = num(raw['created'], 0);
-  const task = newTask(id, created);
-  task.updated = num(raw['updated'], created);
-  task.title = str(raw['title'], '');
-  if (typeof raw['notes'] === 'string') task.notes = raw['notes'];
-  task.isDone = raw['isDone'] === true;
-  if (isFinite_(raw['doneOn'])) task.doneOn = raw['doneOn'] as number;
-  task.projectId = str(raw['projectId'], DEFAULT_PROJECT_ID);
-  task.tagIds = strings(raw['tagIds']);
-  if (typeof raw['parentId'] === 'string') task.parentId = raw['parentId'];
-  task.subTaskIds = strings(raw['subTaskIds']);
-  task.timeEstimate = num(raw['timeEstimate'], 0);
-  task.timeSpentOnDay = numbers(raw['timeSpentOnDay']);
-  task.timeSpent = Object.values(task.timeSpentOnDay).reduce((a, b) => a + b, 0);
-  if (typeof raw['dueDay'] === 'string') task.dueDay = raw['dueDay'];
-  if (isFinite_(raw['dueWithTime'])) task.dueWithTime = raw['dueWithTime'] as number;
-  if (typeof raw['calendarEventId'] === 'string') task.calendarEventId = raw['calendarEventId'];
-  task.calendarWritten = numbers(raw['calendarWritten']);
-  return task;
-}
-
-function hydrateProject(id: string, raw: Record<string, unknown>): Project {
-  return {
-    id,
-    title: str(raw['title'], ''),
-    color: str(raw['color'], ''),
-    taskIds: strings(raw['taskIds']),
-    isArchived: raw['isArchived'] === true,
-  };
-}
-
-function hydrateTag(id: string, raw: Record<string, unknown>): Tag {
-  return { id, title: str(raw['title'], ''), color: str(raw['color'], ''), taskIds: strings(raw['taskIds']) };
-}
-
-/** Reuses the settings validator, so one table decides what a valid value is. */
-function hydrateSettings(raw: unknown): SyncableSettings {
-  const result = validateSettings(isRecord(raw) ? raw : {});
-  if (!result.ok) throw new Error(`snapshot settings are invalid: ${result.error}`);
-  return toSyncable(result.value);
-}
-
-function isFinite_(v: unknown): boolean {
-  return typeof v === 'number' && Number.isFinite(v);
-}
-
 function num(v: unknown, fallback: number): number {
-  return isFinite_(v) ? (v as number) : fallback;
-}
-
-function str(v: unknown, fallback: string): string {
-  return typeof v === 'string' ? v : fallback;
-}
-
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
-}
-
-function numbers(v: unknown): Record<string, number> {
-  if (!isRecord(v)) return {};
-  const out: Record<string, number> = {};
-  for (const [key, value] of Object.entries(v)) {
-    if (isFinite_(value)) out[key] = value as number;
-  }
-  return out;
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }

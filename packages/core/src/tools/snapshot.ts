@@ -19,12 +19,10 @@
 // from anything this file remembers.
 
 import type { Event } from '../events.js';
-import { SCHEMA_VERSION } from '../events.js';
 import type { RepoClient } from '../github/client.js';
-import { EVENTS_PREFIX, SNAPSHOT_PATH } from '../github/sync.js';
-import { newTask, type Project, type Tag, type Task } from '../models.js';
+import { EVENTS_PREFIX } from '../github/sync.js';
+import { SNAPSHOT_PATH, parseSnapshotState } from '../github/snapshot.js';
 import { replay } from '../replay.js';
-import { validateSettings, toSyncable, type SyncableSettings } from '../settings.js';
 import { emptyState, type State } from '../state.js';
 import { ulid } from '../models.js';
 import type { ToolBackend } from './runtime.js';
@@ -145,125 +143,9 @@ export class SnapshotBackend implements ToolBackend {
 export function snapshotBackend(options: SnapshotBackendOptions): SnapshotBackend {
   return new SnapshotBackend(options);
 }
-
-/**
- * Reads the state out of a `snapshot.json` payload.
- *
- * Every field is re-checked rather than trusted, because this is JSON written
- * by another device running another build. A field of the wrong type takes its
- * default instead of landing in state, where the first selector to touch it
- * would throw. A snapshot from a newer schema is refused outright: loading half
- * of it is how a partially understood state gets written back over a whole one.
- */
-export function parseSnapshotState(text: string): State {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch (err) {
-    throw new Error(`${SNAPSHOT_PATH} is not valid JSON: ${String(err)}`);
-  }
-  if (!isRecord(raw)) throw new Error(`${SNAPSHOT_PATH} is not an object`);
-  const version = raw['schemaVersion'];
-  if (version !== SCHEMA_VERSION) {
-    throw new Error(
-      `${SNAPSHOT_PATH} declares schema version ${String(version)}, and this build understands ${SCHEMA_VERSION}: refusing to hydrate it`,
-    );
-  }
-  const state = raw['state'];
-  if (!isRecord(state)) throw new Error(`${SNAPSHOT_PATH} has no state object`);
-
-  const out = emptyState();
-  for (const [id, task] of records(state['tasks'])) out.tasks[id] = hydrateTask(id, task);
-  for (const [id, project] of records(state['projects'])) out.projects[id] = hydrateProject(id, project);
-  for (const [id, tag] of records(state['tags'])) out.tags[id] = hydrateTag(id, tag);
-  out.todayOrder = strings(state['todayOrder']);
-  out.settings = hydrateSettings(state['settings']);
-  const covers = state['coversThrough'];
-  if (typeof covers === 'string' && covers !== '') out.coversThrough = covers;
-
-  // Replaying nothing onto it restores the derived fields (the time totals and
-  // the ordering arrays) exactly the way every other read of state gets them.
-  return replay([], out);
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function records(v: unknown): [string, Record<string, unknown>][] {
-  if (!isRecord(v)) return [];
-  const out: [string, Record<string, unknown>][] = [];
-  for (const [key, value] of Object.entries(v)) {
-    if (key !== '' && isRecord(value)) out.push([key, value]);
-  }
-  return out;
-}
-
-function str(v: unknown, fallback: string): string {
-  return typeof v === 'string' ? v : fallback;
-}
-
-function num(v: unknown, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
-}
-
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-}
-
-function numbers(v: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (!isRecord(v)) return out;
-  for (const [key, value] of Object.entries(v)) {
-    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
-  }
-  return out;
-}
-
-function hydrateTask(id: string, raw: Record<string, unknown>): Task {
-  const created = num(raw['created'], 0);
-  const task = newTask(id, created);
-  task.title = str(raw['title'], '');
-  task.isDone = raw['isDone'] === true;
-  task.projectId = str(raw['projectId'], task.projectId);
-  task.tagIds = strings(raw['tagIds']);
-  task.subTaskIds = strings(raw['subTaskIds']);
-  task.timeEstimate = num(raw['timeEstimate'], 0);
-  task.timeSpentOnDay = numbers(raw['timeSpentOnDay']);
-  task.calendarWritten = numbers(raw['calendarWritten']);
-  task.updated = num(raw['updated'], created);
-  if (typeof raw['notes'] === 'string') task.notes = raw['notes'];
-  if (typeof raw['parentId'] === 'string' && raw['parentId'] !== '') task.parentId = raw['parentId'];
-  if (typeof raw['dueDay'] === 'string') task.dueDay = raw['dueDay'];
-  if (typeof raw['dueWithTime'] === 'number' && Number.isFinite(raw['dueWithTime'])) {
-    task.dueWithTime = raw['dueWithTime'];
-  }
-  if (typeof raw['doneOn'] === 'number' && Number.isFinite(raw['doneOn'])) task.doneOn = raw['doneOn'];
-  if (typeof raw['calendarEventId'] === 'string') task.calendarEventId = raw['calendarEventId'];
-  return task;
-}
-
-function hydrateProject(id: string, raw: Record<string, unknown>): Project {
-  return {
-    id,
-    title: str(raw['title'], ''),
-    color: str(raw['color'], ''),
-    taskIds: strings(raw['taskIds']),
-    isArchived: raw['isArchived'] === true,
-  };
-}
-
-function hydrateTag(id: string, raw: Record<string, unknown>): Tag {
-  return {
-    id,
-    title: str(raw['title'], ''),
-    color: str(raw['color'], ''),
-    taskIds: strings(raw['taskIds']),
-  };
-}
-
-function hydrateSettings(raw: unknown): SyncableSettings {
-  const result = validateSettings(isRecord(raw) ? raw : {});
-  if (!result.ok) throw new Error(`snapshot settings are invalid: ${result.error}`);
-  return toSyncable(result.value);
-}
+// Hydration lives in one place, shared with `SyncEngine`. There used to be a
+// copy here, and the two had drifted: this one recomputed the derived orderings
+// and the other trusted them as stored, so the same bytes gave the app and the
+// Worker two different states. Re-exported rather than wrapped, so the Worker's
+// entry point is literally the same function.
+export { parseSnapshotState } from '../github/snapshot.js';
