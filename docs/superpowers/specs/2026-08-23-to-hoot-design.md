@@ -151,8 +151,13 @@ Five rules that are load-bearing:
 4. **`calendarWritten` is the idempotency ledger.** Write-back pushes
    `timeSpentOnDay[day] - calendarWritten[day]` and never a total. A repeated
    sync is a no-op.
-5. **Parent roll-up is incremental.** A child's delta is added to the parent, not
-   recomputed by walking children.
+5. **Parent totals are derived, not stored.** A parent's total time is computed at
+   read time as its own `timeSpentOnDay` sum plus each child's. It is never stored on
+   the parent and never emitted as a second event. Under a replay architecture a
+   stored roll-up can double count (if a delta is replayed twice, or emitted for both
+   child and parent) and can drift from `timeSpentOnDay`; a derived total can do
+   neither. This is a deliberate departure from super-productivity, whose incremental
+   roll-up follows from its stored-state model rather than from the data.
 
 ### Project, Tag, and Today
 
