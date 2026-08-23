@@ -1,8 +1,8 @@
 # to-hoot
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/desktop-dark.png">
-  <img src="docs/img/desktop-light.png" alt="The to-hoot desktop app: a sidebar of projects and tags, today's task list with a running timer, and a day timeline showing tracked and planned time side by side.">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/desktop-dark.webp">
+  <img src="docs/img/desktop-light.webp" alt="The to-hoot desktop app: a sidebar of projects and tags, today's task list with a running timer, and a day timeline showing tracked and planned time side by side.">
 </picture>
 
 A task list that tracks time against the day you actually had. One list on your
@@ -37,7 +37,7 @@ The Claude layer is an MCP server offering nine tools over the same event log:
 `complete_task`, `start_timer`, `stop_timer` and `log_time`. A change made by
 Claude is indistinguishable from one made in the app.
 
-<img src="docs/img/phone.png" alt="The same app on a phone: today's task list, a running timer, and the tracked total for the day with a fourteen-day consistency strip." width="300">
+<img src="docs/img/phone.webp" alt="The same app on a phone: today's task list, a running timer, and the tracked total for the day with a fourteen-day consistency strip." width="300">
 
 ## What it costs
 

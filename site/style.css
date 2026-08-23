@@ -306,9 +306,33 @@ code {
   border-radius: var(--r-panel);
 }
 
-/* One image is shown, never both, and both carry the same alt text: whichever
-   is hidden is out of the accessibility tree, so there is no duplicate to
-   suppress. Same three-path cascade tokens.css uses for colour. */
+/* Two independent axes, composed rather than multiplied out into four rules.
+   The size axis hides a wrapper, which hides everything in it whatever the
+   theme rules below say, so the theme axis stays the same three-path cascade
+   tokens.css uses for colour. Exactly one image is ever rendered; the other
+   three are display:none and therefore out of the accessibility tree, so their
+   alt text is never announced twice. */
+.shot-narrow {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .shot-wide {
+    display: none;
+  }
+
+  .shot-narrow {
+    display: block;
+  }
+
+  /* A phone screenshot is portrait: full width it would be taller than most
+     screens and read as a wall rather than a picture of an app. */
+  .shot img {
+    max-width: 380px;
+    margin: 0 auto;
+  }
+}
+
 .shot-light {
   display: block;
 }

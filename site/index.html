@@ -77,21 +77,46 @@
         </p>
       </div>
 
+      <!--
+        Two sizes, two themes, one image shown. The desktop shot is 2880px wide
+        and is a picture of a shape rather than something anyone can read once
+        the column is narrower than about 760px, so below that the phone shot
+        takes over. Each of the four carries its own alt, because what the
+        reader is missing genuinely differs between the two layouts.
+      -->
       <figure class="shot">
-        <img
-          class="shot-light"
-          src="../docs/img/desktop-light.png"
-          width="2880"
-          height="1720"
-          alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
-        />
-        <img
-          class="shot-dark"
-          src="../docs/img/desktop-dark.png"
-          width="2880"
-          height="1720"
-          alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
-        />
+        <div class="shot-wide">
+          <img
+            class="shot-light"
+            src="../docs/img/desktop-light.webp"
+            width="2880"
+            height="1720"
+            alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
+          />
+          <img
+            class="shot-dark"
+            src="../docs/img/desktop-dark.webp"
+            width="2880"
+            height="1720"
+            alt="The to-hoot desktop app: a sidebar of projects and tags on the left, today's task list in the middle with a timer running on one task, and a day timeline on the right showing tracked time beside planned calendar events."
+          />
+        </div>
+        <div class="shot-narrow">
+          <img
+            class="shot-light"
+            src="../docs/img/phone.webp"
+            width="780"
+            height="1688"
+            alt="The same app on a phone: today's tasks each labelled with their project, a timer running on the first, a done section below, and the tracked total for the day with a fourteen-day strip."
+          />
+          <img
+            class="shot-dark"
+            src="../docs/img/phone-dark.webp"
+            width="780"
+            height="1688"
+            alt="The same app on a phone: today's tasks each labelled with their project, a timer running on the first, a done section below, and the tracked total for the day with a fourteen-day strip."
+          />
+        </div>
       </figure>
 
       <div class="wrap">
@@ -138,7 +163,7 @@
             no hosted service: what runs is running in your accounts.
           </p>
 
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="What it costs">
             <table>
               <caption class="visually-hidden">
                 Every service to-hoot uses, its free tier, and what happens at the limit
@@ -247,7 +272,7 @@
           <p class="micro">Build from source</p>
           <h2 id="build">For anyone who will not run a binary someone else compiled</h2>
           <p>Node 22 and npm 10 or newer. The tests run on a fresh clone with no build step first.</p>
-          <pre><code>git clone https://github.com/danieltyukov/to-hoot.git
+          <pre tabindex="0" role="region" aria-label="Commands to clone, test and build"><code>git clone https://github.com/danieltyukov/to-hoot.git
 cd to-hoot
 npm ci
 npm test
@@ -257,7 +282,7 @@ npm run build</code></pre>
             are shells around it, each built separately because the Tauri and Capacitor CLIs both
             want a flat <code>node_modules</code>:
           </p>
-          <pre><code>cd apps/desktop &amp;&amp; npm install &amp;&amp; npm run build
+          <pre tabindex="0" role="region" aria-label="Commands to build the desktop and mobile shells"><code>cd apps/desktop &amp;&amp; npm install &amp;&amp; npm run build
 cd apps/mobile  &amp;&amp; npm install &amp;&amp; npm run apk:debug</code></pre>
           <p>
             No keystore is needed to build: debug builds sign themselves, and a release build with
