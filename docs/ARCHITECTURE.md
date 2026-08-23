@@ -113,10 +113,18 @@ One commit per sync, through the Git Data API. Four calls, regardless of how man
 files change, because small file contents are inlined into the tree rather than
 uploaded as separate blobs:
 
-    GET   /repos/:o/:r/git/ref/heads/main    the parent commit SHA
-    POST  /repos/:o/:r/git/trees             a tree, base_tree plus inline content
-    POST  /repos/:o/:r/git/commits           the commit
-    PATCH /repos/:o/:r/git/refs/heads/main   move the branch
+    GET   /repos/:o/:r/git/ref/heads/<branch>    the parent commit SHA
+    POST  /repos/:o/:r/git/trees                 a tree, base_tree plus inline content
+    POST  /repos/:o/:r/git/commits               the commit
+    PATCH /repos/:o/:r/git/refs/heads/<branch>   move the branch
+
+`<branch>` is the branch you configured, or, with none configured, whatever the
+repository says its own default branch is. It is read once from the repository
+and reused. Nothing here has a literal branch name in it, and it deliberately
+does not fall back to `main`: an account that never changed the setting creates
+repositories on `master`, and a client that assumed `main` would get a 404 that
+reads like a broken token. Reads and writes resolve it the same way, because a
+client that polled one branch and committed to another would be silently wrong.
 
 The `PATCH` fails if the ref moved since the `GET`. **That rejection is the
 concurrency check.** On failure the engine re-reads and rebuilds the whole write
@@ -130,7 +138,7 @@ genuinely being append-only.
 
 ## The read path
 
-    GET /repos/:o/:r/commits?sha=main&per_page=1   with If-None-Match
+    GET /repos/:o/:r/commits?sha=<branch>&per_page=1   with If-None-Match
 
 A 304 does not count against the primary rate limit, so polling costs nothing.
 When the ETag moves:

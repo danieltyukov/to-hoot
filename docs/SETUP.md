@@ -26,12 +26,17 @@ Nothing later in this document is required. If a local task tracker with time
 tracking is what you wanted, you are done, and the app will not nag you about the
 rest.
 
-Two things worth setting from Settings before you forget:
+Settings has five sections: Sync, Calendar, Claude, Appearance and Data. Only two
+of them matter until you set up the rest. **Appearance** carries the theme and
+the hours your workday runs between, which is the span the day timeline opens on.
+**Data** is export to JSON and import.
 
-- **Day start offset.** If your day ends at 02:00, a task finished at 01:30
-  belongs to the day before. The offset moves the boundary rather than the clock.
-- **Idle threshold.** How long the desktop has to be idle before a running timer
-  offers to discard the gap. Android has no equivalent signal and does not ask.
+Two behaviours are worth knowing because no control mentions them. The day
+boundary is an offset from midnight rather than midnight itself, so a task
+finished at 01:30 counts towards the day before rather than starting a new one.
+And on the desktop a timer left running while the machine sits idle offers the
+gap back instead of counting it; Android has no equivalent signal and does not
+ask. Both are stored settings that nothing on screen exposes yet.
 
 ## 2. Sync
 
@@ -177,7 +182,7 @@ the repository:
 | `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository |
 | `TO_HOOT_GITHUB_REPO` | yes | The data repository |
 | `TO_HOOT_GITHUB_TOKEN` | yes | The same fine-grained token, or a second one |
-| `TO_HOOT_GITHUB_BRANCH` | no | Defaults to `main` |
+| `TO_HOOT_GITHUB_BRANCH` | no | The branch to use. Unset means the repository's own default |
 | `TO_HOOT_DEVICE_ID` | no | One path segment, unique per device. Defaults to `mcp-<hostname>` |
 | `TO_HOOT_STATE_DIR` | no | Where a running timer is kept. Defaults to `~/.to-hoot` |
 
@@ -217,8 +222,14 @@ Two behaviours are worth knowing before you rely on it:
 
 ## Leaving
 
-Settings, Data, has export to JSON, import, and log compaction, next to a plain
-statement of where your data lives and what deleting the repository would mean.
+Settings, Data, has export to JSON and import, next to a plain statement of
+where your data lives and what deleting the repository would mean.
+
+There is no compact button, on purpose. Compaction happens during a sync, in the
+same commit that writes the snapshot, so there is never a moment where the two
+disagree. A local button would either do nothing or fold away a log that no other
+device had read yet. The Data screen says how many events the log holds and
+leaves it at that.
 
 To leave entirely: export, revoke the GitHub token, delete the data repository,
 delete the Apps Script deployment, delete the Worker, uninstall. Nothing survives
