@@ -499,22 +499,49 @@ function normalize(state: State): void {
   // Sorted ids give a deterministic append order, and a ULID sorts by creation.
   const ids = Object.keys(state.tasks).sort();
 
+  // One pass over the sorted ids fills every container's membership list at
+  // once. Asking each container which tasks belong to it instead reads more
+  // directly, and it is what this did first, but it is a scan of every task per
+  // container: quadratic in the task count. That is affordable in an app that
+  // replays on a keystroke and not in a Cloudflare Worker with a 10ms CPU
+  // budget, where an ordinary two thousand task list took 40ms per replay.
+  //
+  // Pushing in `ids` order is what keeps the result identical to the scan:
+  // every bucket comes out sorted, so the append order below is unchanged and
+  // replay stays deterministic.
+  const childrenOf = new Map<string, string[]>();
+  const tasksInProject = new Map<string, string[]>();
+  const tasksWithTag = new Map<string, string[]>();
+
+  const push = (index: Map<string, string[]>, key: string, id: string): void => {
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [id]);
+    else bucket.push(id);
+  };
+
+  for (const id of ids) {
+    const task = state.tasks[id];
+    if (task === undefined) continue;
+    if (task.parentId !== undefined) push(childrenOf, task.parentId, id);
+    push(tasksInProject, task.projectId, id);
+    // A task listing the same tag twice must not appear twice in that tag.
+    for (const tagId of new Set(task.tagIds)) push(tasksWithTag, tagId, id);
+  }
+
+  const EMPTY: readonly string[] = [];
+  const bucket = (index: Map<string, string[]>, key: string): string[] =>
+    index.get(key) ?? (EMPTY as string[]);
+
   for (const task of tasks) {
-    const children = ids.filter(id => {
-      const child = state.tasks[id];
-      return child !== undefined && child.parentId === task.id;
-    });
-    task.subTaskIds = reconcileOrder(task.subTaskIds, children);
+    task.subTaskIds = reconcileOrder(task.subTaskIds, bucket(childrenOf, task.id));
   }
 
   for (const project of Object.values(state.projects)) {
-    const members = ids.filter(id => state.tasks[id]?.projectId === project.id);
-    project.taskIds = reconcileOrder(project.taskIds, members);
+    project.taskIds = reconcileOrder(project.taskIds, bucket(tasksInProject, project.id));
   }
 
   for (const tag of Object.values(state.tags)) {
-    const members = ids.filter(id => state.tasks[id]?.tagIds.includes(tag.id));
-    tag.taskIds = reconcileOrder(tag.taskIds, members);
+    tag.taskIds = reconcileOrder(tag.taskIds, bucket(tasksWithTag, tag.id));
   }
 
   // todayOrder is ordering only, so dead ids are dropped and nothing is added:
