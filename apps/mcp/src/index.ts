@@ -4,8 +4,14 @@
 //
 // stdout is the protocol channel. One line of anything that is not a JSON-RPC
 // message breaks the connection, and the failure looks like the server crashing
-// rather than like something logging, so the console is redirected below before
-// any other module gets a chance to write.
+// rather than like something logging.
+//
+// The redirect MUST be the first import and MUST stay first. ESM hoists imports
+// and evaluates them before any statement in this file, so assigning to
+// `console.log` here, below the import list, would run only after the whole SDK
+// had already been evaluated.
+
+import './stdout-guard.js';
 
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { GitHubClient, SyncEngine, type Event, type State } from '@to-hoot/core';
@@ -14,13 +20,6 @@ import { fetchHttp, toolContext, type ToolBackend } from '@to-hoot/core/tools';
 import { parseConfig } from './config.js';
 import { LEGACY_POSTURE, createServer } from './server.js';
 import { fileTimerStore } from './timers.js';
-
-// Node sends console.log, .info and .debug to stdout; .error and .warn already
-// go to stderr. A dependency that logs on stdout would emit a line no JSON-RPC
-// parser accepts, so they are all pointed at stderr rather than trusted.
-console.log = console.error;
-console.info = console.error;
-console.debug = console.error;
 
 /**
  * The full sync engine as a tool backend. This host is a long-lived process
