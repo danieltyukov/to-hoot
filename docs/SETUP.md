@@ -275,13 +275,23 @@ disagree. A local button would either do nothing or fold away a log that no othe
 device had read yet. The Data screen says how many events the log holds and
 leaves it at that.
 
-If the log file on disk is ever unreadable, Data says so: its summary reads "not
-saving" rather than an event count, and the only way forward is a **Start a new
-log** button, which keeps the unreadable file beside the new one rather than
-deleting it. The app would rather stop saving than write over the only copy of
-work that has not synced, so it keeps running from memory until you decide. Both
-shells write to a temporary file and rename over the target, which is atomic
-within a directory, so this should stay hypothetical.
+One rule sits behind what happens if the log file on disk is not what the app
+expects: if the file is not exactly the shape this app writes, it is not this
+app's to replace. That covers a file cut short by a crash, a file the disk
+refuses to open at all, a file holding an entry this version cannot read, and a
+file written by a newer version of the app, which is the one you might actually
+meet, by running an older build against a log a newer one wrote.
+
+In any of those cases Data says so: its summary reads "not saving" rather than an
+event count. **Nothing is written at all while that notice is up**, the cache
+included, so the sentence on screen is literally true. The app keeps running from
+memory, and the way out is a **Start a new log** button, which keeps the old file
+beside the new one rather than deleting it and carries whatever you did during
+the degraded session into the fresh log. The only copy of that work was in
+memory, which is the loss the whole behaviour exists to prevent.
+
+Both shells write to a temporary file and rename over the target, which is atomic
+within a directory, so a half-written log should stay hypothetical.
 
 To leave entirely: export, revoke the GitHub token, delete the data repository,
 delete the Apps Script deployment, delete the Worker, uninstall. Nothing survives
