@@ -7,14 +7,17 @@
 
 import { CapacitorHttp } from '@capacitor/core';
 import { App } from '@capacitor/app';
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
 
 import type {
+  FileStore,
   Http,
   HttpResponse,
   KeyValueStore,
+  NotificationId,
   NotifyOptions,
   Platform,
   Unsubscribe,
@@ -28,14 +31,30 @@ import type {
  * way a native client follows it.
  */
 const http: Http = async (req): Promise<HttpResponse> => {
+  const headersOut = { ...req.headers };
+  // CapacitorHttpUrlConnection.setRequestBody returns immediately when the
+  // Content-Type is absent, so a body sent without one is silently dropped and
+  // the server sees an empty POST. text/plain is the type that makes the plugin
+  // write the string through verbatim; a caller meaning JSON says so itself,
+  // and both clients in core do.
+  if (req.body !== undefined && !Object.keys(headersOut).some(k => k.toLowerCase() === 'content-type')) {
+    headersOut['content-type'] = 'text/plain;charset=utf-8';
+  }
+
   const res = await CapacitorHttp.request({
     url: req.url,
     method: req.method ?? 'GET',
-    headers: req.headers,
+    headers: headersOut,
     data: req.body,
-    // Without this the plugin parses JSON for us and `text()` would have to
-    // stringify it back, which does not round-trip: key order and number
-    // formatting both change, and any hash taken over the body stops matching.
+    // Governs how a non-JSON body comes back: without it the ICS calendar feed
+    // would arrive as something other than the text it is.
+    //
+    // It does not cover JSON. HttpRequestHandler.readData checks the response
+    // Content-Type first and parses anything JSON-shaped before it ever looks
+    // at responseType, so a GitHub or Apps Script body is handed to us already
+    // parsed and is re-serialised below. Nothing may depend on the response
+    // text being byte-for-byte what the server sent: an ETag is compared as the
+    // header it came in, never as a hash over the body.
     responseType: 'text',
   });
 
@@ -63,6 +82,46 @@ const store: KeyValueStore = {
   },
   async keys() {
     return (await Preferences.keys()).keys;
+  },
+};
+
+/**
+ * The event log and its snapshots, as files in the app's data directory.
+ *
+ * Separate from `store` because Preferences is SharedPreferences, which commits
+ * with `apply()`: the write is asynchronous, so a process killed at the wrong
+ * moment loses it, and the whole XML file is rewritten every time. Good for a
+ * handful of settings, wrong for something appended to all day.
+ */
+const files: FileStore = {
+  async read(name) {
+    try {
+      const res = await Filesystem.readFile({
+        path: name,
+        directory: Directory.Data,
+        encoding: Encoding.UTF8,
+      });
+      return typeof res.data === 'string' ? res.data : await res.data.text();
+    } catch {
+      // The plugin throws for a missing file, which is an ordinary answer here.
+      return null;
+    }
+  },
+  async write(name, contents) {
+    await Filesystem.writeFile({
+      path: name,
+      data: contents,
+      directory: Directory.Data,
+      encoding: Encoding.UTF8,
+      recursive: true,
+    });
+  },
+  async remove(name) {
+    try {
+      await Filesystem.deleteFile({ path: name, directory: Directory.Data });
+    } catch {
+      /* already gone, which is what was asked for */
+    }
   },
 };
 
@@ -104,14 +163,15 @@ function notificationId(): number {
  * back from the wall clock on `resume`, and it is exact however long the app
  * was away.
  */
-async function notify(opts: NotifyOptions): Promise<void> {
-  if (!(await notificationsAllowed())) return;
+async function notify(opts: NotifyOptions): Promise<NotificationId> {
+  const id = notificationId();
+  if (!(await notificationsAllowed())) return id;
 
   if (opts.inMs && opts.inMs > 0) {
     await LocalNotifications.schedule({
       notifications: [
         {
-          id: notificationId(),
+          id,
           title: opts.title,
           body: opts.body ?? '',
           // An exact alarm needs SCHEDULE_EXACT_ALARM, which since Android 12
@@ -132,14 +192,27 @@ async function notify(opts: NotifyOptions): Promise<void> {
         },
       ],
     });
-    return;
+    return id;
   }
 
   await LocalNotifications.schedule({
-    notifications: [{ id: notificationId(), title: opts.title, body: opts.body ?? '' }],
+    notifications: [{ id, title: opts.title, body: opts.body ?? '' }],
   });
   // The buzz is what gets noticed when the phone is face down on a desk.
   await Haptics.notification({ type: NotificationType.Success }).catch(() => {});
+  return id;
+}
+
+/**
+ * Takes a pending reminder back off AlarmManager.
+ *
+ * This is the half that matters on Android: the alarm is held by the OS, so a
+ * timer stopped early would otherwise still buzz at its old end time, from a
+ * process that may no longer exist. Cancelling an id that already fired, or was
+ * never scheduled, is a no-op the plugin absorbs.
+ */
+async function cancelNotification(id: NotificationId): Promise<void> {
+  await LocalNotifications.cancel({ notifications: [{ id }] }).catch(() => {});
 }
 
 /**
@@ -181,7 +254,15 @@ export interface MobilePlatform extends Platform {
 // No `idleSeconds`. Android has no OS-level idle signal to read, and the app
 // infers idleness from the wall-clock gap across a resume instead, which is
 // what `onResume` is for.
-export const platform: MobilePlatform = { http, store, notify, onResume, haptics };
+export const platform: MobilePlatform = {
+  http,
+  store,
+  files,
+  notify,
+  cancelNotification,
+  onResume,
+  haptics,
+};
 
 declare global {
   interface Window {

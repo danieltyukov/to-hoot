@@ -14,6 +14,8 @@ coupling.
 measuring what the app does with real elapsed time. Maestro has no sleep
 command, so the wait is an `evalScript` busy loop.
 
-The flows read the Tasks pane, where the day timeline is not on screen. That is
-what makes `assertNotVisible: "0:0"` safe to assert: an hour label like 10:00
-would otherwise match it.
+Every text assertion is anchored with `^` and `$`. Maestro matches element text
+as a regex, and an unanchored clock pattern is satisfied by things that are not
+the timer: `0:0` appears inside the Android status bar clock at 10:0x and 20:0x,
+and `1:00` inside a timeline hour label. Anchoring is what makes these assert
+the row they are meant to.

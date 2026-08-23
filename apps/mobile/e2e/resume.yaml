@@ -9,11 +9,11 @@ appId: com.tohoot.app
 ---
 - launchApp:
     clearState: true
-- tapOn: "Add a task"
+- tapOn: "New task"
 - inputText: "Long running work"
 - pressKey: Enter
 - tapOn: "Start timer for Long running work"
-- assertVisible: "0:0"
+- assertVisible: "^0:0[0-9]$"
 - pressKey: Home
 # Maestro has no sleep command, and this wait is the whole point of the flow:
 # the app has to be away long enough that a timer which stopped counting comes
@@ -23,7 +23,8 @@ appId: com.tohoot.app
 - launchApp:
     stopApp: false
 - assertVisible: "Stop timer for Long running work"
-# Past a minute now, so the sub-minute reading has to be gone. Were the timer
-# frozen or reset it would still read 0:0x, and that is the regression.
-- assertNotVisible: "0:0"
+# Past a minute, which it can only be if the elapsed time came from the clock
+# rather than from ticks the suspended WebView never received. Anchored, so it
+# cannot be satisfied by a timeline hour label like 11:00 or 21:00.
+- assertVisible: "^1:[0-9][0-9]$"
 - takeScreenshot: timer-after-resume

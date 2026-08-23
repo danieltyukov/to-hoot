@@ -1,22 +1,25 @@
 # Start a task's timer and watch the clock move.
 #
-# Selectors are the strings a person sees, or the aria-labels the WebView
-# publishes to the accessibility tree ("Start timer for <task>"), which is why
-# every icon-only control in the ui has one.
+# Selectors are the accessible names the WebView publishes into Android's
+# accessibility tree, which is why every icon-only control in the ui has one.
+# The composer is matched on its aria-label, "New task", not on its "Add a task"
+# placeholder: the placeholder is the hint, and the label is the name.
 appId: com.tohoot.app
 ---
 - launchApp:
     clearState: true
-- tapOn: "Add a task"
+- tapOn: "New task"
 - inputText: "Write the report"
 - pressKey: Enter
 - assertVisible: "Write the report"
 - tapOn: "Start timer for Write the report"
-# A running timer reads m:ss, so it passes through 0:0x on its way up. The
-# assertion is that it is counting at all: a display frozen at 0:00 and a
-# display that stopped look identical in a screenshot.
-- assertVisible: "0:0"
+# The unambiguous signal that the timer is running: only a running row offers to
+# stop, and the task title makes it specific to this row.
 - assertVisible: "Stop timer for Write the report"
+# And that it is counting, rather than frozen at zero. Anchored, because an
+# unanchored "0:0" is also inside the status bar clock at 10:0x and 20:0x, which
+# would let this pass for the wrong reason.
+- assertVisible: "^0:0[0-9]$"
 - takeScreenshot: timer-running
 - tapOn: "Stop timer for Write the report"
 - assertVisible: "Start timer for Write the report"

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -47,9 +48,18 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      SCHEDULE_EXACT_ALARM, RECEIVE_BOOT_COMPLETED, WAKE_LOCK and VIBRATE are
-      merged in from the local-notifications and haptics plugins' own manifests.
-      They are not repeated here, so that this file says what the app asks for
-      beyond what its plugins already ask for.
+      RECEIVE_BOOT_COMPLETED, WAKE_LOCK and VIBRATE are merged in from the
+      local-notifications and haptics plugins' own manifests. They are not
+      repeated here, so that this file says what the app asks for beyond what
+      its plugins already ask for.
+
+      SCHEDULE_EXACT_ALARM is merged in by the same plugin and taken back out
+      again. The adapter schedules every reminder with isExactNotification
+      false, so the permission is never exercised; leaving it declared would
+      mean shipping a Play-restricted permission the app does not use, and a
+      release declaring it is rejected.
     -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:node="remove" />
 </manifest>

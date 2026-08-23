@@ -35,10 +35,12 @@ builds.
 ## Behaviour worth knowing
 
 **Blank white window on NVIDIA.** WebKitGTK hands back an empty frame with no
-error. The installed `.desktop` file ships `__NV_DISABLE_EXPLICIT_SYNC=1` in its
-`Exec` line for exactly this; running the binary directly does not get that, so
-export it by hand. If a machine is still blank, add
-`WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+error. The binary sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, before the
+builder runs, so a bare `/usr/bin/to-hoot` carries it: the installed `.desktop`
+file has the same line, but `tauri-plugin-autostart` writes its own autostart
+entry as a bare path with no environment, and the workaround has to survive
+that. An explicit value in the environment is left alone. If a machine is still
+blank, add `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
 **Single instance.** `tauri-plugin-single-instance` is registered first in the
 builder chain and must stay there. Registered after another plugin it stops
@@ -54,6 +56,17 @@ is why CORS never enters into it. The allowlist has to name both
 `script.google.com` and `script.googleusercontent.com`, because the Apps Script
 `/exec` endpoint 302-redirects to the second one and a redirect target is scoped
 separately.
+
+**The scope is not re-checked across redirects.** It governs the URL the request
+is made to; an allowlisted host answering 302 can send it on anywhere. The
+allowlist says where this app knocks, not where the bytes end up. It still has
+to name `script.googleusercontent.com`, because that is the URL the redirect is
+followed to.
+
+**Two kinds of storage.** `store` is the plugin-store JSON document, for
+settings. `files` is `tauri-plugin-fs` under the app data directory, for the
+event log and its snapshots: one document rewritten in full on every change is
+the wrong shape for something appended to all day.
 
 The bundle identifier is `com.tohoot.app`, matching the Android app id. Tauri
 warns that an identifier ending in `.app` collides with the macOS bundle

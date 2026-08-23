@@ -49,10 +49,48 @@ export interface NotifyOptions {
 
 export type Unsubscribe = () => void;
 
+/**
+ * A handle on a notification that has been handed to the OS but not yet fired.
+ *
+ * A number because Android's is one: notification ids there are 32-bit ints,
+ * and inventing a richer type here would only be something every shell has to
+ * translate back.
+ */
+export type NotificationId = number;
+
+/**
+ * Storage for things too big to belong in `KeyValueStore`: the event log and its
+ * snapshots.
+ *
+ * They are separate because the backings are. `KeyValueStore` is
+ * SharedPreferences on Android, which rewrites its whole XML file on every
+ * commit and writes it asynchronously, so a process killed at the wrong moment
+ * loses the write. That is a fine way to keep a handful of settings and a bad
+ * way to keep an append-only log.
+ */
+export interface FileStore {
+  /** Null when the file does not exist, rather than throwing. */
+  read(name: string): Promise<string | null>;
+  write(name: string, contents: string): Promise<void>;
+  remove(name: string): Promise<void>;
+}
+
 export interface Platform {
   http: Http;
+  /** Settings, and nothing larger. See `files` for the log. */
   store: KeyValueStore;
-  notify(opts: NotifyOptions): Promise<void>;
+  files: FileStore;
+  /**
+   * Hands a notification to the OS and answers with a handle for cancelling it.
+   *
+   * The handle matters for the delayed case. A timer stopped early has to take
+   * its reminder back, and on Android the alarm outlives the process that
+   * scheduled it: without cancellation a cancelled pomodoro still buzzes,
+   * possibly from a process that no longer exists.
+   */
+  notify(opts: NotifyOptions): Promise<NotificationId>;
+  /** Cancelling an id that already fired, or was never scheduled, does nothing. */
+  cancelNotification(id: NotificationId): Promise<void>;
   /** Fires when the app comes back to the foreground. */
   onResume(cb: () => void): Unsubscribe;
   /**

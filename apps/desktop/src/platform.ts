@@ -7,6 +7,14 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import {
+  BaseDirectory,
+  exists,
+  mkdir,
+  readTextFile,
+  remove as removeFile,
+  writeTextFile,
+} from '@tauri-apps/plugin-fs';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import {
   isPermissionGranted,
@@ -16,9 +24,11 @@ import {
 import { load, type Store } from '@tauri-apps/plugin-store';
 
 import type {
+  FileStore,
   Http,
   HttpResponse,
   KeyValueStore,
+  NotificationId,
   NotifyOptions,
   Platform,
   Unsubscribe,
@@ -30,6 +40,14 @@ import type {
  * the Apps Script calendar bridge is reachable at all, and the GitHub API needs
  * no proxy. What it may reach is fixed by `capabilities/default.json`, not by
  * this file.
+ *
+ * The scope governs the URL the request is made to, and is not re-checked when
+ * a server redirects: an allowlisted host that answers 302 can send the request
+ * on anywhere. The allowlist is therefore a statement about where this app
+ * knocks, not a guarantee about where the bytes end up. It still has to name
+ * script.googleusercontent.com, because that is the URL the redirect is
+ * followed to and Apps Script would otherwise be unreachable, but it is worth
+ * knowing that naming it is not what makes the redirect safe.
  */
 const http: Http = async (req): Promise<HttpResponse> => {
   const res = await tauriFetch(req.url, {
@@ -46,7 +64,12 @@ const http: Http = async (req): Promise<HttpResponse> => {
     headers[key.toLowerCase()] = value;
   });
 
-  return { status: res.status, headers, text: () => res.text() };
+  // Buffered once, rather than handing back the stream's own `text()`, which
+  // can only be consumed once. Callers may read a body twice (log it, then
+  // parse it), and the Android adapter allows that; a contract that holds on
+  // one platform and not the other is worse than either behaviour.
+  const body = await res.text();
+  return { status: res.status, headers, text: async () => body };
 };
 
 const STORE_FILE = 'to-hoot.json';
@@ -75,20 +98,69 @@ const store: KeyValueStore = {
   },
 };
 
+/**
+ * The event log and its snapshots, as files in the app's data directory.
+ *
+ * Separate from `store` because the log outgrows a key-value store: `store` is
+ * one JSON document rewritten in full on every change, which is fine for
+ * settings and wrong for something appended to all day.
+ */
+const DATA_DIR = 'data';
+const baseDir = BaseDirectory.AppData;
+
+function filePath(name: string): string {
+  return `${DATA_DIR}/${name}`;
+}
+
+const files: FileStore = {
+  async read(name) {
+    const path = filePath(name);
+    // Asked rather than caught: a missing file is an ordinary answer here, and
+    // matching on the text of an OS error message is not a way to tell it apart
+    // from a permission problem.
+    if (!(await exists(path, { baseDir }))) return null;
+    return readTextFile(path, { baseDir });
+  },
+  async write(name, contents) {
+    await mkdir(DATA_DIR, { baseDir, recursive: true });
+    await writeTextFile(filePath(name), contents, { baseDir });
+  },
+  async remove(name) {
+    const path = filePath(name);
+    if (await exists(path, { baseDir })) await removeFile(path, { baseDir });
+  },
+};
+
 async function ensureNotificationPermission(): Promise<boolean> {
   if (await isPermissionGranted()) return true;
   return (await requestPermission()) === 'granted';
 }
 
-async function notify(opts: NotifyOptions): Promise<void> {
-  if (!(await ensureNotificationPermission())) return;
-  const fire = (): void => sendNotification({ title: opts.title, body: opts.body });
+let nextId = 1;
+const pending = new Map<NotificationId, ReturnType<typeof setTimeout>>();
+
+async function notify(opts: NotifyOptions): Promise<NotificationId> {
+  const id = nextId++;
+  if (!(await ensureNotificationPermission())) return id;
+  const fire = (): void => {
+    pending.delete(id);
+    sendNotification({ title: opts.title, body: opts.body });
+  };
 
   // A timer, unlike on Android. The notification plugin's `schedule` option is
   // implemented on mobile only, and a desktop process that lives in the tray is
   // still running when the timer fires, so there is nothing to work around.
-  if (opts.inMs && opts.inMs > 0) setTimeout(fire, opts.inMs);
+  if (opts.inMs && opts.inMs > 0) pending.set(id, setTimeout(fire, opts.inMs));
   else fire();
+  return id;
+}
+
+/** A no-op for an id that already fired, which is the contract. */
+async function cancelNotification(id: NotificationId): Promise<void> {
+  const handle = pending.get(id);
+  if (handle === undefined) return;
+  clearTimeout(handle);
+  pending.delete(id);
 }
 
 /**
@@ -127,7 +199,15 @@ async function idleSeconds(): Promise<number> {
   }
 }
 
-export const platform: Platform = { http, store, notify, onResume, idleSeconds };
+export const platform: Platform = {
+  http,
+  store,
+  files,
+  notify,
+  cancelNotification,
+  onResume,
+  idleSeconds,
+};
 
 declare global {
   interface Window {

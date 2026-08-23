@@ -75,6 +75,22 @@ do that, so the adapter passes `isExactNotification: false` and relies on
 roughly one every nine minutes, so a reminder is on time to the minute, not to
 the second.
 
+**A stopped timer takes its reminder back.** The alarm is held by AlarmManager
+and outlives the process that scheduled it, so `notify` hands back an id and
+`cancelNotification` takes it off again. Without that, a pomodoro cancelled at
+minute three still buzzes at minute twenty-five.
+
+**SCHEDULE_EXACT_ALARM is removed from the merged manifest.** The notification
+plugin declares it; the adapter never exercises it, and it is Play-restricted,
+so `tools:node="remove"` takes it back out. Check with
+`aapt2 dump permissions` on the built APK, not by reading the source manifest.
+
+**Two kinds of storage.** `store` is Preferences, for settings. `files` is
+`@capacitor/filesystem` under the app data directory, for the event log and its
+snapshots: SharedPreferences commits asynchronously with `apply()` and rewrites
+its whole XML every time, which loses a write to a process kill and is the wrong
+shape for something appended to all day.
+
 **Background sync is opportunistic, never a guarantee.** WorkManager's periodic
 floor is fifteen minutes and Doze stretches it further. This is safe because the
 event log is append-only: a late sync merges by replay.
