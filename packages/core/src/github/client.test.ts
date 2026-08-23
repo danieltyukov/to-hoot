@@ -228,6 +228,30 @@ describe('GitHubClient', () => {
     expect(http.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
   });
 
+  it('refuses to commit onto a head that moved since the caller planned', async () => {
+    // The ref reads back as commit-1, so a plan built on commit-0 is stale. It
+    // would still fast forward cleanly, which is exactly why it has to be
+    // caught here rather than left to the ref update.
+    await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], 'commit-0')).resolves.toBe('conflict');
+    expect(http.calls.map(c => c.method)).toEqual(['GET']);
+  });
+
+  it('commits when the head still matches what the caller planned from', async () => {
+    await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], 'commit-1')).resolves.toBe('ok');
+    expect(http.calls).toHaveLength(4);
+  });
+
+  it('treats a branch that appeared since the plan as a conflict', async () => {
+    // Planned against an empty repository, but someone has since pushed one.
+    await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], null)).resolves.toBe('conflict');
+    expect(http.calls).toHaveLength(1);
+  });
+
+  it('still commits with no expectation, for a caller that has not read the head', async () => {
+    await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }])).resolves.toBe('ok');
+    expect(http.calls).toHaveLength(4);
+  });
+
   it('targets the branch it was configured with', async () => {
     const other = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok', branch: 'data' });
     await other.getRef().catch(() => undefined);

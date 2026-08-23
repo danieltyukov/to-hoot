@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { SyncEngine, SNAPSHOT_PATH, META_PATH, type SnapshotFile } from './sync.js';
+import { SyncEngine, SyncConflictError, SNAPSHOT_PATH, META_PATH, type SnapshotFile } from './sync.js';
 import { GitHubClient, type CommitOutcome, type RepoClient, type TreeEntry, type TreeFile } from './client.js';
 import { newEvent, type Event } from '../events.js';
 import { replay } from '../replay.js';
@@ -25,6 +25,10 @@ class FakeRepo implements RepoClient {
   /** The real client reads the ref once per attempt, so this counts attempts. */
   getRefCalls = 0;
   blobReads: string[] = [];
+  /** Runs inside a commit, before the head is compared: the TOCTOU window. */
+  beforeCommit?: () => void;
+  /** Makes the polling read fail, to stand in for a 409 or a revoked token. */
+  failLatestCommitWith?: number;
   private version = 0;
   private bySha = new Map<string, string>();
 
@@ -39,6 +43,9 @@ class FakeRepo implements RepoClient {
   }
 
   async latestCommit(etag?: string): Promise<{ sha: string; etag: string } | 'not-modified'> {
+    if (this.failLatestCommitWith !== undefined) {
+      throw Object.assign(new Error(`http ${this.failLatestCommitWith}`), { status: this.failLatestCommitWith });
+    }
     const current = `etag-${this.version}`;
     if (etag === current) return 'not-modified';
     return { sha: this.head, etag: current };
@@ -55,8 +62,17 @@ class FakeRepo implements RepoClient {
     return content;
   }
 
-  async commitFiles(message: string, files: TreeFile[], deletions: string[] = []): Promise<CommitOutcome> {
+  async commitFiles(
+    message: string,
+    files: TreeFile[],
+    deletions: string[] = [],
+    expectedHead?: string | null,
+  ): Promise<CommitOutcome> {
     this.getRefCalls += 1;
+    // Another device's commit lands here, between the caller's plan and its
+    // swap. The real client reads the ref at exactly this point.
+    this.beforeCommit?.();
+    if (expectedHead !== undefined && expectedHead !== this.head) return 'conflict';
     if ((this.updateRefResults.shift() ?? 'ok') === 'conflict') return 'conflict';
     this.commits.push({ message, files: [...files], deletions: [...deletions] });
     for (const f of files) this.files.set(f.path, f.content);
@@ -312,6 +328,74 @@ describe('SyncEngine', () => {
     await b.push([addTask('t2', 'from b', { deviceId: 'b' })]);
     expect(replay(await a.pull())).toEqual(replay(await b.pull()));
     expect(Object.keys(replay(await a.pull()).tasks).sort()).toEqual(['t1', 't2']);
+  });
+
+  // C1. The plan is built from one head and used to be applied on top of
+  // whatever the head had become by commit time, as a clean fast forward with no
+  // conflict. A commit landing inside that window was kept in the repo but
+  // stranded below the watermark this snapshot stamped, so every replay
+  // afterwards discarded it. The window is the whole read-and-plan phase, which
+  // for a cold compaction is many round trips.
+  it('refuses a commit planned against a head that moved under it', async () => {
+    gh.blob(...eventFile('dev-b', [addTask('t-b', 'theirs', { deviceId: 'dev-b', id: idOf('ZZ') })]));
+    const b = makeEngine({ deviceId: 'dev-b', compactThreshold: 1, maxAttempts: 1 });
+    gh.beforeCommit = () => {
+      gh.beforeCommit = undefined;
+      gh.blob(...eventFile('dev-a', [addTask('t-a', 'mine', { id: idOf('AA') })]));
+    };
+    await expect(b.push([])).resolves.toMatchObject({ status: 'conflict', attempts: 1 });
+    expect(gh.commits).toHaveLength(0);
+  });
+
+  it('retries onto the new head and keeps the event that landed inside the window', async () => {
+    gh.blob(...eventFile('dev-b', [addTask('t-b', 'theirs', { deviceId: 'dev-b', id: idOf('ZZ') })]));
+    const b = makeEngine({ deviceId: 'dev-b', compactThreshold: 1 });
+    gh.beforeCommit = () => {
+      gh.beforeCommit = undefined;
+      gh.blob(...eventFile('dev-a', [addTask('t-a', 'mine', { id: idOf('AA') })]));
+    };
+    await expect(b.push([])).resolves.toMatchObject({ status: 'ok', attempts: 2, compacted: true });
+    // The stranding is what this asserts: t-a has a lower ULID than the
+    // watermark, so a snapshot that missed it discards it from then on.
+    const state = await makeEngine().pullState();
+    expect(Object.keys(state.tasks).sort()).toEqual(['t-a', 't-b']);
+  });
+
+  it('does not mistake a repository it cannot see for an empty one', async () => {
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'mine')]));
+    await engine.pull();
+    gh.failLatestCommitWith = 404; // revoked token, renamed repo, wrong owner
+    await expect(engine.pull()).rejects.toThrow(/404/);
+    expect(engine.eventsSinceSnapshot).toBe(1); // the cached log survived
+  });
+
+  it('reads a genuinely empty repository as empty', async () => {
+    gh.failLatestCommitWith = 409;
+    await expect(engine.pull()).resolves.toEqual([]);
+  });
+
+  it('gives each compaction a fresh snapshot name on the path that actually writes one', async () => {
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'one', { id: idAt(1) })]));
+    await makeEngine({ compactThreshold: 1 }).push([]);
+    const first = readSnapshot();
+    gh.blob(...eventFile('dev-a', [addTask('t2', 'two', { id: idAt(9) })]));
+    await makeEngine({ compactThreshold: 1 }).push([]);
+    const second = readSnapshot();
+    expect(second.file).not.toBe(first.file);
+    expect(second.seq).toBe(first.seq + 1);
+    // The earlier immutable copy is still there and still says what it said.
+    expect(gh.files.get(first.file)).toBe(JSON.stringify(first));
+  });
+
+  it('refuses a deviceId that is not a single path segment', () => {
+    expect(() => makeEngine({ deviceId: 'dev/a' })).toThrow(/deviceId/);
+    expect(() => makeEngine({ deviceId: '' })).toThrow(/deviceId/);
+  });
+
+  it('reports a compaction it could not land, rather than returning a bare false', async () => {
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'one')]));
+    gh.updateRefResults = ['conflict', 'conflict'];
+    await expect(makeEngine({ compactThreshold: 1, maxAttempts: 2 }).maybeCompact()).rejects.toThrow(SyncConflictError);
   });
 
   it('survives a repository with no commits yet', async () => {

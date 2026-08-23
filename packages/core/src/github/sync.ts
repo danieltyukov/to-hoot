@@ -33,6 +33,16 @@ export const EVENTS_PREFIX = 'events/';
 export const DEFAULT_COMPACT_THRESHOLD = 500;
 /** Ref-update attempts before a push reports a conflict instead of retrying. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
+/** A deviceId is one path segment: no slash, no leading dot, nothing exotic. */
+const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Every attempt lost the ref race. Retrying later is the caller's decision. */
+export class SyncConflictError extends Error {
+  constructor(message: string, readonly attempts: number) {
+    super(message);
+    this.name = 'SyncConflictError';
+  }
+}
 
 /**
  * What `snapshot.json` holds, byte for byte identical to the immutable copy it
@@ -117,6 +127,11 @@ export class SyncEngine {
   private readonly newId: () => string;
 
   private etag?: string;
+  /**
+   * The head every cached field below was read from, and the head a write is
+   * swapped against. `null` means the branch did not exist at that read.
+   */
+  private head: string | null = null;
   private files: EventFile[] = [];
   private events: Event[] = [];
   private meta: MetaFile = emptyMeta();
@@ -125,6 +140,14 @@ export class SyncEngine {
   private blobs = new Map<string, string>();
 
   constructor(options: SyncEngineOptions) {
+    // The deviceId is a path segment. A slash in it writes files under a path no
+    // reader recognises, so they are pushed, never read back, and never
+    // compacted: work that looks synced and is not.
+    if (!DEVICE_ID.test(options.deviceId)) {
+      throw new Error(
+        `deviceId ${JSON.stringify(options.deviceId)} is not a single path segment; expected ${String(DEVICE_ID)}`,
+      );
+    }
     this.client = options.client;
     this.deviceId = options.deviceId;
     this.compactThreshold = options.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
@@ -170,12 +193,16 @@ export class SyncEngine {
     let attempts = 0;
     for (;;) {
       await this.refresh();
-      const plan = this.plan(pending, batchPath);
+      const planned = this.head;
+      const plan = await this.plan(pending, batchPath);
       if (plan.files.length === 0) {
         return { status: 'unchanged', events: 0, compacted: false, attempts };
       }
       attempts += 1;
-      const outcome = await this.client.commitFiles(plan.message, plan.files, plan.deletions);
+      // Swapped against the head the plan was read from, not against whatever
+      // the head has become. A commit that landed in between is a conflict, not
+      // something to quietly build on top of.
+      const outcome = await this.client.commitFiles(plan.message, plan.files, plan.deletions, planned);
       // Either the head moved under us or we moved it; both make the cached tree
       // stale, and the retry must see the winner's commit before rebuilding.
       this.etag = undefined;
@@ -188,30 +215,40 @@ export class SyncEngine {
     }
   }
 
-  /** Folds the log into a snapshot if it has grown past the threshold. */
+  /**
+   * Folds the log into a snapshot if it has grown past the threshold.
+   *
+   * `false` means one thing only: there was nothing past the threshold. Losing
+   * the ref race every time throws instead, because a caller that cannot tell
+   * "nothing to do" from "another device keeps beating me" will schedule the
+   * next attempt wrongly.
+   */
   async maybeCompact(): Promise<boolean> {
     let attempts = 0;
     for (;;) {
       await this.refresh();
       if (this.eventsSinceSnapshot < this.compactThreshold) return false;
-      const plan = this.plan([], '');
+      const planned = this.head;
+      const plan = await this.plan([], '');
       if (plan.files.length === 0) return false;
       attempts += 1;
-      const outcome = await this.client.commitFiles(plan.message, plan.files, plan.deletions);
+      const outcome = await this.client.commitFiles(plan.message, plan.files, plan.deletions, planned);
       this.etag = undefined;
       if (outcome === 'ok') return true;
-      if (attempts >= this.maxAttempts) return false;
+      if (attempts >= this.maxAttempts) {
+        throw new SyncConflictError(`compaction lost the ref race ${attempts} times`, attempts);
+      }
     }
   }
 
-  private plan(pending: Event[], batchPath: string): Plan {
+  private async plan(pending: Event[], batchPath: string): Promise<Plan> {
     const files: TreeFile[] = [];
     const deletions: string[] = [];
     if (pending.length > 0) files.push({ path: batchPath, content: JSON.stringify(pending) });
     if (this.eventsSinceSnapshot < this.compactThreshold) {
       return { message: `sync ${pending.length} from ${this.deviceId}`, files, deletions, compacted: false };
     }
-    const snapshot = this.buildSnapshot(pending);
+    const snapshot = await this.buildSnapshot(pending);
     files.push(...snapshot.files);
     deletions.push(...snapshot.deletions);
     return {
@@ -245,7 +282,7 @@ export class SyncEngine {
    * this device has seen must not raise it, or another device's unsynced work
    * with a lower id would be discarded when it finally arrives.
    */
-  private buildSnapshot(pending: Event[]): Snapshot {
+  private async buildSnapshot(pending: Event[]): Promise<Snapshot> {
     const watermark = greatestId(this.events) ?? this.snapshotState?.coversThrough;
     const folded = watermark === undefined
       ? []
@@ -257,7 +294,7 @@ export class SyncEngine {
     }
 
     const seq = this.snapshotSeq + 1;
-    const file = snapshotFileName(seq, this.newId());
+    const file = await this.snapshotName();
     const content = JSON.stringify({ schemaVersion: SCHEMA_VERSION, file, seq, state } satisfies SnapshotFile);
 
     // A file is removed only when the snapshot absorbed every event in it.
@@ -290,6 +327,7 @@ export class SyncEngine {
       // A repository with no commits yet is empty, not broken. The first push
       // creates the branch.
       if (!isEmptyRepository(err)) throw err;
+      this.head = null;
       this.adopt(undefined, [], emptyMeta());
       return;
     }
@@ -323,6 +361,7 @@ export class SyncEngine {
     }
 
     this.adopt(snapshot, files, meta);
+    this.head = latest.sha;
     // Last, so a failure part way through re-reads next time instead of
     // believing it is up to date.
     this.etag = latest.etag;

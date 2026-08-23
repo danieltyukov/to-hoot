@@ -45,7 +45,12 @@ export type CommitOutcome = 'ok' | 'conflict';
  * repository without a mocked transport underneath it.
  */
 export interface RepoClient {
-  commitFiles(message: string, files: TreeFile[], deletions?: string[]): Promise<CommitOutcome>;
+  commitFiles(
+    message: string,
+    files: TreeFile[],
+    deletions?: string[],
+    expectedHead?: string | null,
+  ): Promise<CommitOutcome>;
   listTree(sha: string): Promise<TreeEntry[]>;
   getBlob(sha: string): Promise<string>;
   latestCommit(etag?: string): Promise<{ sha: string; etag: string } | 'not-modified'>;
@@ -69,10 +74,17 @@ export function httpStatusOf(err: unknown): number | undefined {
   return typeof status === 'number' ? status : undefined;
 }
 
-/** A repository with no commits yet answers this way; it is not an error. */
+/**
+ * A repository with no commits yet, which is not an error: the first push
+ * creates the branch.
+ *
+ * 409 only. GitHub answers 404 for a repository the token cannot see, which a
+ * revoked token, a renamed repo and a typo in settings all produce. Treating
+ * that as "empty" would show a user with intact data an empty app, and then
+ * write a snapshot of nothing over the top of it.
+ */
 export function isEmptyRepository(err: unknown): boolean {
-  const status = httpStatusOf(err);
-  return status === 404 || status === 409;
+  return httpStatusOf(err) === 409;
 }
 
 const API_BASE = 'https://api.github.com';
@@ -221,12 +233,26 @@ export class GitHubClient implements RepoClient {
   /**
    * One commit, four requests, however many files.
    *
+   * `expectedHead` is the head the caller built this write from, and passing it
+   * makes the whole thing a compare and swap. Without it there is a window
+   * between the caller's read and the read below in which another device can
+   * commit: this write would then be applied on top of that commit, as a clean
+   * fast forward with no conflict, silently discarding whatever it contributed.
+   * The window is the caller's entire planning phase, which for a compaction is
+   * many round trips. Pass `null` for "the branch did not exist when I planned".
+   *
    * A conflict is returned rather than retried here: retrying correctly means
    * re-reading the log and rebuilding the write against it, and only the caller
    * knows what it wanted to write.
    */
-  async commitFiles(message: string, files: TreeFile[], deletions?: string[]): Promise<CommitOutcome> {
+  async commitFiles(
+    message: string,
+    files: TreeFile[],
+    deletions?: string[],
+    expectedHead?: string | null,
+  ): Promise<CommitOutcome> {
     const parent = await this.readRef();
+    if (expectedHead !== undefined && parent !== expectedHead) return 'conflict';
     const tree = await this.createTree(parent ?? '', files, deletions);
     const commit = await this.createCommit(message, tree.sha, parent === null ? [] : [parent]);
     return parent === null ? this.createRef(commit.sha) : this.updateRef(commit.sha);
