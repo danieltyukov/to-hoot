@@ -86,6 +86,12 @@ export class SyncController {
    * the clock, so a test can drive everything else without one.
    */
   start(): () => void {
+    // Restartable, because React mounts, unmounts and remounts in development
+    // and the memoized controller survives all three. A `stopped` flag that
+    // only ever went one way left the timer, `soon()` and every later sync dead
+    // in dev while production was fine, which is the worst place for a
+    // difference between the two to live.
+    this.stopped = false;
     const tick = (): void => {
       if (this.stopped) return;
       void this.syncNow();
@@ -144,13 +150,20 @@ export class SyncController {
     try {
       return (await engine.push(pending)).status;
     } catch (err) {
+      // `isEmptyRepository` is status-only, so this is "some 409", not proof of
+      // an empty repository. That is safe rather than sloppy: re-initialising a
+      // repository that already has a commit is answered 422 and changes
+      // nothing, and the retry below is the single one. But a 409 that meant
+      // something else will surface as the retry's own failure rather than as
+      // this one, so the original is kept and re-thrown if the seed refuses.
       if (!isEmptyRepository(err)) throw err;
       const seeded = await ensureInitialCommit(this.http, settings.github.token, {
         owner: settings.github.owner,
         repo: settings.github.repo,
         branch: settings.github.branch,
       });
-      if (seeded.status === 'error') throw new Error(seeded.detail);
+      // The seed's own reason, not a generic one, and the original 409 with it.
+      if (seeded.status === 'error') throw err;
       await engine.pull();
       return (await engine.push(pending)).status;
     }

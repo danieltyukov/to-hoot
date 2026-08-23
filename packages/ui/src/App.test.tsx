@@ -506,3 +506,55 @@ describe('idle time', () => {
     expect(store.getSnapshot().state.tasks[other.id]!.timeSpent).toBe(30 * 60_000);
   });
 });
+
+describe('two idle gaps in a row', () => {
+  it('asks about the first before the second, and loses neither', async () => {
+    /*
+     * Gaps queue inside the Tracker. Taking a second while the first was still
+     * on screen replaced it, so the first was never asked about and its time
+     * was never credited: the exact silent loss subtract-first exists to
+     * prevent, and it erred in the direction of quietly discarding work.
+     */
+    const storage = new Map<string, string>();
+    let clock = NOW;
+    const store = new Store({
+      now: () => clock,
+      storage: {
+        getItem: k => storage.get(k) ?? null,
+        setItem: (k, v) => void storage.set(k, v),
+      },
+    });
+    store.finishSetup();
+    store.saveSettings({ idleThresholdMs: 60_000 });
+    const user = userEvent.setup();
+    render(<App store={store} />);
+
+    await user.type(screen.getByLabelText('New task'), 'Rewire the bench{Enter}');
+    await user.type(screen.getByLabelText('New task'), 'Read the datasheet{Enter}');
+    const tasks = Object.values(store.getSnapshot().state.tasks);
+    const first = tasks.find(t => t.title === 'Rewire the bench')!;
+    const second = tasks.find(t => t.title === 'Read the datasheet')!;
+
+    // Two separate stretches, on two different tasks, neither answered yet.
+    store.start(first.id);
+    clock += 30 * 60_000;
+    store.stop();
+    store.start(second.id);
+    clock += 20 * 60_000;
+    act(() => store.stop());
+
+    expect(screen.getByRole('status', { name: 'Idle time' })).toHaveTextContent(
+      /30m with nothing happening on Rewire the bench/,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Count it to Rewire the bench' }));
+    expect(store.getSnapshot().state.tasks[first.id]!.timeSpent).toBe(30 * 60_000);
+
+    // The second is now asked about rather than having been thrown away.
+    expect(screen.getByRole('status', { name: 'Idle time' })).toHaveTextContent(
+      /20m with nothing happening on Read the datasheet/,
+    );
+    await user.click(screen.getByRole('button', { name: 'Count it to Read the datasheet' }));
+    expect(store.getSnapshot().state.tasks[second.id]!.timeSpent).toBe(20 * 60_000);
+  });
+});

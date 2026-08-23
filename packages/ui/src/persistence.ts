@@ -75,13 +75,41 @@ export function watermarkOf(events: readonly Event[]): string | undefined {
  * ignored rather than repaired: it is derivable, so the honest response to any
  * doubt about it is to throw it away and replay. The log gets no such treatment.
  */
-export async function load(
-  files: FileStore,
-): Promise<{ events: Event[]; state: State; cached: boolean }> {
+export interface Loaded {
+  events: Event[];
+  state: State;
+  cached: boolean;
+  /**
+   * Set when the log file exists and could not be read.
+   *
+   * Absent and unreadable are different answers and must never be collapsed
+   * into one. An absent log is a new install. An unreadable log is the only
+   * copy of work nobody else has, and the honest response is to refuse to
+   * touch it: treating it as empty means the next write puts `[]` over the top
+   * and the corruption becomes permanent.
+   *
+   * That is not a remote possibility. Neither shell writes atomically, and the
+   * whole file is rewritten every thirty seconds while a timer runs, so
+   * "killed mid-write" is the ordinary case rather than the exotic one.
+   */
+  damaged?: string;
+}
+
+export async function load(files: FileStore): Promise<Loaded> {
   const [logText, cacheText] = await Promise.all([files.read(LOG_FILE), files.read(CACHE_FILE)]);
 
-  const logBody = parse(logText) as LogFile | undefined;
-  const events = Array.isArray(logBody?.events) ? logBody.events.filter(isEventish) : [];
+  let damaged: string | undefined;
+  let events: Event[] = [];
+  if (logText !== null) {
+    const logBody = parse(logText) as LogFile | undefined;
+    if (logBody === undefined) {
+      damaged = 'The log file could not be read. It may have been cut short by a crash.';
+    } else if (!Array.isArray(logBody.events)) {
+      damaged = 'The log file has no events in it, which is not a shape this app writes.';
+    } else {
+      events = logBody.events.filter(isEventish);
+    }
+  }
 
   const cacheBody = parse(cacheText) as CacheFile | undefined;
   const usable =
@@ -91,7 +119,12 @@ export async function load(
     typeof cacheBody.state.coversThrough === 'string';
 
   const base = usable ? cacheBody.state : undefined;
-  return { events, state: replay(events, base), cached: usable };
+  return {
+    events,
+    state: replay(events, base),
+    cached: usable,
+    ...(damaged === undefined ? {} : { damaged }),
+  };
 }
 
 function isEventish(value: unknown): value is Event {
@@ -127,6 +160,23 @@ export async function writeCache(
   if (coversThrough === undefined) return;
   const body: CacheFile = { version: FORMAT_VERSION, state: { ...state, coversThrough } };
   await files.write(CACHE_FILE, JSON.stringify(body));
+}
+
+/**
+ * Moves an unreadable log aside so a new one can be started.
+ *
+ * Renamed rather than deleted. The bytes are the only copy of whatever had not
+ * synced, and a person with a hex editor can get more out of them than this
+ * app can; deleting them to tidy up would throw away the one thing that still
+ * has the user's work in it.
+ */
+export async function setLogAside(files: FileStore, now: number): Promise<string> {
+  const kept = `log.damaged-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`;
+  const text = await files.read(LOG_FILE);
+  if (text !== null) await files.write(kept, text);
+  await files.remove(LOG_FILE);
+  await files.remove(CACHE_FILE);
+  return kept;
 }
 
 /** Forgets the cache, which is always safe: it is rebuilt by replaying the log. */

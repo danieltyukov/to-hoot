@@ -107,13 +107,32 @@ const files: FileStore = {
       return null;
     }
   },
+  /*
+   * Written to a temporary file and then renamed over the target.
+   *
+   * A rename within one directory is atomic, so a reader sees the whole old
+   * file or the whole new one and never half of either. Writing in place is
+   * not: the event log is rewritten entirely every thirty seconds while a timer
+   * runs, and Android kills backgrounded processes routinely, so a truncated
+   * file is the ordinary outcome rather than a rare one. What it truncates is
+   * the only copy of anything that has not synced yet.
+   */
   async write(name, contents) {
+    const temp = `${name}.tmp`;
     await Filesystem.writeFile({
-      path: name,
+      path: temp,
       data: contents,
       directory: Directory.Data,
       encoding: Encoding.UTF8,
       recursive: true,
+    });
+    // `rename` replaces the destination, so the old file is never unlinked
+    // first and there is no moment with nothing at the target path.
+    await Filesystem.rename({
+      from: temp,
+      to: name,
+      directory: Directory.Data,
+      toDirectory: Directory.Data,
     });
   },
   async remove(name) {

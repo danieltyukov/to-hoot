@@ -21,6 +21,9 @@ export interface SettingsProps {
   mcpServerPath?: string;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
+  /** Set when the log on disk cannot be read or written. */
+  storageError?: string | null;
+  onStartFreshLog?: () => void;
 }
 
 /*
@@ -45,6 +48,8 @@ export function Settings({
   mcpServerPath,
   syncStatus = null,
   onSyncNow,
+  storageError = null,
+  onStartFreshLog,
 }: SettingsProps) {
   return (
     <section className="settings" aria-label="Settings">
@@ -114,7 +119,32 @@ export function Settings({
           <Tracking settings={settings} onSave={onSave} />
         </Section>
 
-        <Section title="Data" summary={`${eventCount} events`}>
+        <Section
+          title="Data"
+          summary={storageError === null ? `${eventCount} events` : 'not saving'}
+        >
+          {storageError === null ? null : (
+            <div className="step">
+              <p className="test-result" role="status" data-status="error">
+                {storageError}
+                <span className="test-hint">
+                  Nothing is being written while this is true, because the file that cannot be
+                  read is the only copy of anything that has not synced. What is on screen is
+                  in memory only, so export it before closing the app.
+                </span>
+              </p>
+              {onStartFreshLog === undefined ? null : (
+                <div className="settings-choice">
+                  <button type="button" className="button" onClick={onStartFreshLog}>
+                    Start a new log
+                  </button>
+                  <span className="field-hint">
+                    Keeps the unreadable file beside the new one rather than deleting it.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           <Data
             settings={settings}
             eventCount={eventCount}
@@ -246,6 +276,11 @@ function Tracking({
           are asked where it went. The numbers stay honest whether or not you answer.
         </p>
       </div>
+
+      <p className="field-hint">
+        Changing either of these stops a running timer first, so the seconds since the last
+        save are counted under the settings that earned them.
+      </p>
     </div>
   );
 }

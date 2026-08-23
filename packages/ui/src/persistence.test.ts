@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { newEvent, replay, type Event, type FileStore } from '@to-hoot/core';
+import { newEvent, replay, type Event, type FileStore, type State } from '@to-hoot/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CACHE_EVERY, CACHE_FILE, LOG_FILE, load, unpushed, watermarkOf, writeCache, writeLog } from './persistence.js';
@@ -261,5 +261,167 @@ describe('the Store on disk', () => {
     store.addTask('Solder the preamp');
     await expect(store.flush()).resolves.toBeUndefined();
     expect(Object.keys(store.getSnapshot().state.tasks)).toHaveLength(1);
+  });
+});
+
+describe('folding forward and replaying agree', () => {
+  /*
+   * The licence for folding forward is that it gives the same answer as a
+   * replay. It very nearly did not.
+   *
+   * `replay(events, base)` discards everything at or below `base.coversThrough`,
+   * and after a sync the base carries the repository's watermark. ULIDs order by
+   * time, so a device whose clock runs ahead pushes a watermark greater than an
+   * id this device is about to mint. The fold then dropped the user's own action
+   * from the state while still writing it to the log and pushing it: the task
+   * they just typed simply never appeared, and the sync sent it anyway.
+   */
+  const remoteAhead = (): State => {
+    const ahead: Event[] = [
+      {
+        ...task('From the other device'),
+        // A ULID minted a minute into the future, which is all a clock skew is.
+        id: '01ZZZZZZZZZZZZZZZZZZZZZZZZ',
+        deviceId: 'phone',
+      },
+    ];
+    return { ...replay(ahead), coversThrough: '01ZZZZZZZZZZZZZZZZZZZZZZZZ' };
+  };
+
+  it('applies a local event whose id sorts below the adopted watermark', async () => {
+    const files = memoryFiles();
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+
+    store.adoptRemote(remoteAhead());
+    expect(Object.keys(store.getSnapshot().state.tasks)).toHaveLength(1);
+
+    const id = store.addTask('Solder the preamp');
+    const state = store.getSnapshot().state;
+
+    // The action the user just took is on screen.
+    expect(state.tasks[id]?.title).toBe('Solder the preamp');
+    // And it is in the log, so the two cannot disagree about whether it exists.
+    expect(store.pending().some(e => e.entityId === id)).toBe(true);
+    expect(Object.keys(state.tasks)).toHaveLength(2);
+  });
+
+  it('keeps unpushed local work when adopting a repository that is ahead', async () => {
+    // Same failure, one step earlier: rebasing local events onto a remote state
+    // whose watermark is above them would drop them on the way in.
+    const files = memoryFiles();
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    const id = store.addTask('Solder the preamp');
+
+    store.adoptRemote(remoteAhead());
+
+    expect(store.getSnapshot().state.tasks[id]?.title).toBe('Solder the preamp');
+    expect(store.pending().some(e => e.entityId === id)).toBe(true);
+  });
+
+  it('merges onto the adopted base rather than replaying the log alone', () => {
+    // After a sync the log no longer describes the state: the snapshot accounts
+    // for most of it. Replaying the log by itself throws that history away.
+    const files = memoryFiles();
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    store.adoptRemote(remoteAhead());
+
+    store.merge([{ ...task('Arrived from elsewhere'), id: '01M0MERGED0000000000000001', deviceId: 'phone' }]);
+
+    const titles = Object.values(store.getSnapshot().state.tasks).map(t => t.title).sort();
+    expect(titles).toEqual(['Arrived from elsewhere', 'From the other device']);
+  });
+});
+
+describe('a log that cannot be read', () => {
+  it('is never treated as an empty one', async () => {
+    // Neither shell wrote atomically, and the whole file is rewritten every
+    // thirty seconds while a timer runs, so a file cut short by a kill is the
+    // ordinary case. Reading it as empty and writing [] over the top makes the
+    // loss permanent.
+    const files = memoryFiles({ [LOG_FILE]: '{"version":1,"events":[{"id":"01A","ty' });
+    const { events, damaged } = await load(files);
+    expect(events).toEqual([]);
+    expect(damaged).toContain('could not be read');
+  });
+
+  it('is distinguished from a log that is simply absent', async () => {
+    const { damaged } = await load(memoryFiles());
+    expect(damaged).toBeUndefined();
+  });
+
+  it('is never written over, whatever the app goes on to do', async () => {
+    const original = '{"version":1,"events":[{"id":"01A","ty';
+    const files = memoryFiles({ [LOG_FILE]: original });
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await store.load();
+
+    expect(store.getSnapshot().storageError).toContain('could not be read');
+
+    store.addTask('Solder the preamp');
+    await store.flush();
+
+    // The bytes are still there. They are the only copy of whatever had not
+    // synced, and this app can no longer read them.
+    expect(files.contents.get(LOG_FILE)).toBe(original);
+  });
+
+  it('can be set aside deliberately, and is kept when it is', async () => {
+    const original = '{"version":1,"events":[{"id":"01A","ty';
+    const files = memoryFiles({ [LOG_FILE]: original });
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await store.load();
+
+    const kept = await store.startFreshLog();
+
+    expect(kept).toMatch(/^log\.damaged-/);
+    expect(files.contents.get(kept!)).toBe(original);
+    expect(store.getSnapshot().storageError).toBeNull();
+
+    store.addTask('Solder the preamp');
+    await store.flush();
+    expect(files.contents.get(LOG_FILE)).toContain('Solder the preamp');
+  });
+});
+
+describe('the order the two files are written in', () => {
+  it('never leaves a truncated log with a cache that does not cover it', async () => {
+    /*
+     * `markPushed` and `adoptRemote` both shorten the log, and what it no longer
+     * holds is carried by the cache. If the cache write is the one that fails,
+     * writing the log anyway leaves a pair that describes nothing: the next boot
+     * replays a log missing the events, onto a cache that never gained them.
+     */
+    const contents = new Map<string, string>();
+    let failCache = false;
+    const files: FileStore = {
+      async read(n) {
+        return contents.get(n) ?? null;
+      },
+      async write(n, t) {
+        if (n === CACHE_FILE && failCache) throw new Error('disk full');
+        contents.set(n, t);
+      },
+      async remove(n) {
+        contents.delete(n);
+      },
+    };
+
+    const store = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    store.addTask('Solder the preamp');
+    store.addTask('Order the enclosure');
+    await store.flush();
+
+    failCache = true;
+    store.markPushed(store.pending().at(-1)!.id);
+    await store.flush();
+
+    // The write failed and said so, and the fuller log is still on disk.
+    expect(store.getSnapshot().storageError).toContain('Could not save');
+    const onDisk = JSON.parse(contents.get(LOG_FILE)!) as { events: Event[] };
+    expect(onDisk.events.length).toBeGreaterThan(0);
+
+    const next = new Store({ now: () => BASE, storage: null, vault: memoryStore(), files });
+    await next.load();
+    expect(Object.keys(next.getSnapshot().state.tasks)).toHaveLength(2);
   });
 });

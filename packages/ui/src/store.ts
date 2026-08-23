@@ -110,6 +110,14 @@ export interface Snapshot {
    * honest whether or not anyone ever answers.
    */
   idleGap: IdleGap | null;
+  /**
+   * Set when the app cannot safely write to disk.
+   *
+   * Two causes, both meaning the same thing to the user: the log on disk could
+   * not be read, or a write failed. In either case what is in memory is the
+   * only good copy, and the app says so rather than carrying on quietly.
+   */
+  storageError: string | null;
 }
 
 export interface StoreOptions {
@@ -145,6 +153,30 @@ function isTheme(v: unknown): v is Theme {
   return v === 'light' || v === 'dark' || v === 'system';
 }
 
+/**
+ * A state to fold new events onto, with the watermark taken off.
+ *
+ * `replay` discards every event at or below `coversThrough`, which is right for
+ * events that came out of the repository and wrong for events that did not.
+ * ULIDs order by time, so a device whose clock runs ahead pushes a watermark
+ * greater than an id this device is about to mint, and the fold would then drop
+ * the user's own action from the state while still writing it to the log and
+ * pushing it. The action would simply never appear.
+ *
+ * Every caller here passes events it knows are not in the base: freshly minted
+ * local ones, or ones the log holds that a push has not acknowledged. Replay
+ * still dedups by id, so applying them is safe whatever their ids are.
+ */
+function foldBase(state: State | undefined): State | undefined {
+  if (state === undefined || state.coversThrough === undefined) return state;
+  const { coversThrough: _dropped, ...rest } = state;
+  return rest;
+}
+
+function isEventish(value: unknown): value is Event {
+  return typeof (value as Event | null)?.id === 'string';
+}
+
 function safeJson(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -158,11 +190,21 @@ export class Store {
   private readonly storage: StoreOptions['storage'];
   private readonly vault: KeyValueStore | undefined;
   private readonly files: FileStore | undefined;
+  /**
+   * The repository's own view, once a sync has adopted one.
+   *
+   * Kept because the log alone stops describing the state after a sync: events
+   * the snapshot accounts for are no longer in it. Anything that replays the
+   * whole log has to replay it onto this.
+   */
+  private base: State | undefined;
   /** The greatest event id a push has acknowledged. Below it, the repo has a copy. */
   private pushedThrough: string | undefined;
   /** Events appended since the cache was last rewritten. */
   private sinceCache = 0;
   private writing: Promise<void> = Promise.resolve();
+  /** The last write error, so a recovery can clear the notice it raised. */
+  private writeFailure: unknown = null;
   /**
    * The id every event this device writes is stamped with, and the folder its
    * events land in under events/<deviceId>/.
@@ -216,6 +258,7 @@ export class Store {
       pendingMs: 0,
       pendingSince: null,
       idleGap: null,
+      storageError: null,
     };
     // After the snapshot, because the Tracker is built from the settings on it.
     this.tracker = this.newTracker();
@@ -230,11 +273,18 @@ export class Store {
    */
   async load(): Promise<void> {
     if (this.files !== undefined) {
-      const { events, state, cached } = await disk.load(this.files);
+      const { events, state, cached, damaged } = await disk.load(this.files);
       this.log = events;
       // Only what is in front of the cache has to be replayed next time.
       this.sinceCache = cached ? 0 : events.length;
-      this.publish({ state, events });
+      this.publish({
+        state,
+        events,
+        // Stops every later write to the log. An unreadable file is the only
+        // copy of whatever had not synced, and overwriting it makes the loss
+        // permanent, which is the one outcome worth refusing to save over.
+        storageError: damaged ?? null,
+      });
     }
     if (this.vault === undefined) return;
     const [raw, setup] = await Promise.all([
@@ -307,6 +357,9 @@ export class Store {
   resolveIdle(taskId?: string | null): void {
     const gap = this.snapshot.idleGap;
     if (gap === null) return;
+    // Cleared first so `publish` is free to take the next one out of the queue.
+    // Answering one question is what makes room for the next, rather than
+    // discarding it.
     this.commit(this.tracker.resolveIdle(gap, taskId), { idleGap: null });
   }
 
@@ -559,7 +612,7 @@ export class Store {
     }
     this.log = [...this.log, ...events];
     this.sinceCache += events.length;
-    this.publish({ ...patch, state: replay([...events], this.snapshot.state), events: this.log });
+    this.publish({ ...patch, state: replay([...events], foldBase(this.snapshot.state)), events: this.log });
     this.persist();
   }
 
@@ -577,7 +630,10 @@ export class Store {
     if (fresh.length === 0) return 0;
     this.log = [...this.log, ...fresh];
     this.sinceCache += fresh.length;
-    this.publish({ state: replay(this.log), events: this.log });
+    // Onto the adopted base, not from nothing. Replaying the log alone would
+    // discard everything the repository's snapshot accounts for, which after a
+    // sync is most of the user's history.
+    this.publish({ state: replay(this.log, foldBase(this.base)), events: this.log });
     this.persist();
     return fresh.length;
   }
@@ -595,7 +651,8 @@ export class Store {
     const keep = this.pending();
     this.log = keep;
     this.sinceCache = 0;
-    this.publish({ state: replay(keep, remote), events: keep });
+    this.base = remote;
+    this.publish({ state: replay(keep, foldBase(remote)), events: keep });
     // Forced, so the cache on disk describes the state that was just adopted
     // rather than one several syncs behind it.
     this.persist(true);
@@ -644,12 +701,35 @@ export class Store {
     const rewriteCache = force || this.sinceCache >= disk.CACHE_EVERY;
     if (rewriteCache) this.sinceCache = 0;
 
-    this.writing = this.writing
-      .then(async () => {
-        await disk.writeLog(files, events);
+    this.writing = this.writing.then(async () => {
+      /*
+       * Cache first, then the log. The ordering is the whole safety property.
+       *
+       * A cache newer than the log is always safe: replay discards everything
+       * at or below the watermark, so log entries the cache already accounts
+       * for are simply dropped. A log newer than the cache is not: after
+       * `markPushed` or `adoptRemote` the log no longer holds the events the
+       * cache is supposed to carry, and if the cache write is the one that
+       * fails, the pair describes nothing at all.
+       *
+       * Writing the cache first also means a failure there stops the log write,
+       * so the fuller log stays on disk rather than being replaced by a
+       * truncated one that nothing accounts for.
+       */
+      try {
         if (rewriteCache) await disk.writeCache(files, covers, state);
-      })
-      .catch(() => undefined);
+        // Never over an unreadable log. Those bytes are the only copy of
+        // whatever has not synced, and this app cannot read them any more.
+        if (this.snapshot.storageError === null) await disk.writeLog(files, events);
+        if (this.writeFailure !== null) this.publish({ storageError: null });
+        this.writeFailure = null;
+      } catch (err) {
+        this.writeFailure = err;
+        this.publish({
+          storageError: `Could not save to disk: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    });
   }
 
   /** The greatest event id the current state accounts for. */
@@ -660,6 +740,25 @@ export class Store {
     return inLog > this.pushedThrough ? inLog : this.pushedThrough;
   }
 
+  /**
+   * Starts a new log, keeping the unreadable one.
+   *
+   * The only way out of a damaged log, and deliberately a decision the user
+   * makes rather than something the app does on their behalf: the file it moves
+   * aside may be the only place their unsynced work still exists.
+   */
+  async startFreshLog(): Promise<string | null> {
+    if (this.files === undefined) return null;
+    const kept = await disk.setLogAside(this.files, this.nowFn());
+    this.log = [];
+    this.sinceCache = 0;
+    this.writeFailure = null;
+    this.publish({ events: this.log, storageError: null });
+    this.persist(true);
+    await this.flush();
+    return kept;
+  }
+
   /** Waits for every queued write. Called before anything that must not lose them. */
   async flush(): Promise<void> {
     await this.writing;
@@ -667,13 +766,21 @@ export class Store {
 
   private publish(patch: Partial<Snapshot>): void {
     const now = this.nowFn();
-    // Taken rather than peeked: holding it twice would ask the same question
-    // again after it had been answered.
-    const gap = this.tracker.takeGap();
+    /*
+     * One question at a time, and never over the top of an unanswered one.
+     *
+     * Gaps queue inside the Tracker. Taking a second while the first is still
+     * on screen replaced it, and the first was then never asked about and its
+     * time never credited: exactly the silent loss the subtract-first design
+     * exists to prevent. A gap left in the queue is asked about as soon as the
+     * current one is answered.
+     */
+    const holding = 'idleGap' in patch ? patch.idleGap : this.snapshot.idleGap;
+    const gap = holding === null || holding === undefined ? this.tracker.takeGap() : null;
     const merged = {
       ...this.snapshot,
-      ...(gap === null ? {} : { idleGap: gap }),
       ...patch,
+      ...(gap === null ? {} : { idleGap: gap }),
       now,
     };
     const running = merged.runningTaskId !== null && this.flushedAt !== null;

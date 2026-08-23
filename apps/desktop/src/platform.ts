@@ -13,6 +13,7 @@ import {
   mkdir,
   readTextFile,
   remove as removeFile,
+  rename,
   writeTextFile,
 } from '@tauri-apps/plugin-fs';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -121,9 +122,22 @@ const files: FileStore = {
     if (!(await exists(path, { baseDir }))) return null;
     return readTextFile(path, { baseDir });
   },
+  /*
+   * Written to a temporary file and then renamed over the target.
+   *
+   * A rename within one directory is atomic, so a reader sees either the whole
+   * old file or the whole new one and never a half of either. Writing in place
+   * is not: the event log is rewritten entirely every thirty seconds while a
+   * timer runs, so a process killed mid-write is the ordinary case rather than
+   * a rare one, and what it leaves behind is a truncated file that is the only
+   * copy of whatever had not synced.
+   */
   async write(name, contents) {
     await mkdir(DATA_DIR, { baseDir, recursive: true });
-    await writeTextFile(filePath(name), contents, { baseDir });
+    const target = filePath(name);
+    const temp = `${target}.tmp`;
+    await writeTextFile(temp, contents, { baseDir });
+    await rename(temp, target, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir });
   },
   async remove(name) {
     const path = filePath(name);

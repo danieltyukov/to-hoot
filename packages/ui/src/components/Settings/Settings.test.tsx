@@ -329,3 +329,52 @@ describe('what a tracked second means', () => {
     ]);
   });
 });
+
+describe('when the log on disk cannot be read', () => {
+  const damagedFiles = (text: string) => {
+    const contents = new Map([['log.json', text]]);
+    return {
+      contents,
+      read: async (n: string) => contents.get(n) ?? null,
+      write: async (n: string, t: string) => void contents.set(n, t),
+      remove: async (n: string) => void contents.delete(n),
+    };
+  };
+
+  it('says so, and says the app is not saving', async () => {
+    const files = damagedFiles('{"version":1,"events":[{"id":"01A","ty');
+    const store = new Store({ now: () => NOW, storage: null, vault: memoryStore(), files });
+    store.finishSetup();
+    await store.load();
+    const user = userEvent.setup();
+    render(<App store={store} http={http} />);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    // Visible without opening anything, because it changes what the app is doing.
+    expect(screen.getByText('not saving')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Data/ }));
+    const data = document.querySelector<HTMLElement>('[data-section="data"]')!;
+    expect(within(data).getByText(/could not be read/)).toBeInTheDocument();
+    expect(within(data).getByText(/export it before closing/)).toBeInTheDocument();
+  });
+
+  it('offers a way out that keeps the unreadable file', async () => {
+    const original = '{"version":1,"events":[{"id":"01A","ty';
+    const files = damagedFiles(original);
+    const store = new Store({ now: () => NOW, storage: null, vault: memoryStore(), files });
+    store.finishSetup();
+    await store.load();
+    const user = userEvent.setup();
+    render(<App store={store} http={http} />);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(screen.getByRole('button', { name: /^Data/ }));
+    await user.click(screen.getByRole('button', { name: 'Start a new log' }));
+
+    await waitFor(() => expect(store.getSnapshot().storageError).toBeNull());
+    // The bytes are kept, not deleted. They may be the only copy of unsynced work.
+    expect([...files.contents.keys()].some(k => k.startsWith('log.damaged-'))).toBe(true);
+    expect([...files.contents.values()]).toContain(original);
+  });
+});

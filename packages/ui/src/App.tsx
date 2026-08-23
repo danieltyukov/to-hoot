@@ -97,11 +97,6 @@ export default function App({
     return () => clearInterval(id);
   }, [store]);
 
-  // Settings, the setup flag and the event log all live outside the process.
-  useEffect(() => {
-    void store.load();
-  }, [store]);
-
   /*
    * Sync runs opportunistically: once the log has loaded, on a timer, when the
    * app comes back to the foreground, and shortly after a change.
@@ -146,6 +141,8 @@ export default function App({
     calendar.syncWriteback(snapshot.state);
   }, [calendar, snapshot.state]);
 
+  // One load per boot. Two effects both called it, so every start did two full
+  // disk and vault reads and the second reassigned the log from disk.
   useEffect(() => {
     const stop = sync.start();
     void store.load().then(() => sync.syncNow());
@@ -270,8 +267,8 @@ export default function App({
             setPane('tasks');
           }}
           counts={counts}
-          onAddProject={title => setView(`project:${store.addProject(title)}`)}
-          onAddTag={title => store.addTag(title)}
+          onAddProject={title => setView(`project:${acted(store.addProject(title))}`)}
+          onAddTag={title => acted(store.addTag(title))}
           footer={
             <div className="sidebar-tools">
               <ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />
@@ -306,6 +303,8 @@ export default function App({
             onSetTheme={t => store.setTheme(t)}
             syncStatus={syncStatus}
             onSyncNow={() => sync.syncNow()}
+            storageError={snapshot.storageError}
+            onStartFreshLog={() => void store.startFreshLog()}
             onExport={() => store.exportJson()}
             onImport={text => store.importJson(text)}
             onClose={() => setShowSettings(false)}
@@ -323,7 +322,7 @@ export default function App({
             onStop={() => acted(store.stop())}
             onSelect={select}
             onAdd={title => acted(store.addTask(title, defaultsFor(view, today)))}
-              notice={
+            notice={
               snapshot.idleGap !== null ? (
                 <IdlePrompt
                   gap={snapshot.idleGap}
@@ -352,7 +351,7 @@ export default function App({
             onStart={id => acted(store.start(id))}
             onStop={() => acted(store.stop())}
             onDelete={id => {
-              store.deleteTask(id);
+              acted(store.deleteTask(id));
               setSelectedId(null);
             }}
             onSelect={select}

@@ -83,13 +83,25 @@ export class CalendarService {
     return this.queue.pendingCount + this.queue.runningCount;
   }
 
+  /**
+   * Starts reading on a timer, and returns the way to stop reading.
+   *
+   * It deliberately does not dispose the write queue. `dispose` is permanent,
+   * and React mounts, unmounts and remounts in development while the memoized
+   * service survives all three, so disposing here left write-back dead in dev
+   * and working in production. Stopping the reads is reversible; throwing away
+   * the queue is not.
+   */
   start(): () => void {
     void this.refresh();
     this.timer = setInterval(() => void this.refresh(), CALENDAR_EVERY_MS);
-    return () => {
-      clearInterval(this.timer);
-      this.queue.dispose();
-    };
+    return () => clearInterval(this.timer);
+  }
+
+  /** Permanent teardown, for a caller that really is finished with this. */
+  dispose(): void {
+    clearInterval(this.timer);
+    this.queue.dispose();
   }
 
   /** Reads today onto the timeline. Quiet when there is nothing configured. */
