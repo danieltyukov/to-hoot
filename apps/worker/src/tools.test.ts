@@ -115,20 +115,35 @@ function stubGitHub(): void {
   );
 }
 
-function env(): Env {
+/**
+ * One deployment's bindings.
+ *
+ * The device id is unique per call, so each test gets its own entry in the
+ * Worker's module-scope handler cache and never inherits another test's client
+ * or its resolved branch. Reusing ONE env across two tool calls is therefore
+ * how a test asks for the warm path.
+ *
+ * `GITHUB_BRANCH` is deliberately absent by default: production passes `branch`
+ * only when that binding is set (`index.ts`), so an unconfigured Worker is the
+ * shape most deployments actually run.
+ */
+function env(patch: Partial<Env> = {}): Env {
   return {
     GITHUB_OWNER: 'o',
     GITHUB_REPO: 'r',
     GITHUB_TOKEN: 'tok',
     GITHUB_API_BASE: 'https://api.test.invalid',
     MCP_PATH_SECRET: SECRET,
-    // A distinct id per test run, so the module-scope handler cache never
-    // serves one test's backend to another.
     DEVICE_ID: `worker-${Math.random().toString(36).slice(2, 10)}`,
+    ...patch,
   };
 }
 
-async function callTool(name: string, args: unknown): Promise<{ text: string; isError?: boolean }> {
+async function callTool(
+  name: string,
+  args: unknown,
+  bindings: Env = env(),
+): Promise<{ text: string; isError?: boolean }> {
   const url = new URL(`https://${HOST}/mcp/${SECRET}`);
   const request = new Request(url, {
     method: 'POST',
@@ -145,7 +160,7 @@ async function callTool(name: string, args: unknown): Promise<{ text: string; is
     }),
   });
 
-  const res = await worker.fetch(request, env());
+  const res = await worker.fetch(request, bindings);
   expect(res.status).toBe(200);
   const body = await res.text();
   const frame = (res.headers.get('content-type') ?? '').includes('text/event-stream')
@@ -187,6 +202,59 @@ describe('a read through the Worker', () => {
   });
 });
 
+// Both shapes are real: `index.ts` passes `branch` only when GITHUB_BRANCH is
+// set, so a Worker deployed without it resolves the repository's default branch
+// instead of assuming one. That resolution is cached on the client, which is why
+// it costs a request once per isolate and not once per call.
+describe('the default-branch lookup', () => {
+  it('costs one extra request on a cold unconfigured client, and names the repo', async () => {
+    await callTool('today', {});
+
+    expect(calls.map(c => c.path)).toEqual([
+      '/repos/o/r',
+      '/repos/o/r/commits',
+      '/repos/o/r/git/trees/c1',
+      '/repos/o/r/git/blobs/snap1',
+    ]);
+  });
+
+  it('is skipped entirely when GITHUB_BRANCH is set', async () => {
+    await callTool('today', {}, env({ GITHUB_BRANCH: 'main' }));
+
+    expect(calls.map(c => c.path)).toEqual([
+      '/repos/o/r/commits',
+      '/repos/o/r/git/trees/c1',
+      '/repos/o/r/git/blobs/snap1',
+    ]);
+    expect(calls.some(c => c.path === '/repos/o/r')).toBe(false);
+  });
+
+  it('is paid once, not once per call: a second read costs one conditional GET', async () => {
+    const bindings = env();
+    await callTool('today', {}, bindings);
+    const cold = calls.length;
+    expect(cold).toBe(4);
+
+    await callTool('today', {}, bindings);
+
+    // The etag matched, so the whole second read is one 304. The branch is not
+    // looked up again, which is the claim the README makes.
+    expect(calls.length - cold).toBe(1);
+    expect(calls[cold]!.path).toBe('/repos/o/r/commits');
+  });
+
+  it('costs a configured client 8 requests for a write and an unconfigured one 9', async () => {
+    await callTool('add_task', { title: 'configured' }, env({ GITHUB_BRANCH: 'main' }));
+    const configured = calls.length;
+
+    calls.length = 0;
+    await callTool('add_task', { title: 'unconfigured' });
+
+    expect(configured).toBe(8);
+    expect(calls).toHaveLength(9);
+  });
+});
+
 describe('a write through the Worker', () => {
   it('commits one event batch under the Worker device prefix', async () => {
     const out = await callTool('add_task', { title: 'From claude.ai', estimateMinutes: 15 });
@@ -208,9 +276,13 @@ describe('a write through the Worker', () => {
       'PATCH /repos/o/r/git/refs/heads/main',
     ]);
     // One to resolve the branch, three to read the snapshot, one conditional
-    // GET on the append's refresh, then the four the commit costs. Nine of the
-    // fifty the free tier allows, and the branch lookup is cached on the
-    // client, so a warm isolate spends eight.
+    // GET on the append's refresh, then four for the commit. Nine of the fifty
+    // the free tier allows.
+    //
+    // The commit is four and not five even on an unconfigured client: a commit
+    // whose first act is resolving the branch would pay a fifth, but every tool
+    // here loads state before it appends, so the branch is already resolved and
+    // cached on the client by then. A warm isolate spends eight in total.
     expect(calls).toHaveLength(9);
   });
 
