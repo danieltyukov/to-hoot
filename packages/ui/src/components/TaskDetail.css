@@ -1,0 +1,211 @@
+/*
+ * One task, in the pane the list was in. It replaces the list rather than
+ * opening beside it, so there is one implementation for the desktop and the
+ * phone, and on a desktop the day timeline stays visible while you plan.
+ */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-back {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-control);
+  color: var(--muted);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.detail-back:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.detail-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  min-height: 26px;
+  padding-inline: 8px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.detail-timer:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.detail-timer[aria-pressed='true'] {
+  color: var(--accent-hover);
+}
+
+.detail-parent {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 8px 12px 0;
+}
+
+.detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px 20px;
+}
+
+.detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.detail-input {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-small);
+  transition: border-color var(--dur-quick) var(--ease);
+}
+
+.detail-input:hover {
+  border-color: var(--muted);
+}
+
+.detail-input::placeholder {
+  color: var(--faint);
+}
+
+.detail-input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.detail-notes {
+  min-height: 64px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.detail-error {
+  font-size: var(--fs-mini);
+  color: var(--danger);
+}
+
+.detail-hint,
+.detail-none {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.detail-due {
+  display: flex;
+  gap: 6px;
+}
+
+.detail-due .detail-input {
+  width: auto;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* The tag pill from the sidebar, in its selected state here. */
+.detail-tags .tag[aria-pressed='true'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+}
+
+.detail-days,
+.detail-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-days li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-day {
+  color: var(--faint);
+}
+
+.detail-subs li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--row-h);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-sub-time {
+  margin-inline-start: auto;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.detail-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+  font-size: var(--fs-small);
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+.detail-link:hover {
+  text-decoration-color: var(--muted);
+}
+
+.detail-foot {
+  padding-top: 6px;
+}
+
+.detail-delete {
+  min-height: 28px;
+  padding-inline: 10px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--danger);
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.detail-delete:hover {
+  background-color: var(--hover);
+}

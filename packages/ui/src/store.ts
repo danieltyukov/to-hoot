@@ -40,6 +40,30 @@ const THEME_KEY = 'to-hoot:theme';
  */
 export const FLUSH_MS = 30_000;
 
+/*
+ * Colours a new project or tag can take.
+ *
+ * Six, spread round the wheel but all held to the same muted, earthy register as
+ * the interface, so a list of projects reads as one palette rather than as a set
+ * of highlighter pens. Every one clears 3:1 against both the light and the dark
+ * background, which is the non-text threshold a 6px dot has to meet. None is in
+ * the blue-to-purple arc: that is where the stock framework colours live, and
+ * where this design deliberately does not go.
+ */
+export const ENTITY_COLORS = [
+  '#c2603f',
+  '#8a6d3b',
+  '#5f7346',
+  '#3d7350',
+  '#4a6670',
+  '#a4494f',
+] as const;
+
+/** Cycles, so consecutive projects never come out the same colour. */
+function nextColor(index: number): string {
+  return ENTITY_COLORS[index % ENTITY_COLORS.length]!;
+}
+
 export interface Snapshot {
   state: State;
   events: readonly Event[];
@@ -203,6 +227,47 @@ export class Store {
     this.commit([this.event('update', 'settings', 'app', { theme })], { theme });
   }
 
+  /** A field-level change to a task. The detail view is the main caller. */
+  patchTask(taskId: string, patch: Record<string, unknown>): void {
+    this.commit([this.event('update', 'task', taskId, patch)]);
+  }
+
+  addSubtask(parentId: string, title: string): string {
+    return this.addTask(title, { parentId });
+  }
+
+  deleteTask(taskId: string): void {
+    const stopping = this.snapshot.runningTaskId === taskId;
+    const stopped = stopping ? this.stopEvents() : [];
+    this.commit(
+      [...stopped, this.event('delete', 'task', taskId, {})],
+      stopping ? { runningTaskId: null } : {},
+    );
+  }
+
+  addProject(title: string): string {
+    const id = ulid();
+    this.commit([
+      this.event('create', 'project', id, {
+        title,
+        color: nextColor(Object.keys(this.snapshot.state.projects).length),
+        isArchived: false,
+      }),
+    ]);
+    return id;
+  }
+
+  addTag(title: string): string {
+    const id = ulid();
+    this.commit([
+      this.event('create', 'tag', id, {
+        title,
+        color: nextColor(Object.keys(this.snapshot.state.tags).length),
+      }),
+    ]);
+    return id;
+  }
+
   private stopEvents(): Event[] {
     const events = this.tracker.stop();
     this.flushedAt = null;
@@ -210,7 +275,7 @@ export class Store {
   }
 
   private event(
-    type: 'create' | 'update',
+    type: 'create' | 'update' | 'delete',
     entity: 'task' | 'project' | 'tag' | 'settings',
     entityId: string,
     payload: unknown,

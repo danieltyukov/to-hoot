@@ -5,7 +5,9 @@ import {
   dayStr,
   plannedToday,
   todayTasks,
+  trackedSpans,
   trackedToday,
+  type State,
   type Task,
 } from '@to-hoot/core';
 
@@ -13,11 +15,12 @@ import { ConsistencyGrid } from './components/ConsistencyGrid.js';
 import { EMPTY_COPY, EmptyState, TodayState } from './components/EmptyState.js';
 import { ProgressRing } from './components/ProgressRing.js';
 import { Sidebar, type View } from './components/Sidebar.js';
+import { TaskDetail } from './components/TaskDetail.js';
 import { TaskList } from './components/TaskList.js';
 import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
+import type { Span, TimelineEvent } from './components/timeline-layout.js';
 import { formatDuration } from './format.js';
-import { trackedSpans } from './trackedSpans.js';
 import { Store } from './store.js';
 import './App.css';
 
@@ -26,6 +29,14 @@ export const TICK_MS = 1000;
 
 /** The consistency grid's window. */
 const GRID_DAYS = 14;
+
+/**
+ * How long a scheduled task occupies when it carries no estimate.
+ *
+ * A block of zero height is a block nobody can see or click, so a scheduled task
+ * with no estimate would vanish from the very view it was scheduled onto.
+ */
+const UNESTIMATED_BLOCK_MS = 30 * 60_000;
 
 export type Pane = 'lists' | 'tasks' | 'day';
 
@@ -56,6 +67,7 @@ export default function App({ store: injected }: AppProps = {}) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const [view, setView] = useState<View>('today');
   const [pane, setPane] = useState<Pane>('tasks');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => store.tick(), TICK_MS);
@@ -91,7 +103,16 @@ export default function App({ store: injected }: AppProps = {}) {
   const tracked = trackedToday(state, now);
   const planned = plannedToday(state, now);
 
-  const spans = trackedSpans(snapshot.events, today, id => state.projects[state.tasks[id]?.projectId ?? '']?.color);
+  const colorOf = (taskId: string | undefined): string | undefined =>
+    taskId === undefined ? undefined : state.projects[state.tasks[taskId]?.projectId ?? '']?.color;
+
+  // Core infers the stretches from the log; the colour is the UI's business.
+  const spans: Span[] = trackedSpans(snapshot.events, today).map(span => ({
+    id: span.id,
+    startMs: span.startMs,
+    endMs: span.endMs,
+    color: colorOf(span.taskId),
+  }));
   // The stretch since the last flush is not in the log yet, so the lane would
   // stop moving the moment a timer started without this.
   if (snapshot.pendingSince !== null && snapshot.runningTaskId !== null) {
@@ -99,11 +120,31 @@ export default function App({ store: injected }: AppProps = {}) {
       id: 'pending',
       startMs: snapshot.pendingSince,
       endMs: now,
-      color: state.projects[state.tasks[snapshot.runningTaskId]?.projectId ?? '']?.color,
+      color: colorOf(snapshot.runningTaskId),
     });
   }
 
+  // A task with a time on it is a block on the day. This is the only source of
+  // events until the calendar bridge lands, and it is what makes the timeline
+  // fill up as soon as anything is actually scheduled.
+  const events: TimelineEvent[] = Object.values(state.tasks)
+    .filter(t => t.dueWithTime !== undefined && dayStr(t.dueWithTime, offsetMs) === today)
+    .map(t => ({
+      id: t.id,
+      taskId: t.id,
+      title: t.title,
+      startMs: t.dueWithTime!,
+      endMs: t.dueWithTime! + (t.timeEstimate > 0 ? t.timeEstimate : UNESTIMATED_BLOCK_MS),
+      color: colorOf(t.id),
+    }));
+
   const heading = view === 'today' ? 'Today' : titleOf(view, state);
+  const selected = selectedId === null ? undefined : state.tasks[selectedId];
+
+  const select = (taskId: string): void => {
+    setSelectedId(taskId);
+    setPane('tasks');
+  };
 
   return (
     <div className="app" data-pane={pane}>
@@ -114,27 +155,56 @@ export default function App({ store: injected }: AppProps = {}) {
           active={view}
           onSelect={next => {
             setView(next);
+            setSelectedId(null);
             setPane('tasks');
           }}
           counts={counts}
+          onAddProject={title => setView(`project:${store.addProject(title)}`)}
+          onAddTag={title => store.addTag(title)}
           footer={<ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />}
         />
       </div>
 
+      {/* The detail replaces the list rather than opening beside it: one
+          implementation for the desktop and the phone, and on a desktop the day
+          timeline stays visible while a task is being planned. */}
       <div className="pane pane-tasks">
-        <TaskList
-          heading={heading}
-          tasks={visible}
-          projects={state.projects}
-          trackedFor={store.trackedFor}
-          runningTaskId={snapshot.runningTaskId}
-          onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
-          onStart={id => store.start(id)}
-          onStop={() => store.stop()}
-          onAdd={title => store.addTask(title, defaultsFor(view, today))}
-          notice={view === 'today' ? <TodayState open={open.length} done={done.length} /> : null}
-          empty={view === 'today' ? null : <EmptyState>{emptyCopyFor(view)}</EmptyState>}
-        />
+        {selected === undefined ? (
+          <TaskList
+            heading={heading}
+            tasks={visible}
+            projects={state.projects}
+            trackedFor={store.trackedFor}
+            runningTaskId={snapshot.runningTaskId}
+            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+            onStart={id => store.start(id)}
+            onStop={() => store.stop()}
+            onSelect={select}
+            onAdd={title => store.addTask(title, defaultsFor(view, today))}
+            notice={view === 'today' ? <TodayState open={open.length} done={done.length} /> : null}
+            empty={view === 'today' ? null : <EmptyState>{emptyCopyFor(view)}</EmptyState>}
+          />
+        ) : (
+          <TaskDetail
+            task={selected}
+            state={state}
+            tracked={store.trackedFor(selected.id)}
+            pendingMs={snapshot.pendingMs}
+            today={today}
+            runningTaskId={snapshot.runningTaskId}
+            onClose={() => setSelectedId(null)}
+            onPatch={(id, patch) => store.patchTask(id, patch)}
+            onAddSubtask={(parentId, title) => store.addSubtask(parentId, title)}
+            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+            onStart={id => store.start(id)}
+            onStop={() => store.stop()}
+            onDelete={id => {
+              store.deleteTask(id);
+              setSelectedId(null);
+            }}
+            onSelect={select}
+          />
+        )}
       </div>
 
       <div className="pane pane-day">
@@ -143,6 +213,7 @@ export default function App({ store: injected }: AppProps = {}) {
           startHour={hourOf(state.settings.workdayStart, 9)}
           endHour={hourOf(state.settings.workdayEnd, 17)}
           now={now}
+          events={events}
           tracked={spans}
           trackedTotal={tracked + snapshot.pendingMs}
           plannedTotal={planned}
@@ -218,7 +289,7 @@ function splitView(view: View): [string, string] {
   return at === -1 ? [view, ''] : [view.slice(0, at), view.slice(at + 1)];
 }
 
-function titleOf(view: View, state: { projects: Record<string, { title: string }>; tags: Record<string, { title: string }> }): string {
+function titleOf(view: View, state: State): string {
   const [kind, id] = splitView(view);
   if (kind === 'project') return state.projects[id]?.title ?? 'Project';
   if (kind === 'tag') return state.tags[id]?.title ?? 'Tag';

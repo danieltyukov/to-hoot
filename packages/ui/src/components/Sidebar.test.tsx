@@ -81,10 +81,65 @@ describe('Sidebar', () => {
     }
   });
 
-  it('drops empty sections rather than showing an empty heading', () => {
+  it('keeps the empty sections, because they carry the only way to fill them', () => {
+    // An earlier version hid a section until it had contents, which meant the
+    // first project could never be made: the control to make it was inside the
+    // section that was waiting for it.
+    render(
+      <Sidebar
+        projects={[]}
+        tags={[]}
+        active="today"
+        onSelect={vi.fn()}
+        onAddProject={vi.fn()}
+        onAddTag={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Projects')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
+    expect(screen.getByText('No projects yet.')).toBeInTheDocument();
+  });
+
+  it('creates a project from the sidebar', async () => {
+    const onAddProject = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Sidebar projects={[]} tags={[]} active="today" onSelect={vi.fn()} onAddProject={onAddProject} />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+
+    expect(onAddProject).toHaveBeenCalledWith('Radio');
+    // The field closes on success, so the sidebar goes back to being a list.
+    expect(screen.queryByLabelText('New project name')).toBeNull();
+  });
+
+  it('creates a tag the same way', async () => {
+    const onAddTag = vi.fn();
+    const user = userEvent.setup();
+    render(<Sidebar projects={[]} tags={[]} active="today" onSelect={vi.fn()} onAddTag={onAddTag} />);
+
+    await user.click(screen.getByRole('button', { name: 'New tag' }));
+    await user.type(screen.getByLabelText('New tag name'), 'errand{Enter}');
+
+    expect(onAddTag).toHaveBeenCalledWith('errand');
+  });
+
+  it('offers no add control where the caller has no handler for it', () => {
     render(<Sidebar projects={[]} tags={[]} active="today" onSelect={vi.fn()} />);
-    expect(screen.queryByText('Projects')).toBeNull();
-    expect(screen.queryByText('Tags')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New project' })).toBeNull();
+  });
+
+  it('ignores a blank name rather than making a project called nothing', async () => {
+    const onAddProject = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Sidebar projects={[]} tags={[]} active="today" onSelect={vi.fn()} onAddProject={onAddProject} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), '   {Enter}');
+    expect(onAddProject).not.toHaveBeenCalled();
   });
 
   it('hosts whatever footer it is given', () => {

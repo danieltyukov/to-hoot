@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -241,6 +241,176 @@ describe('App', () => {
     expect(screen.getByText('last 14 days')).toBeInTheDocument();
     expect(container.querySelector('.foot-value')).toHaveTextContent('0m tracked');
     expect(container.querySelectorAll('[data-today]')).toHaveLength(1);
+  });
+
+  it('opens a task and comes back to the list', async () => {
+    const { user, container } = setup();
+    await addTask(user, 'Rewire the bench');
+
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    expect(container.querySelector('.detail')).not.toBeNull();
+    expect(screen.getByLabelText('Title')).toHaveValue('Rewire the bench');
+
+    await user.click(screen.getByRole('button', { name: 'Back to the list' }));
+    expect(container.querySelector('.detail')).toBeNull();
+    expect(container.querySelector('[data-group="open"]')).not.toBeNull();
+  });
+
+  it('an estimate reaches the day header and fills the ring', async () => {
+    // The whole planned-against-tracked idea was dead before this: nothing in
+    // the product could plan anything, so the ring had no scale to fill against.
+    const { user } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+
+    await user.clear(screen.getByLabelText('Estimate'));
+    await user.type(screen.getByLabelText('Estimate'), '2h');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Back to the list' }));
+
+    expect(screen.getByText('2h 0m')).toBeInTheDocument();
+    const ring = screen.getByRole('progressbar');
+    expect(ring).toHaveAttribute('aria-valuemax', String(2 * 3_600_000));
+    expect(ring).toHaveAccessibleName('0m tracked of 2h 0m planned');
+  });
+
+  it('scheduling a task at a time puts a block on the timeline', async () => {
+    const { user, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+
+    await user.clear(screen.getByLabelText('Estimate'));
+    await user.type(screen.getByLabelText('Estimate'), '90m');
+    await user.tab();
+    fireEvent.change(screen.getByLabelText('Due time'), { target: { value: '11:00' } });
+    await user.click(screen.getByRole('button', { name: 'Back to the list' }));
+
+    const block = container.querySelector<HTMLElement>('[data-event]')!;
+    expect(block).toHaveTextContent('Rewire the bench');
+    expect(block).toHaveTextContent('11:00');
+    // 90 minutes on a 56px hour, measured from the grid's first hour.
+    expect(Number.parseFloat(block.style.height)).toBe(1.5 * 56);
+  });
+
+  it('gives a scheduled task with no estimate a block that can still be seen', async () => {
+    const { user, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    fireEvent.change(screen.getByLabelText('Due time'), { target: { value: '11:00' } });
+
+    // A zero-height block is a block nobody can see or click, on the very view
+    // it was just scheduled onto.
+    const block = container.querySelector<HTMLElement>('[data-event]')!;
+    expect(Number.parseFloat(block.style.height)).toBe(0.5 * 56);
+  });
+
+  it('creates a project and puts a task in it', async () => {
+    const { user, store, container } = setup();
+    await addTask(user, 'Rewire the bench');
+
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+
+    // Creating it also moves to it, which is where the next task belongs.
+    const projectId = Object.keys(store.getSnapshot().state.projects)[0]!;
+    expect(container.querySelector(`[data-view="project:${projectId}"]`)).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Radio' })).toBeInTheDocument();
+
+    await addTask(user, 'Order the enclosure');
+    const added = Object.values(store.getSnapshot().state.tasks).find(
+      t => t.title === 'Order the enclosure',
+    )!;
+    expect(added.projectId).toBe(projectId);
+  });
+
+  it('assigns an existing task to a project from the detail', async () => {
+    const { user, store } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    const projectId = Object.keys(store.getSnapshot().state.projects)[0]!;
+
+    await user.click(screen.getByRole('button', { name: /^Today/ }));
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    await user.selectOptions(screen.getByLabelText('Project'), projectId);
+
+    const task = Object.values(store.getSnapshot().state.tasks)[0]!;
+    expect(task.projectId).toBe(projectId);
+  });
+
+  it('creates a tag and puts it on a task', async () => {
+    const { user, store } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'New tag' }));
+    await user.type(screen.getByLabelText('New tag name'), 'errand{Enter}');
+
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    // Named "errand tag" rather than "errand": the sidebar has a button with
+    // the same word that navigates instead of assigning.
+    await user.click(screen.getByRole('button', { name: 'errand tag' }));
+
+    const tagId = Object.keys(store.getSnapshot().state.tags)[0]!;
+    expect(Object.values(store.getSnapshot().state.tasks)[0]!.tagIds).toEqual([tagId]);
+  });
+
+  it('tracks a session end to end, from the button to timeSpentOnDay', async () => {
+    const { user, store, advance, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    const taskId = Object.keys(store.getSnapshot().state.tasks)[0]!;
+
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    advance(45_000);
+
+    // On screen while it runs.
+    expect(screen.getByText('0:45')).toBeInTheDocument();
+    expect(container.querySelector('.lane-tracked [data-tracked]')).not.toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /^Stop timer/ }));
+
+    // And in the day totals afterwards, on the right day.
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    expect(store.getSnapshot().state.tasks[taskId]!.timeSpentOnDay[day]).toBe(45_000);
+    expect(screen.getByText('<1m tracked')).toBeInTheDocument();
+  });
+
+  it('shows a subtask under its parent and refuses a third level', async () => {
+    const { user, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    await user.type(screen.getByLabelText('New subtask'), 'Order the wire{Enter}');
+
+    // The child can be opened, and offers no composer of its own.
+    await user.click(screen.getByRole('button', { name: 'Order the wire' }));
+    expect(screen.queryByLabelText('New subtask')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Back to the list' }));
+    const rows = [...container.querySelectorAll('[data-group="open"] [data-task]')];
+    expect(rows.map(r => r.getAttribute('data-depth'))).toEqual(['0', '1']);
+  });
+
+  it('shows the running stretch in the day breakdown, not just on the timer', async () => {
+    // The log is written every thirty seconds, so without folding the pending
+    // stretch in, the breakdown reads "No time on this yet" while the timer
+    // beside it counts up.
+    const { user, advance, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    advance(12_000);
+
+    expect(screen.queryByText('No time on this yet.')).toBeNull();
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    expect(container.querySelector(`[data-tracked-day="${day}"]`)).toHaveTextContent('<1m');
+  });
+
+  it('deletes a task and returns to the list', async () => {
+    const { user, store, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    await user.click(screen.getByRole('button', { name: 'Delete task' }));
+
+    expect(container.querySelector('.detail')).toBeNull();
+    expect(store.getSnapshot().state.tasks).toEqual({});
   });
 
   it('gives every control in the shell an accessible name', () => {

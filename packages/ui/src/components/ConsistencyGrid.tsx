@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { dayStr } from '@to-hoot/core';
+import { dayWindow } from '@to-hoot/core';
 
 import { formatDuration } from '../format.js';
 import './ConsistencyGrid.css';
@@ -70,22 +70,4 @@ export function ConsistencyGrid({
       </ul>
     </div>
   );
-}
-
-/**
- * The last `days` logical days as day strings, oldest first.
- *
- * Calendar-field arithmetic, not subtraction of 24 hours: on the day a clock
- * changes, one of those days is 23 or 25 hours long and the subtraction drops or
- * repeats a day. Core computes the same window for the numbers this renders; it
- * is repeated here because core does not export it.
- */
-function dayWindow(days: number, now: number, offsetMs: number): string[] {
-  const base = new Date(now - offsetMs);
-  const out: string[] = [];
-  for (let back = days - 1; back >= 0; back--) {
-    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() - back);
-    out.push(dayStr(d.getTime()));
-  }
-  return out;
 }

@@ -151,6 +151,58 @@ test('the accent is never used as a text colour', async ({ page }) => {
   expect(offenders).toEqual([]);
 });
 
+test('a whole day can be planned and tracked without leaving the app', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+
+  // A project, which nothing in the product could make before.
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByLabel('New project name').fill('Radio');
+  await page.getByLabel('New project name').press('Enter');
+  await expect(page.getByRole('heading', { name: 'Radio' })).toBeVisible();
+
+  await addTask(page, 'Solder the preamp');
+  await page.getByRole('button', { name: 'Solder the preamp', exact: true }).click();
+
+  // An estimate, which is what gives the ring and the day header a scale.
+  await page.getByLabel('Estimate').fill('1h 30m');
+  await page.getByLabel('Estimate').blur();
+  // A time, which is what puts it on the timeline.
+  await page.getByLabel('Due time').fill('11:00');
+  await page.getByRole('button', { name: 'Back to the list' }).click();
+
+  const block = page.locator('[data-event]');
+  await expect(block).toHaveText(/Solder the preamp/);
+  await expect(block).toHaveText(/11:00/);
+
+  const ring = page.getByRole('progressbar');
+  await expect(ring).toHaveAttribute('aria-valuemax', String(90 * 60_000));
+  await expect(page.locator('.timeline-totals')).toContainText('1h 30m');
+
+  // And a tracked session against it.
+  await page.getByRole('button', { name: 'Start timer for Solder the preamp' }).click();
+  await expect(page.locator('.lane-tracked [data-tracked]')).toBeVisible();
+  await expect(page.locator('.row-time')).toHaveText(/0:0[1-9]/, { timeout: 5_000 });
+  await page.getByRole('button', { name: 'Stop timer for Solder the preamp' }).click();
+
+  // The time is in the log, on the day, and the detail says so.
+  await page.getByRole('button', { name: 'Solder the preamp', exact: true }).click();
+  await expect(page.locator('[data-tracked-day]')).toHaveCount(1);
+  await expect(page.locator('.foot-value')).toContainText('of 1h 30m');
+});
+
+test('the UI never offers to nest a third level of subtask', async ({ page }) => {
+  // Core rejects it, so an offer here would be an action that looks like it
+  // worked and silently did nothing.
+  await addTask(page, 'Rewire the bench');
+  await page.getByRole('button', { name: 'Rewire the bench', exact: true }).click();
+  await page.getByLabel('New subtask').fill('Order the wire');
+  await page.getByLabel('New subtask').press('Enter');
+
+  await page.getByRole('button', { name: 'Order the wire', exact: true }).click();
+  await expect(page.getByLabel('New subtask')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Rewire the bench', exact: true })).toBeVisible();
+});
+
 test('every control the mobile suite has to address carries a name', async ({ page }) => {
   // Maestro drives the Android build through the accessibility tree and matches
   // on nothing else. An unnamed control is not awkward there, it is unreachable.

@@ -26,8 +26,56 @@
   color: var(--text);
 }
 
+.nav-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 4px 4px 8px;
+}
+
 .nav-head {
-  padding: 14px 8px 4px;
+  padding: 0;
+}
+
+.nav-add {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-control);
+  color: var(--faint);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.nav-add:hover,
+.nav-add[aria-expanded='true'] {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.nav-new {
+  padding: 2px 8px 6px;
+}
+
+.nav-new-input {
+  width: 100%;
+  min-height: 28px;
+  padding-inline: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.nav-new-input::placeholder {
+  color: var(--faint);
+}
+
+.nav-none {
+  padding: 2px 8px 4px;
+  font-size: var(--fs-mini);
+  color: var(--faint);
 }
 
 .nav {
