@@ -84,9 +84,17 @@ jobs:
       - run: npm ci
         working-directory: apps/desktop
 
+      # The cache above restores src-tauri/target, and the bundle directory is
+      # inside it. Tauri puts the version in each filename, so without this the
+      # second release finds the first release's .deb sitting beside the new one
+      # and the collector below, which demands exactly one match, fails the job.
+      # It would pass the first tag and fail every tag after it.
       - name: Build the bundles
-        run: npm run build
         working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/target/release/bundle
+          npm run build
 
       - name: Collect them under stable names
         run: |
