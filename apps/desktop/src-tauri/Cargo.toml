@@ -1,0 +1,36 @@
+[package]
+name = "to-hoot-desktop"
+version = "0.1.0"
+description = "to-hoot desktop shell"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+
+[lib]
+name = "to_hoot_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon` is a Cargo feature, not a plugin. The tray is driven by its menu:
+# Linux emits no click event for a tray icon, so anything hung off a click
+# handler would work on two platforms out of three.
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-http = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-store = "2"
+
+# Pure Rust X11 client, so the OS idle query needs no C headers at build time.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["screensaver"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
