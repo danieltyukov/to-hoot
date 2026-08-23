@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
 import type { Http, Settings as CoreSettings, Theme } from '@to-hoot/core';
 
+import type { SyncStatus } from '../../sync.js';
 import { StepCalendar } from '../Wizard/StepCalendar.js';
 import { StepClaude } from '../Wizard/StepClaude.js';
 import { StepSync } from '../Wizard/StepSync.js';
@@ -18,6 +19,8 @@ export interface SettingsProps {
   onImport: (text: string) => { ok: true; added: number } | { ok: false; error: string };
   onClose: () => void;
   mcpServerPath?: string;
+  syncStatus?: SyncStatus | null;
+  onSyncNow?: () => void;
 }
 
 /*
@@ -40,6 +43,8 @@ export function Settings({
   onImport,
   onClose,
   mcpServerPath,
+  syncStatus = null,
+  onSyncNow,
 }: SettingsProps) {
   return (
     <section className="settings" aria-label="Settings">
@@ -60,7 +65,31 @@ export function Settings({
       </header>
 
       <div className="settings-body">
-        <Section title="Sync" summary={describeSync(settings)}>
+        <Section title="Sync" summary={syncSummary(settings, syncStatus)}>
+          {syncStatus === null || syncStatus.phase === 'unconfigured' ? null : (
+            <div className="step settings-sync">
+              <p className="test-result" role="status" data-status={statusTone(syncStatus)}>
+                {syncStatus.detail}
+                {syncStatus.at === null ? null : (
+                  <span className="test-hint">
+                    Last synced at {new Date(syncStatus.at).toLocaleTimeString()}.
+                  </span>
+                )}
+              </p>
+              {onSyncNow === undefined ? null : (
+                <div className="settings-choice">
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={syncStatus.phase === 'syncing'}
+                    onClick={onSyncNow}
+                  >
+                    {syncStatus.phase === 'syncing' ? 'Syncing' : 'Sync now'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <StepSync http={http} settings={settings} onSave={onSave} />
         </Section>
 
@@ -103,6 +132,21 @@ export function Settings({
 function describeSync(settings: CoreSettings): string {
   if (settings.github.owner === '' || settings.github.repo === '') return 'Not configured';
   return `${settings.github.owner}/${settings.github.repo}`;
+}
+
+/** What the collapsed row says, which is where most people will ever read it. */
+function syncSummary(settings: CoreSettings, status: SyncStatus | null): string {
+  const where = describeSync(settings);
+  if (status === null || status.phase === 'unconfigured') return where;
+  if (status.phase === 'error') return `${where}, not syncing`;
+  if (status.pending > 0) return `${where}, ${status.pending} to push`;
+  return where;
+}
+
+function statusTone(status: SyncStatus): string | undefined {
+  if (status.phase === 'ok') return 'ok';
+  if (status.phase === 'error') return 'error';
+  return undefined;
 }
 
 function describeCalendar(settings: CoreSettings): string {

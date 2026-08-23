@@ -422,3 +422,87 @@ describe('App', () => {
     }
   });
 });
+
+describe('idle time', () => {
+  /*
+   * Subtract first, then ask. The time is already out of the totals by the time
+   * the question appears, so an unanswered prompt leaves honest numbers rather
+   * than an inflated day.
+   */
+  function idleSetup() {
+    const storage = new Map<string, string>();
+    let clock = NOW;
+    const store = new Store({
+      now: () => clock,
+      storage: {
+        getItem: key => storage.get(key) ?? null,
+        setItem: (key, value) => void storage.set(key, value),
+      },
+    });
+    store.finishSetup();
+    store.saveSettings({ idleThresholdMs: 60_000 });
+    const utils = render(<App store={store} />);
+    return { ...utils, store, user: userEvent.setup(), away: (ms: number) => (clock += ms) };
+  }
+
+  it('asks about a stretch it refused to count', async () => {
+    const { user, store, away } = idleSetup();
+    await user.type(screen.getByLabelText('New task'), 'Rewire the bench{Enter}');
+    const id = Object.keys(store.getSnapshot().state.tasks)[0]!;
+
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    away(30 * 60_000);
+    act(() => store.tick());
+
+    expect(screen.getByRole('status', { name: 'Idle time' })).toHaveTextContent(
+      'The timer ran for 30m with nothing happening on Rewire the bench. It has not been counted.',
+    );
+    // And it really has not been counted, which is what makes the question calm.
+    expect(store.getSnapshot().state.tasks[id]!.timeSpent).toBe(0);
+  });
+
+  it('credits the interrupted task when that is the answer', async () => {
+    const { user, store, away } = idleSetup();
+    await user.type(screen.getByLabelText('New task'), 'Rewire the bench{Enter}');
+    const id = Object.keys(store.getSnapshot().state.tasks)[0]!;
+
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    away(30 * 60_000);
+    act(() => store.tick());
+    await user.click(screen.getByRole('button', { name: 'Count it to Rewire the bench' }));
+
+    expect(store.getSnapshot().state.tasks[id]!.timeSpent).toBe(30 * 60_000);
+    expect(screen.queryByRole('status', { name: 'Idle time' })).toBeNull();
+  });
+
+  it('discards it when it was a break', async () => {
+    const { user, store, away } = idleSetup();
+    await user.type(screen.getByLabelText('New task'), 'Rewire the bench{Enter}');
+    const id = Object.keys(store.getSnapshot().state.tasks)[0]!;
+
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    away(30 * 60_000);
+    act(() => store.tick());
+    await user.click(screen.getByRole('button', { name: 'It was a break' }));
+
+    expect(store.getSnapshot().state.tasks[id]!.timeSpent).toBe(0);
+    expect(screen.queryByRole('status', { name: 'Idle time' })).toBeNull();
+  });
+
+  it('offers somewhere else the time could have gone', async () => {
+    // Three truthful answers, not two: this task, something else, or not work.
+    const { user, store, away } = idleSetup();
+    await user.type(screen.getByLabelText('New task'), 'Rewire the bench{Enter}');
+    await user.type(screen.getByLabelText('New task'), 'Read the datasheet{Enter}');
+    const other = Object.values(store.getSnapshot().state.tasks).find(
+      t => t.title === 'Read the datasheet',
+    )!;
+
+    await user.click(screen.getByRole('button', { name: 'Start timer for Rewire the bench' }));
+    away(30 * 60_000);
+    act(() => store.tick());
+    await user.selectOptions(screen.getByLabelText('Or count it to'), other.id);
+
+    expect(store.getSnapshot().state.tasks[other.id]!.timeSpent).toBe(30 * 60_000);
+  });
+});

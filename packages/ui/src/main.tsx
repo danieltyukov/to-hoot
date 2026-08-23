@@ -19,7 +19,9 @@ if (!container) {
  * `npm run dev` needs nothing from either shell.
  */
 const platform = resolvePlatform();
-const store = new Store({ vault: platform.store });
+// `files` is where the event log lives. Without it the app is a scratchpad that
+// forgets everything when the window closes.
+const store = new Store({ vault: platform.store, files: platform.files });
 
 // Never unsubscribed on purpose: the subscription lives exactly as long as the
 // page does. On resume the store re-reads the clock, which is the whole point
@@ -28,6 +30,6 @@ platform.onResume(() => store.tick());
 
 createRoot(container).render(
   <StrictMode>
-    <App store={store} http={platform.http} />
+    <App store={store} http={platform.http} platform={platform} />
   </StrictMode>,
 );

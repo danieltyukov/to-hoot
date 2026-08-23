@@ -13,6 +13,7 @@ import {
 
 import { ConsistencyGrid } from './components/ConsistencyGrid.js';
 import { EMPTY_COPY, EmptyState, TodayState } from './components/EmptyState.js';
+import { IdlePrompt } from './components/IdlePrompt.js';
 import { ProgressRing } from './components/ProgressRing.js';
 import { Sidebar, type View } from './components/Sidebar.js';
 import { TaskDetail } from './components/TaskDetail.js';
@@ -23,7 +24,8 @@ import { Settings } from './components/Settings/Settings.js';
 import { Wizard } from './components/Wizard/Wizard.js';
 import { browserHttp, browserStore } from './platform/browser.js';
 import type { Span, TimelineEvent } from './components/timeline-layout.js';
-import type { Http } from '@to-hoot/core';
+import type { Http, Platform } from '@to-hoot/core';
+import { SyncController, type SyncStatus } from './sync.js';
 import { formatDuration } from './format.js';
 import { Store } from './store.js';
 import './App.css';
@@ -50,6 +52,8 @@ export interface AppProps {
   http?: Http;
   /** Absolute path to the built MCP server, for the command the wizard prints. */
   mcpServerPath?: string;
+  /** The shell. Used for the resume signal; absent in tests and in SSR. */
+  platform?: Pick<Platform, 'onResume'> | undefined;
 }
 
 /** "09:00" to 9. Anything unparseable falls back, rather than rendering NaN rows. */
@@ -70,7 +74,12 @@ function startOfDay(now: number, offsetMs: number): number {
  * shown one at a time, which is what keeps a fix in the task list from having to
  * be made twice.
  */
-export default function App({ store: injected, http = browserHttp, mcpServerPath }: AppProps = {}) {
+export default function App({
+  store: injected,
+  http = browserHttp,
+  mcpServerPath,
+  platform,
+}: AppProps = {}) {
   // The vault is where settings, secrets and the setup flag live. Without one
   // the wizard would have nowhere to record that it had been finished, and
   // would open again on every start.
@@ -86,10 +95,41 @@ export default function App({ store: injected, http = browserHttp, mcpServerPath
     return () => clearInterval(id);
   }, [store]);
 
-  // Settings and the setup flag live in the platform store, which is async.
+  // Settings, the setup flag and the event log all live outside the process.
   useEffect(() => {
     void store.load();
   }, [store]);
+
+  /*
+   * Sync runs opportunistically: once the log has loaded, on a timer, when the
+   * app comes back to the foreground, and shortly after a change.
+   *
+   * Nothing here fights the platform for background execution, because it does
+   * not have to. Every event carries its own timestamp and device, and
+   * `timeDelta` carries an increment rather than a total, so a phone that syncs
+   * when it is next opened reaches the same state as one that synced on time.
+   */
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const sync = useMemo(
+    () =>
+      new SyncController({
+        store,
+        http,
+        settings: () => store.getSnapshot().settings,
+        onStatus: setSyncStatus,
+      }),
+    [store, http],
+  );
+
+  useEffect(() => {
+    const stop = sync.start();
+    void store.load().then(() => sync.syncNow());
+    const off = platform?.onResume(() => void sync.syncNow());
+    return () => {
+      stop();
+      off?.();
+    };
+  }, [sync, store, platform]);
 
   // The document element carries the theme, so the choice reaches the tokens
   // and the browser's own form controls at the same time.
@@ -98,6 +138,12 @@ export default function App({ store: injected, http = browserHttp, mcpServerPath
     if (snapshot.theme === 'system') delete root.dataset['theme'];
     else root.dataset['theme'] = snapshot.theme;
   }, [snapshot.theme]);
+
+  // One place, so a new action cannot forget to schedule a sync.
+  const acted = <T,>(value: T): T => {
+    sync.soon();
+    return value;
+  };
 
   const { state, now } = snapshot;
   const offsetMs = state.settings.dayStartOffsetMs;
@@ -222,6 +268,8 @@ export default function App({ store: injected, http = browserHttp, mcpServerPath
             eventCount={snapshot.events.length}
             onSave={patch => store.saveSettings(patch)}
             onSetTheme={t => store.setTheme(t)}
+            syncStatus={syncStatus}
+            onSyncNow={() => sync.syncNow()}
             onExport={() => store.exportJson()}
             onImport={text => store.importJson(text)}
             onClose={() => setShowSettings(false)}
@@ -234,12 +282,23 @@ export default function App({ store: injected, http = browserHttp, mcpServerPath
             projects={state.projects}
             trackedFor={store.trackedFor}
             runningTaskId={snapshot.runningTaskId}
-            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
-            onStart={id => store.start(id)}
-            onStop={() => store.stop()}
+            onToggleDone={(id, isDone) => acted(store.toggleDone(id, isDone))}
+            onStart={id => acted(store.start(id))}
+            onStop={() => acted(store.stop())}
             onSelect={select}
-            onAdd={title => store.addTask(title, defaultsFor(view, today))}
-            notice={view === 'today' ? <TodayState open={open.length} done={done.length} /> : null}
+            onAdd={title => acted(store.addTask(title, defaultsFor(view, today)))}
+              notice={
+              snapshot.idleGap !== null ? (
+                <IdlePrompt
+                  gap={snapshot.idleGap}
+                  interrupted={state.tasks[snapshot.idleGap.taskId]}
+                  choices={todayTasks(state, now)}
+                  onResolve={taskId => acted(store.resolveIdle(taskId))}
+                />
+              ) : view === 'today' ? (
+                <TodayState open={open.length} done={done.length} />
+              ) : null
+            }
             empty={view === 'today' ? null : <EmptyState>{emptyCopyFor(view)}</EmptyState>}
           />
         ) : (
@@ -251,11 +310,11 @@ export default function App({ store: injected, http = browserHttp, mcpServerPath
             today={today}
             runningTaskId={snapshot.runningTaskId}
             onClose={() => setSelectedId(null)}
-            onPatch={(id, patch) => store.patchTask(id, patch)}
-            onAddSubtask={(parentId, title) => store.addSubtask(parentId, title)}
-            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
-            onStart={id => store.start(id)}
-            onStop={() => store.stop()}
+            onPatch={(id, patch) => acted(store.patchTask(id, patch))}
+            onAddSubtask={(parentId, title) => acted(store.addSubtask(parentId, title))}
+            onToggleDone={(id, isDone) => acted(store.toggleDone(id, isDone))}
+            onStart={id => acted(store.start(id))}
+            onStop={() => acted(store.stop())}
             onDelete={id => {
               store.deleteTask(id);
               setSelectedId(null);

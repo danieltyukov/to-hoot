@@ -63,3 +63,8 @@
   color: var(--accent-hover);
   border-color: var(--accent);
 }
+
+.settings-sync {
+  gap: 8px;
+  padding-bottom: 0;
+}

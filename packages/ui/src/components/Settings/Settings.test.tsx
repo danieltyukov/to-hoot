@@ -242,3 +242,68 @@ describe('Settings', () => {
     }
   });
 });
+
+describe('what a tracked second means', () => {
+  /*
+   * The Tracker is constructed with the settings that decide which day a
+   * timeDelta is stamped with and what counts as idle. Both were missing.
+   *
+   * dayStartOffsetMs is honoured everywhere time is READ, so a second tracked
+   * after midnight but before the offset was written under day D and read back
+   * under D-1: gone from the day it belonged to, and on one already finished.
+   */
+  it('stamps a delta with the logical day, not the calendar one', () => {
+    const OFFSET = 4 * 3_600_000;
+    let clock = new Date(2026, 7, 24, 1, 30, 0).getTime(); // 01:30, still "yesterday"
+    const store = new Store({ now: () => clock, storage: null, vault: memoryStore() });
+    store.saveSettings({ dayStartOffsetMs: OFFSET });
+
+    const id = store.addTask('Rewire the bench');
+    store.start(id);
+    clock += 60_000;
+    store.stop();
+
+    const days = Object.keys(store.getSnapshot().state.tasks[id]!.timeSpentOnDay);
+    // 01:30 with a four-hour offset belongs to the 23rd, which is the day the
+    // selectors will look it up under.
+    expect(days).toEqual(['2026-08-23']);
+  });
+
+  it('honours the configured idle threshold, which had no effect at all', () => {
+    let clock = new Date(2026, 7, 23, 10, 0, 0).getTime();
+    const store = new Store({ now: () => clock, storage: null, vault: memoryStore() });
+    // A minute. Anything longer is the machine having slept, not work.
+    store.saveSettings({ idleThresholdMs: 60_000 });
+
+    const id = store.addTask('Rewire the bench');
+    store.start(id);
+    clock += 30 * 60_000; // half an hour with no ticks
+    store.stop();
+
+    // Not banked: it is held as an idle gap for the user to answer.
+    expect(store.getSnapshot().state.tasks[id]!.timeSpent).toBe(0);
+    expect(store.getSnapshot().idleGap?.ms).toBe(30 * 60_000);
+  });
+
+  it('rebuilds the tracker when those settings change', () => {
+    let clock = new Date(2026, 7, 24, 1, 30, 0).getTime();
+    const store = new Store({ now: () => clock, storage: null, vault: memoryStore() });
+    const id = store.addTask('Rewire the bench');
+
+    store.start(id);
+    clock += 60_000;
+    // Changing the offset mid-session banks what was earned under the old one.
+    store.saveSettings({ dayStartOffsetMs: 4 * 3_600_000 });
+    expect(store.getSnapshot().runningTaskId).toBeNull();
+    expect(Object.keys(store.getSnapshot().state.tasks[id]!.timeSpentOnDay)).toEqual(['2026-08-24']);
+
+    store.start(id);
+    clock += 60_000;
+    store.stop();
+    // And the next session uses the new one.
+    expect(Object.keys(store.getSnapshot().state.tasks[id]!.timeSpentOnDay).sort()).toEqual([
+      '2026-08-23',
+      '2026-08-24',
+    ]);
+  });
+});

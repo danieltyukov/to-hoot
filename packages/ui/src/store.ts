@@ -1,3 +1,4 @@
+import * as disk from './persistence.js';
 import {
   DEFAULT_PROJECT_ID,
   DEFAULT_SETTINGS,
@@ -12,6 +13,8 @@ import {
   ulid,
   validateSettings,
   type Event,
+  type FileStore,
+  type IdleGap,
   type KeyValueStore,
   type Settings,
   type State,
@@ -99,10 +102,20 @@ export interface Snapshot {
   pendingMs: number;
   /** When the pending stretch started, for drawing it on the timeline. */
   pendingSince: number | null;
+  /**
+   * A stretch of wall clock that was taken back out and not yet answered.
+   *
+   * The rule from the spec is subtract first, then ask: the time is already out
+   * of the totals while the question is open, so the numbers on screen are
+   * honest whether or not anyone ever answers.
+   */
+  idleGap: IdleGap | null;
 }
 
 export interface StoreOptions {
   now?: () => number;
+  /** Where the log and its cache live. Absent means nothing is persisted. */
+  files?: FileStore | undefined;
   /** Injected so tests are not writing to a shared browser store. */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
   /** Where settings and secrets are kept. Absent means they are not persisted. */
@@ -144,6 +157,12 @@ export class Store {
   private readonly nowFn: () => number;
   private readonly storage: StoreOptions['storage'];
   private readonly vault: KeyValueStore | undefined;
+  private readonly files: FileStore | undefined;
+  /** The greatest event id a push has acknowledged. Below it, the repo has a copy. */
+  private pushedThrough: string | undefined;
+  /** Events appended since the cache was last rewritten. */
+  private sinceCache = 0;
+  private writing: Promise<void> = Promise.resolve();
   /**
    * The id every event this device writes is stamped with, and the folder its
    * events land in under events/<deviceId>/.
@@ -155,7 +174,7 @@ export class Store {
    * events would be written was true of nothing.
    */
   private deviceId: string;
-  private tracker: Tracker;
+  private tracker!: Tracker;
   private readonly listeners = new Set<() => void>();
 
   private log: Event[] = [];
@@ -172,12 +191,12 @@ export class Store {
         : opts.storage;
 
     this.vault = opts.vault;
+    this.files = opts.files;
 
     const stored = readStorage(this.storage, DEVICE_KEY);
     this.deviceId = stored ?? ulid();
     if (stored === null) writeStorage(this.storage, DEVICE_KEY, this.deviceId);
 
-    this.tracker = this.newTracker();
     this.log = [...(opts.seed ?? [])];
 
     const savedTheme = readStorage(this.storage, THEME_KEY);
@@ -196,7 +215,10 @@ export class Store {
       theme: isTheme(savedTheme) ? savedTheme : state.settings.theme,
       pendingMs: 0,
       pendingSince: null,
+      idleGap: null,
     };
+    // After the snapshot, because the Tracker is built from the settings on it.
+    this.tracker = this.newTracker();
   }
 
   /**
@@ -207,6 +229,13 @@ export class Store {
    * same thing a first run looks like.
    */
   async load(): Promise<void> {
+    if (this.files !== undefined) {
+      const { events, state, cached } = await disk.load(this.files);
+      this.log = events;
+      // Only what is in front of the cache has to be replayed next time.
+      this.sinceCache = cached ? 0 : events.length;
+      this.publish({ state, events });
+    }
     if (this.vault === undefined) return;
     const [raw, setup] = await Promise.all([
       this.vault.get(SETTINGS_KEY),
@@ -222,6 +251,7 @@ export class Store {
       if (result.ok) {
         patch.settings = result.value;
         this.adoptDeviceId(result.value.deviceId);
+        this.retrackIfNeeded(this.snapshot.settings, result.value);
         if (isTheme(result.value.theme)) patch.theme = result.value.theme;
       }
     }
@@ -245,6 +275,7 @@ export class Store {
       worker: { ...this.snapshot.settings.worker, ...patch.worker },
     };
     if (patch.deviceId !== undefined) this.adoptDeviceId(patch.deviceId.trim());
+    this.retrackIfNeeded(this.snapshot.settings, merged);
     void this.vault?.set(SETTINGS_KEY, JSON.stringify(merged));
     if (patch.theme !== undefined) writeStorage(this.storage, THEME_KEY, patch.theme);
 
@@ -263,6 +294,20 @@ export class Store {
       ],
       { settings: merged, theme: merged.theme },
     );
+  }
+
+  /**
+   * Answers an idle gap.
+   *
+   * `null` means it was a break and nothing is credited. A task id credits it
+   * there, which is how "I was reading about this on paper" gets recorded. No
+   * argument gives it back to whatever was running when the gap opened, which
+   * is not necessarily what is running now.
+   */
+  resolveIdle(taskId?: string | null): void {
+    const gap = this.snapshot.idleGap;
+    if (gap === null) return;
+    this.commit(this.tracker.resolveIdle(gap, taskId), { idleGap: null });
   }
 
   /** Records that the wizard is done, so it does not open again. */
@@ -381,8 +426,45 @@ export class Store {
     return this.deviceId;
   }
 
-  private newTracker(): Tracker {
-    return new Tracker({ deviceId: this.deviceId, now: this.nowFn });
+  /**
+   * A Tracker carrying the settings that decide what a tracked second means.
+   *
+   * `dayOffsetMs` is the one that was missing, and it was not cosmetic. The
+   * offset is honoured everywhere time is READ (Today, the consistency grid,
+   * the MCP tools), but the day a `timeDelta` is stamped with is decided inside
+   * the Tracker. Without it, a second tracked after midnight but before the
+   * offset was written under day D and read back under D-1: the work vanished
+   * from the day it belonged to and appeared on one the user had finished.
+   *
+   * `idleThresholdMs` had no effect at all, so a machine that slept for an hour
+   * banked the hour as work whatever the user had configured.
+   */
+  private newTracker(settings: Settings = this.snapshot.settings): Tracker {
+    return new Tracker({
+      deviceId: this.deviceId,
+      now: this.nowFn,
+      dayOffsetMs: settings.dayStartOffsetMs,
+      idleThresholdMs: settings.idleThresholdMs,
+    });
+  }
+
+  /**
+   * Rebuilds the Tracker when a setting it was constructed with changes.
+   *
+   * The Tracker reads these once, so a settings change that did not rebuild it
+   * would apply everywhere except where the time is actually stamped. Stopping
+   * first banks the seconds since the last flush under the old settings, which
+   * is where they were earned.
+   */
+  private retrackIfNeeded(before: Settings, after: Settings): void {
+    if (
+      before.dayStartOffsetMs === after.dayStartOffsetMs &&
+      before.idleThresholdMs === after.idleThresholdMs
+    ) {
+      return;
+    }
+    if (this.snapshot.runningTaskId !== null) this.stop();
+    this.tracker = this.newTracker(after);
   }
 
   /**
@@ -457,14 +539,143 @@ export class Store {
     return newEvent({ deviceId: this.deviceId, type, entity, entityId, payload, ts: this.nowFn() });
   }
 
+  /**
+   * Appends locally-made events and folds them onto the state.
+   *
+   * Folded forward rather than replayed from the beginning. Replay's merge is
+   * last-write-wins in `(ts, deviceId, id)` order, and a locally-made event
+   * always sorts after everything already folded, so folding it onto the
+   * current state gives the same answer as replaying the log. It is also the
+   * difference between a constant cost per action and one that grows with the
+   * length of the log: this runs on every tick of a running timer.
+   *
+   * Events arriving from another device are NOT folded this way; they can sort
+   * anywhere, so `merge` below replays.
+   */
   private commit(events: readonly Event[], patch: Partial<Snapshot> = {}): void {
-    if (events.length > 0) this.log = [...this.log, ...events];
-    this.publish({ ...patch, state: replay(this.log), events: this.log });
+    if (events.length === 0) {
+      this.publish(patch);
+      return;
+    }
+    this.log = [...this.log, ...events];
+    this.sinceCache += events.length;
+    this.publish({ ...patch, state: replay([...events], this.snapshot.state), events: this.log });
+    this.persist();
+  }
+
+  /**
+   * Folds in events from elsewhere, which means replaying.
+   *
+   * A remote event can carry any timestamp, so it can sort before events
+   * already applied, and last-write-wins only gives the right answer if the
+   * whole log is ordered together. This is the one path that pays for a full
+   * replay, and it runs on a sync rather than on a keystroke.
+   */
+  merge(remote: readonly Event[]): number {
+    const known = new Set(this.log.map(e => e.id));
+    const fresh = remote.filter(e => typeof e?.id === 'string' && !known.has(e.id));
+    if (fresh.length === 0) return 0;
+    this.log = [...this.log, ...fresh];
+    this.sinceCache += fresh.length;
+    this.publish({ state: replay(this.log), events: this.log });
+    this.persist();
+    return fresh.length;
+  }
+
+  /**
+   * Takes the repository's view as the base and keeps local work on top of it.
+   *
+   * `pullState` rather than the raw events, because once the repository has
+   * compacted, the events alone no longer describe it: the snapshot is part of
+   * the answer. Rebasing what this device has not yet pushed onto that state is
+   * both the merge and the local compaction, since everything below the push
+   * watermark is now represented by the state rather than by a log entry.
+   */
+  adoptRemote(remote: State): void {
+    const keep = this.pending();
+    this.log = keep;
+    this.sinceCache = 0;
+    this.publish({ state: replay(keep, remote), events: keep });
+    // Forced, so the cache on disk describes the state that was just adopted
+    // rather than one several syncs behind it.
+    this.persist(true);
+  }
+
+  /** Events no push has acknowledged. These are the only copy this device has. */
+  pending(): Event[] {
+    return disk.unpushed(this.log, this.pushedThrough);
+  }
+
+  /**
+   * Records that everything up to `watermark` is in the repository.
+   *
+   * The local log is then truncated to what is above it, because below it this
+   * is no longer the only copy. Until a push says so, nothing is dropped.
+   */
+  markPushed(watermark: string | undefined): void {
+    if (watermark === undefined) return;
+    this.pushedThrough = watermark;
+    this.log = disk.unpushed(this.log, watermark);
+    this.publish({ events: this.log });
+    this.persist(true);
+  }
+
+  /**
+   * Writes the log, and rewrites the cache when enough has accumulated in front
+   * of it. Serialised through one promise so two rapid changes cannot interleave
+   * and leave a half-written file.
+   */
+  private persist(force = false): void {
+    const files = this.files;
+    if (files === undefined) return;
+    const events = this.log;
+    const state = this.snapshot.state;
+    /*
+     * The watermark is captured here, with the state it belongs to, not read
+     * again when the write runs.
+     *
+     * Writes are queued behind one promise, so more events can be appended
+     * between scheduling and writing. Reading the watermark later paired a state
+     * with an id greater than anything it accounted for, and the next boot
+     * filtered out the events in between: one lost task per cache rewrite,
+     * silently.
+     */
+    const covers = this.covers();
+    const rewriteCache = force || this.sinceCache >= disk.CACHE_EVERY;
+    if (rewriteCache) this.sinceCache = 0;
+
+    this.writing = this.writing
+      .then(async () => {
+        await disk.writeLog(files, events);
+        if (rewriteCache) await disk.writeCache(files, covers, state);
+      })
+      .catch(() => undefined);
+  }
+
+  /** The greatest event id the current state accounts for. */
+  private covers(): string | undefined {
+    const inLog = disk.watermarkOf(this.log);
+    if (inLog === undefined) return this.pushedThrough;
+    if (this.pushedThrough === undefined) return inLog;
+    return inLog > this.pushedThrough ? inLog : this.pushedThrough;
+  }
+
+  /** Waits for every queued write. Called before anything that must not lose them. */
+  async flush(): Promise<void> {
+    await this.writing;
   }
 
   private publish(patch: Partial<Snapshot>): void {
     const now = this.nowFn();
-    const merged = { ...this.snapshot, ...patch, now };
+    // Taken rather than peeked: holding it twice would ask the same question
+    // again after it had been answered.
+    const gap = this.tracker.takeGap();
+    const merged = {
+      ...this.snapshot,
+      ...(gap === null ? {} : { idleGap: gap }),
+      ...patch,
+      now,
+    };
     const running = merged.runningTaskId !== null && this.flushedAt !== null;
     this.snapshot = {
       ...merged,
