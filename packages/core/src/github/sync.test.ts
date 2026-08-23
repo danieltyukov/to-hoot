@@ -494,7 +494,28 @@ describe.skipIf(!TOKEN)('SyncEngine against a real repository', () => {
     expect(defaultBranch).not.toBe('main');
     const client = new GitHubClient(nodeHttp, config);
     await expect(client.branchName()).resolves.toBe(defaultBranch);
-    await expect(client.latestCommit()).resolves.toMatchObject({ sha: expect.any(String) });
+    // The poll carries the head commit's tree, which is what the next write
+    // builds on. If GitHub ever stopped sending it, base_tree would silently
+    // fall back to the commit sha, so this pins that the field is really there.
+    const latest = await client.latestCommit();
+    expect(latest).toMatchObject({ sha: expect.any(String), tree: expect.any(String) });
+    expect(latest === 'not-modified' ? '' : latest.tree).not.toBe(latest === 'not-modified' ? '' : latest.sha);
+  }, 120_000);
+
+  it('keeps every earlier file when it commits on top of them', async () => {
+    // The shape a wrong base_tree produces: the commit succeeds and the
+    // repository silently contains only the newest file.
+    const client = new GitHubClient(nodeHttp, config);
+    await client.commitFiles('first of two', [{ path: 'keep-me.json', content: '1' }]);
+    await waitForPath(client, 'keep-me.json');
+    await client.latestCommit(); // the poll that carries the parent tree
+    await client.commitFiles('second of two', [{ path: 'and-me.json', content: '2' }]);
+
+    const tree = await client.listTree((await client.getRef()).sha);
+    const paths = tree.map(e => e.path);
+    expect(paths).toContain('and-me.json');
+    expect(paths).toContain('keep-me.json');
+    expect(paths).toContain('README.md'); // the file auto_init made, still there
   }, 120_000);
 
   it('two devices editing offline converge after both sync', async () => {

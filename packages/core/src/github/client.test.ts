@@ -30,6 +30,15 @@ function toBase64(text: string): string {
   return btoa(binary);
 }
 
+/** A commit sha maps to exactly one tree sha, and the two are never the same string. */
+function treeOf(commitSha: string): string {
+  return `tree-of-${commitSha}`;
+}
+
+function isTreeSha(value: unknown): boolean {
+  return typeof value === 'string' && value.startsWith('tree-');
+}
+
 function respond(status: number, body: unknown, headers: Record<string, string> = {}): HttpResponse {
   return {
     status,
@@ -52,6 +61,13 @@ class MockHttp {
   /** What `GET /repos/o/r` reports, which is not always what a caller assumed. */
   defaultBranch = 'master';
   repoVisible = true;
+  /**
+   * Rejects a `base_tree` that is not a tree, which is what the API documents
+   * and what an implementation other than GitHub's own is entitled to do.
+   * GitHub itself peels a commit sha here, so this is the strict reading.
+   */
+  strictBaseTree = false;
+  private lastTreeBody: any;
   private queued: Queued[] = [];
 
   replyOnce(method: HttpMethod, status: number, body: unknown, headers?: Record<string, string>): void {
@@ -60,11 +76,13 @@ class MockHttp {
 
   readonly http: Http = async (req: HttpRequest): Promise<HttpResponse> => {
     const method = req.method ?? 'GET';
+    const body = req.body === undefined ? undefined : JSON.parse(req.body);
+    if (req.url.endsWith('/git/trees')) this.lastTreeBody = body;
     this.calls.push({
       method,
       url: req.url,
       headers: req.headers ?? {},
-      body: req.body === undefined ? undefined : JSON.parse(req.body),
+      body,
     });
     const at = this.queued.findIndex(q => q.method === method);
     if (at >= 0) {
@@ -84,7 +102,15 @@ class MockHttp {
       if (branch !== this.existingBranch) return respond(404, { message: 'Not Found' });
       return respond(200, { ref: `refs/heads/${branch}`, object: { sha: this.headSha, type: 'commit' } });
     }
-    if (key === 'POST /repos/o/r/git/trees') return respond(201, { sha: 'tree-2' });
+    if (key === 'POST /repos/o/r/git/trees') {
+      const base = this.lastTreeBody?.['base_tree'];
+      if (this.strictBaseTree && base !== undefined && !isTreeSha(base)) {
+        // What a server that reads the documentation does. GitHub itself peels
+        // a commit sha here; nothing else has to.
+        return respond(422, { message: `base_tree ${String(base)} is not a tree` });
+      }
+      return respond(201, { sha: 'tree-2' });
+    }
     if (key === 'POST /repos/o/r/git/commits') return respond(201, { sha: 'commit-2' });
     if (method === 'PATCH' && path.startsWith('/repos/o/r/git/refs/heads/')) {
       return respond(200, { object: { sha: 'commit-2' } });
@@ -92,9 +118,12 @@ class MockHttp {
     if (key === 'POST /repos/o/r/git/refs') return respond(201, { object: { sha: 'commit-2' } });
     if (key === 'GET /repos/o/r/commits') {
       // GitHub answers 404 for a branch that does not exist, the same status it
-      // gives for a repository it will not admit to having.
+      // gives for a repository it will not admit to having. The response also
+      // carries the head commit's tree, which is where base_tree comes from.
       if (url.searchParams.get('sha') !== this.existingBranch) return respond(404, { message: 'Not Found' });
-      return respond(200, [{ sha: this.headSha }], { etag: this.etag });
+      return respond(200, [{ sha: this.headSha, commit: { tree: { sha: treeOf(this.headSha) } } }], {
+        etag: this.etag,
+      });
     }
     if (method === 'GET' && path.startsWith('/repos/o/r/git/trees/')) {
       return respond(200, { sha: path.slice(path.lastIndexOf('/') + 1), truncated: this.truncated, tree: this.tree });
@@ -126,7 +155,11 @@ describe('GitHubClient', () => {
     it('targets the repository default branch when none is configured', async () => {
       http.existingBranch = 'master';
       const unconfigured = new GitHubClient(http.http, { owner: 'o', repo: 'r', token: 'tok' });
-      await expect(unconfigured.latestCommit()).resolves.toEqual({ sha: 'commit-1', etag: 'W/"etag-1"' });
+      await expect(unconfigured.latestCommit()).resolves.toEqual({
+        sha: 'commit-1',
+        tree: 'tree-of-commit-1',
+        etag: 'W/"etag-1"',
+      });
       expect(http.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
         'GET /repos/o/r',
         'GET /repos/o/r/commits',
@@ -236,7 +269,11 @@ describe('GitHubClient', () => {
   it('returns the head sha and the etag to poll with next time', async () => {
     http.headSha = 'head-9';
     http.etag = 'W/"etag-9"';
-    await expect(client.latestCommit()).resolves.toEqual({ sha: 'head-9', etag: 'W/"etag-9"' });
+    await expect(client.latestCommit()).resolves.toEqual({
+      sha: 'head-9',
+      tree: 'tree-of-head-9',
+      etag: 'W/"etag-9"',
+    });
     const poll = http.calls[0]!;
     expect(new URL(poll.url).searchParams.get('sha')).toBe('main');
     expect(new URL(poll.url).searchParams.get('per_page')).toBe('1');
@@ -256,6 +293,50 @@ describe('GitHubClient', () => {
     const tree = http.calls.find(c => c.url.endsWith('/git/trees'))!;
     expect(tree.body.tree).toContainEqual({ path: 'gone.json', mode: '100644', type: 'blob', sha: null });
     expect(tree.body.base_tree).toBe('commit-1');
+  });
+
+  describe('base_tree', () => {
+    // The API documents base_tree as taking a TREE sha. Real GitHub peels a
+    // commit sha too, verified live, so passing one works today. On a stricter
+    // implementation an unrecognised base reads as no base: the commit succeeds
+    // and every previously committed file is gone. Silent and total.
+    it('builds on the parent commit tree, not on the parent commit', async () => {
+      await client.latestCommit(); // the poll every sync does first
+      await client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], 'commit-1');
+      const tree = http.calls.find(c => c.method === 'POST' && c.url.endsWith('/git/trees'))!;
+      expect(tree.body.base_tree).toBe('tree-of-commit-1');
+      expect(tree.body.base_tree).not.toBe('commit-1');
+    });
+
+    it('costs no extra request, because the poll already carried the tree', async () => {
+      await client.latestCommit();
+      http.calls = [];
+      await client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], 'commit-1');
+      expect(http.calls).toHaveLength(4);
+    });
+
+    it('satisfies a server that refuses a commit sha where a tree belongs', async () => {
+      http.strictBaseTree = true;
+      await client.latestCommit();
+      await expect(client.commitFiles('msg', [{ path: 'a', content: 'x' }], [], 'commit-1')).resolves.toBe('ok');
+    });
+
+    it('pairs the tree with the commit by identity, so a moved head cannot mismatch', async () => {
+      await client.latestCommit(); // records commit-1 and its tree
+      http.headSha = 'commit-7'; // the ref has moved on since
+      await client.commitFiles('msg', [{ path: 'a', content: 'x' }]);
+      const tree = http.calls.find(c => c.method === 'POST' && c.url.endsWith('/git/trees'))!;
+      // Not tree-of-commit-1: that tree belongs to a commit this is not parented to.
+      expect(tree.body.base_tree).not.toBe('tree-of-commit-1');
+      expect(tree.body.base_tree).toBe('commit-7');
+    });
+
+    it('omits base_tree entirely for the first commit in a repository', async () => {
+      http.replyOnce('GET', 404, { message: 'Not Found' });
+      await client.commitFiles('first', [{ path: 'a', content: 'x' }]);
+      const tree = http.calls.find(c => c.method === 'POST' && c.url.endsWith('/git/trees'))!;
+      expect(tree.body).not.toHaveProperty('base_tree');
+    });
   });
 
   it('says what a rejected deletion means, since the API message does not', async () => {

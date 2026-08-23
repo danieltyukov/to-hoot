@@ -144,6 +144,12 @@ export class GitHubClient implements RepoClient {
   private readonly base: string;
   /** Resolved once, then reused. Absent until something needs the branch. */
   private branchPromise?: Promise<string>;
+  /**
+   * The tree of the commit the last poll saw. A commit's tree never changes, so
+   * the pair is immutable once observed and can be held without invalidation,
+   * exactly like a blob sha.
+   */
+  private parentTree?: { commit: string; tree: string };
 
   constructor(http: Http, config: GitHubRepoConfig) {
     this.http = http;
@@ -305,7 +311,7 @@ export class GitHubClient implements RepoClient {
    * The polling read. A 304 costs nothing against the primary rate limit, which
    * is the whole reason a device can poll once a minute and stay well inside it.
    */
-  async latestCommit(etag?: string): Promise<{ sha: string; etag: string } | 'not-modified'> {
+  async latestCommit(etag?: string): Promise<{ sha: string; tree?: string; etag: string } | 'not-modified'> {
     const branch = await this.branchName();
     const path = `${this.repoPath}/commits`;
     const query = `?sha=${encodeURIComponent(branch)}&per_page=1`;
@@ -319,7 +325,39 @@ export class GitHubClient implements RepoClient {
     const head = Array.isArray(body) ? body[0] : undefined;
     const sha = isRecord(head) ? head['sha'] : undefined;
     if (typeof sha !== 'string') throw new GitHubError(res.status, 'GET', path, 'no commit on the branch');
-    return { sha, etag: res.headers['etag'] ?? '' };
+    // This response already carries the commit's tree, so the next write can
+    // build on the tree itself rather than on the commit. Free, and it is what
+    // the API actually asks for; see `baseTreeFor`.
+    const tree = treeShaOf(head);
+    if (tree !== undefined) this.parentTree = { commit: sha, tree };
+    return tree === undefined
+      ? { sha, etag: res.headers['etag'] ?? '' }
+      : { sha, tree, etag: res.headers['etag'] ?? '' };
+  }
+
+  /**
+   * The tree to build the next write on.
+   *
+   * The API documents `base_tree` as taking a TREE sha. Real GitHub also
+   * accepts a commit sha and peels it to that commit's tree, verified live, so
+   * passing one works today. It is undocumented leniency though, and a stricter
+   * implementation reads an unrecognised base as no base at all: the commit
+   * succeeds and every previously committed file is gone. Silent, total, and
+   * exactly the failure shape a datastore must never have.
+   *
+   * The pairing is by identity rather than by trust: the tree is looked up
+   * under the sha the ref just returned, so the tree built on and the commit
+   * parented to are provably the same commit, or the lookup misses.
+   *
+   * A miss falls back to the commit sha, which is what this did before and what
+   * every caller that has not polled still gets. Reading the tree from the
+   * commit instead would cost a fifth request on a path the four-request budget
+   * belongs to.
+   */
+  private baseTreeFor(parent: string | null): string {
+    if (parent === null) return ''; // no parent, so no base tree: the first commit
+    if (this.parentTree?.commit === parent) return this.parentTree.tree;
+    return parent;
   }
 
   /**
@@ -345,7 +383,7 @@ export class GitHubClient implements RepoClient {
   ): Promise<CommitOutcome> {
     const parent = await this.readRef();
     if (expectedHead !== undefined && parent !== expectedHead) return 'conflict';
-    const tree = await this.createTree(parent ?? '', files, deletions);
+    const tree = await this.createTree(this.baseTreeFor(parent), files, deletions);
     const commit = await this.createCommit(message, tree.sha, parent === null ? [] : [parent]);
     return parent === null ? this.createRef(commit.sha) : this.updateRef(commit.sha);
   }
@@ -431,6 +469,15 @@ function isRefConflict(status: number): boolean {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** `commit.tree.sha` off a commit in the `/commits` listing, when it is there. */
+function treeShaOf(commit: unknown): string | undefined {
+  if (!isRecord(commit)) return undefined;
+  const inner = commit['commit'];
+  const tree = isRecord(inner) ? inner['tree'] : undefined;
+  const sha = isRecord(tree) ? tree['sha'] : undefined;
+  return typeof sha === 'string' && sha !== '' ? sha : undefined;
 }
 
 function parseJson(res: RawResponse, method: HttpMethod, path: string): unknown {
