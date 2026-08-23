@@ -107,7 +107,11 @@ Describe the change and why it is right, not the process that produced it.
 ## CI
 
 `.github/workflows/ci.yml` runs typecheck, unit tests and Playwright on every
-push and pull request. It needs no secrets, so it runs on forks.
+push and pull request, and builds `site/` in a second job. The site build is
+there because the site imports `packages/ui/src/tokens.css` from outside its own
+root, so moving or renaming that file breaks it, and a pull request should say
+so rather than the next deploy discovering it. CI needs no secrets, so it runs
+on forks.
 
 `.github/workflows/pages.yml` builds `site/` and deploys it to GitHub Pages on
 push to `main`. Pages must be set to "GitHub Actions" as its source, once, in
