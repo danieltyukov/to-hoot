@@ -56,23 +56,21 @@ describe('settings events', () => {
 
   it('cannot write a secret or a device id into replayed state', () => {
     const state = replay([settingsEvent(filled)]);
-    expect(state.settings.github.token).toBe('');
-    expect(state.settings.calendar.secret).toBe('');
-    expect(state.settings.worker.url).toBe('');
-    expect(state.settings.deviceId).toBe('');
-    expect(state.settings.deviceName).toBe('');
-    expect(JSON.stringify(state)).not.toContain('ghp_secret');
+    // Absent from the type and from the object, not merely empty: reading a
+    // token off replayed state should not compile, let alone return something.
+    expect(state.settings.github).not.toHaveProperty('token');
+    expect(state.settings.calendar).not.toHaveProperty('secret');
+    expect(state.settings).not.toHaveProperty('worker');
+    expect(state.settings).not.toHaveProperty('deviceId');
+    expect(state.settings).not.toHaveProperty('deviceName');
+    for (const secret of ['ghp_secret', 'shared-shh', 'path-secret-1234', 'device-alpha']) {
+      expect(JSON.stringify(state)).not.toContain(secret);
+    }
   });
 
   it('applies exactly the syncable fields, so replay and toSyncable cannot drift', () => {
     const state = replay([settingsEvent(filled)]);
-    const synced = toSyncable(filled);
-    expect(state.settings).toEqual({
-      ...DEFAULT_SETTINGS,
-      ...synced,
-      github: { ...DEFAULT_SETTINGS.github, ...synced.github },
-      calendar: { ...DEFAULT_SETTINGS.calendar, ...synced.calendar },
-    });
+    expect(state.settings).toEqual(toSyncable(filled));
   });
 });
 

@@ -8,7 +8,6 @@
 //     event paths, and the whole merge model rests on them never colliding.
 
 import { DEFAULT_SETTINGS, type Settings, type Theme } from './models.js';
-import { cloneSettings } from './state.js';
 
 export { DEFAULT_SETTINGS };
 export type { Settings, Theme };
@@ -42,6 +41,22 @@ export function toSyncable(s: Settings): SyncableSettings {
     workdayStart: s.workdayStart,
     workdayEnd: s.workdayEnd,
   };
+}
+
+/** Replayed state carries these and nothing else; see `State.settings`. */
+export const DEFAULT_SYNCABLE_SETTINGS: SyncableSettings = toSyncable(DEFAULT_SETTINGS);
+
+export function cloneSettings(s: Settings): Settings {
+  return {
+    ...s,
+    github: { ...s.github },
+    calendar: { ...s.calendar },
+    worker: { ...s.worker },
+  };
+}
+
+export function cloneSyncableSettings(s: SyncableSettings): SyncableSettings {
+  return { ...s, github: { ...s.github }, calendar: { ...s.calendar } };
 }
 
 const DAY_MS = 24 * 3600_000;
