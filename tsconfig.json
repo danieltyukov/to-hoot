@@ -6,6 +6,7 @@
     { "path": "packages/ui" },
     { "path": "apps/mcp" },
     { "path": "apps/mcp/tsconfig.test.json" },
-    { "path": "apps/worker" }
+    { "path": "apps/worker" },
+    { "path": "apps/apps-script" }
   ]
 }
