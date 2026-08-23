@@ -82,7 +82,32 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Sets the environment WebKitGTK needs before anything creates a webview.
+///
+/// The packaged `.desktop` file carries `__NV_DISABLE_EXPLICIT_SYNC=1`, but that
+/// only covers launches that go through it. `tauri-plugin-autostart` writes its
+/// own autostart entry as a bare path to the executable with no environment, so
+/// on NVIDIA the app would come up blank white from the moment the user enabled
+/// "Start at login", and only then. Setting it here covers the autostart entry,
+/// a terminal launch, and anyone running the binary directly.
+///
+/// An explicit value in the environment is left alone: someone who set it to 0
+/// on purpose, to see the failure or because a driver update fixed it, means it.
+#[cfg(target_os = "linux")]
+fn apply_webkit_workarounds() {
+    if std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+        // Safe here and nowhere later: this runs before the builder, so no
+        // other thread exists to observe the environment changing.
+        std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_webkit_workarounds() {}
+
 pub fn run() {
+    apply_webkit_workarounds();
+
     tauri::Builder::default()
         // Single instance is registered first, and must stay first: registered
         // after another plugin it stops deduplicating, silently, and a second
@@ -94,6 +119,7 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -113,4 +139,32 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to start the to-hoot desktop shell");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both halves of the rule, since getting either wrong is silent: a missing
+    /// variable is a blank window on NVIDIA, and overwriting an explicit one
+    /// takes away the only way to turn the workaround off.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn sets_the_nvidia_workaround_only_when_unset() {
+        std::env::remove_var("__NV_DISABLE_EXPLICIT_SYNC");
+        apply_webkit_workarounds();
+        assert_eq!(
+            std::env::var("__NV_DISABLE_EXPLICIT_SYNC").as_deref(),
+            Ok("1")
+        );
+
+        std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "0");
+        apply_webkit_workarounds();
+        assert_eq!(
+            std::env::var("__NV_DISABLE_EXPLICIT_SYNC").as_deref(),
+            Ok("0")
+        );
+
+        std::env::remove_var("__NV_DISABLE_EXPLICIT_SYNC");
+    }
 }
