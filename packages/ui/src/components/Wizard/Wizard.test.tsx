@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DEFAULT_SETTINGS, cloneSettings, type Http, type Settings } from '@to-hoot/core';
 import { describe, expect, it, vi } from 'vitest';
+import APPS_SCRIPT_SOURCE from 'virtual:apps-script-source';
 
 import App from '../../App.js';
 import { Store } from '../../store.js';
@@ -10,6 +11,19 @@ import { memoryStore } from '../../platform/browser.js';
 import { SECRET_LENGTH } from '../../setup.js';
 import { SECRET_PROPERTY } from './StepCalendar.js';
 import { Wizard } from './Wizard.js';
+
+/*
+ * `apps/apps-script/dist/Code.js` is a build artifact and is not committed, so
+ * on a fresh clone the virtual module hands over a note saying how to build it
+ * rather than the bridge source. That is the plugin working as designed, and
+ * this suite has to pass there: `npm ci && npm test` is the first thing anyone
+ * cloning this runs, and a red suite on the first run says the project is
+ * broken rather than that one artifact is missing.
+ *
+ * So the claims that hold whatever the module supplied stay in the test below,
+ * and the ones that can only be true of the real bundle are gated on having it.
+ */
+const HAS_BRIDGE_BUNDLE = APPS_SCRIPT_SOURCE.includes(SECRET_PROPERTY);
 
 type Route = [RegExp, { status?: number; body?: unknown; text?: string }];
 
@@ -193,16 +207,36 @@ describe('Wizard', () => {
     const { user, container } = setup();
     await go(user, 'calendar');
 
+    // Byte for byte what the module supplied, rather than longer than some
+    // number. It is the stronger claim as well as the one that survives a clean
+    // clone: whatever the wizard is handed, it must show in full and must not
+    // reformat a script somebody is about to paste into Google.
     const source = container.querySelector('.copyable-text')!.textContent!;
-    expect(source.length).toBeGreaterThan(200);
-    expect(source).toContain(SECRET_PROPERTY);
+    expect(source).toBe(APPS_SCRIPT_SOURCE);
+    expect(source).not.toHaveLength(0);
 
+    // The load-bearing one, and it holds either way round.
     const secret = screen.getByLabelText('Shared secret') as HTMLInputElement;
     expect(secret.value).toHaveLength(SECRET_LENGTH);
     expect(source).not.toContain(secret.value);
-    // Twice on purpose: in the script, where the property is read, and in the
-    // instructions, where the reader is told to set it.
+    // Twice in the instructions on purpose: what to name the property, and what
+    // rotating the secret means for it.
     expect(screen.getAllByText(new RegExp(SECRET_PROPERTY)).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Everything above holds against the placeholder too. This is the part that
+  // cannot: run `npm run build -w @to-hoot/apps-script` to see it.
+  it.runIf(HAS_BRIDGE_BUNDLE)('shows the built bridge, entry points and all', async () => {
+    const { user, container } = setup();
+    await go(user, 'calendar');
+
+    const source = container.querySelector('.copyable-text')!.textContent!;
+    expect(source.length).toBeGreaterThan(200);
+    expect(source).toContain(SECRET_PROPERTY);
+    // Apps Script calls these by name, so a bundle without them deploys and
+    // then answers every request with an HTML error page.
+    expect(source).toContain('function doPost');
+    expect(source).toContain('function doGet');
   });
 
   it('generates the secret and never invites anyone to choose one', async () => {

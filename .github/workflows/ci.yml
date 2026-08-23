@@ -35,25 +35,26 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Nothing else in CI covers the Apps Script bundle, and clasp v3 no longer
-      # transpiles TypeScript, so what reaches Google has to build here or a
-      # broken bridge ships unnoticed.
+      # Deliberately before the Apps Script bundle is built, so this runs in the
+      # exact state a fresh clone is in: no dist/ anywhere. That is the first
+      # thing anyone cloning this does, and it is the state the wizard's
+      # placeholder path exists for.
       #
-      # It runs before the unit tests for a second reason, which is a coupling
-      # worth removing rather than relying on: the wizard reads this bundle
-      # through a virtual module, and Wizard.test.tsx asserts on the real
-      # source, so without this step that one test fails on a fresh clone. The
-      # plugin's whole point is that a clean checkout still works, and the test
-      # should accept the placeholder it substitutes.
+      # Core needs no build either: vitest aliases @to-hoot/core to its source.
+      # TypeScript still resolves it through the export map, so the typecheck
+      # above is what keeps the published entry points honest.
+      - name: Unit tests, in the state a fresh clone is in
+        run: npm test
+
+      # Nothing else in CI covers this bundle, and clasp v3 no longer transpiles
+      # TypeScript, so what reaches Google has to build here or a broken bridge
+      # ships unnoticed.
+      #
+      # After the unit tests and before Playwright on purpose: the two suites
+      # then cover both states between them, the placeholder above and the real
+      # bridge source below.
       - name: Build the Apps Script bundle
         run: npm run build -w @to-hoot/apps-script
-
-      # Core needs no build: vitest aliases @to-hoot/core to its source, which is
-      # what lets a fresh clone run green. TypeScript still resolves it through
-      # the export map, so `npm run typecheck` above is what keeps the published
-      # entry points honest.
-      - name: Unit tests
-        run: npm test
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
 /*
@@ -7,6 +9,18 @@ import { expect, test } from '@playwright/test';
  * the app. These need the opposite, and a beforeEach in the same file would
  * apply to a nested describe as well, so the two cannot share one.
  */
+
+/*
+ * The bridge bundle is a build artifact and is not committed, so on a fresh
+ * clone the wizard shows the note saying how to build it instead of the script.
+ * Everything here has to pass in that state, because a red suite on somebody's
+ * first run reads as a broken project. The one check that needs the real thing
+ * is its own test, skipped when the file is absent.
+ */
+const BRIDGE_BUNDLE = fileURLToPath(
+  new URL('../../../apps/apps-script/dist/Code.js', import.meta.url),
+);
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => localStorage.clear());
@@ -32,10 +46,22 @@ test('generates a calendar secret nobody is asked to choose', async ({ page }) =
   expect(value.length).toBeGreaterThanOrEqual(32);
   expect(value).toMatch(/^[A-Za-z0-9]+$/);
 
-  // The script is shown in full, and the secret is not inside it: it goes in a
+  // Whatever the script block holds, the secret is not in it: it goes in a
   // Script Property instead, because clasp push uploads the source to Google.
   const source = await page.locator('.copyable-text').first().textContent();
+  expect(source).not.toBe('');
+  expect(source).not.toContain(value);
+});
+
+test('shows the built bridge source, with the secret still outside it', async ({ page }) => {
+  test.skip(!existsSync(BRIDGE_BUNDLE), 'run npm run build -w @to-hoot/apps-script first');
+
+  await page.locator('[data-step="calendar"]').click();
+  const value = await page.getByLabel('Shared secret', { exact: true }).inputValue();
+
+  const source = await page.locator('.copyable-text').first().textContent();
   expect(source).toContain('TO_HOOT_SECRET');
+  expect(source).toContain('function doPost');
   expect(source).not.toContain(value);
 });
 
