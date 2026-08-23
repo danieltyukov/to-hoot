@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>to-hoot</title>
+  <!--
+    Launcher and store icon source, 1024 square.
+
+    The disc is 64% of the canvas so it survives an adaptive icon's mask: Android
+    crops to a circle, a squircle or a rounded square depending on the launcher,
+    and only the central 66% is guaranteed to be shown on all of them.
+
+    The eyes and beak are holes in the disc, so the ink field behind shows
+    through them. Painting them in a background colour instead would put a
+    rectangle of the wrong colour on any launcher that recolours the field.
+
+    Keep this path identical to OwlIcon.tsx; a test asserts they have not drifted.
+  -->
+  <rect width="1024" height="1024" fill="#12110f"/>
+  <!-- 27.2 units of disc x 24.1 = 655px, 64% of 1024, centred on (512, 512). -->
+  <g transform="translate(126.4 126.4) scale(24.1)">
+    <path fill="#d97757" fill-rule="evenodd" d="M2.4,16 a13.6,13.6 0 1,0 27.2,0 a13.6,13.6 0 1,0 -27.2,0 Z
+           M7.6,15.6 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z
+           M17.4,15.6 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z
+           M13.7,20 L18.3,20 L16,24.6 Z"/>
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>to-hoot</title>
+  <!--
+    The negative-space mark. The eyes and beak are holes, not painted shapes, so
+    the icon sits correctly on both a light and a dark browser chrome without
+    two files. The clay accent carries enough contrast against either.
+
+    Keep this path identical to OwlIcon.tsx; a test asserts they have not drifted.
+  -->
+  <style>
+    path { fill: #c2603f }
+    @media (prefers-color-scheme: dark) { path { fill: #d97757 } }
+  </style>
+  <path fill-rule="evenodd" d="M2.4,16 a13.6,13.6 0 1,0 27.2,0 a13.6,13.6 0 1,0 -27.2,0 Z
+           M7.6,15.6 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z
+           M17.4,15.6 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z
+           M13.7,20 L18.3,20 L16,24.6 Z"/>
+</svg>
