@@ -727,7 +727,10 @@ Google requires a human to create and authorize a script, so this cannot be full
 automated. The wizard makes it mechanical:
 
 1. Generates a random shared secret and shows the complete, ready-to-paste Apps
-   Script source with that secret already in place, with a copy button.
+   Script source with a copy button. The secret is **not** substituted into the
+   source. It is shown separately, to be added as a Script Property named
+   `TO_HOOT_SECRET`, because `clasp push` uploads source to a Google-hosted
+   project and a secret baked into source would be exposed twice over.
 2. Links to `script.google.com`, and lists the exact clicks: new project, paste,
    enable the Calendar advanced service, deploy as web app, execute as me, anyone
    with access.
