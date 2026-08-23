@@ -264,4 +264,15 @@ describe('the snapshot watermark', () => {
     expect(base.coversThrough).toBeUndefined();
     expect(replay([deltaEv], base).tasks.t1.timeSpent).toBe(5000);
   });
+
+  it('skips a malformed entry rather than throwing, watermark or no watermark', () => {
+    // A log decoded from JSON can hold a null, which is why isWellFormed reads
+    // `e?.id`. The watermark filter must not read an id off an entry nobody has
+    // validated yet: one bad event must never stop a device loading its own data.
+    const snapshot: State = { ...replay([createEv]), coversThrough: createEv.id };
+    const later = ev({ id: '01CCC', ts: 9, type: 'timeDelta', payload: { day: '2026-08-23', ms: 3000 } });
+    const log = [null as unknown as Event, later];
+    expect(replay(log, snapshot).tasks.t1.timeSpent).toBe(3000);
+    expect(replay(log).tasks.t1).toBeUndefined(); // no base, same tolerance
+  });
 });

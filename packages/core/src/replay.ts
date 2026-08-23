@@ -221,10 +221,17 @@ function tsOf(e: Event): number {
  * be able to stop a device from loading its own data.
  *
  * An event at or below `base.coversThrough` is already folded into the base and
- * is discarded. Ids are ULIDs, so "at or below" is a string comparison under the
- * same total order everything else uses. This is what stops a redelivered batch
- * from double counting across a snapshot boundary, where the dedup below cannot
- * see it: the base is a state, not a log, and remembers no event ids.
+ * is discarded. This is what stops a redelivered batch from double counting
+ * across a snapshot boundary, where the dedup below cannot see it: the base is a
+ * state, not a log, and remembers no event ids.
+ *
+ * That comparison is plain ULID string order on the id alone, which is
+ * deliberately NOT `compareEvents` order: `compareEvents` sorts by
+ * `(ts, deviceId, id)`, so the last event it applies is routinely not the
+ * greatest id. Two devices landing in the same millisecond is enough. Keeping
+ * the two straight is the compactor's job: it must stamp the greatest id in the
+ * fold and fold a set that is downward closed in that order, so that the events
+ * it absorbed and the events this filter discards are the same set.
  *
  * `coversThrough` is carried through unchanged and never advanced here. Moving
  * it belongs to the compactor, which only folds events every device has already
@@ -234,8 +241,12 @@ function tsOf(e: Event): number {
 export function replay(events: Event[], base?: State): State {
   const state = base ? cloneState(base) : emptyState();
   const covered = state.coversThrough;
-  const fresh = covered === undefined ? events : events.filter(e => e.id > covered);
-  const sorted = dedupeById(fresh.filter(isWellFormed).sort(compareEvents));
+  // Validated first, always: the watermark reads an id, and a log decoded from
+  // JSON can hold a null. Reading the id off an entry nobody has checked yet
+  // turns one bad event into a device that cannot load its own data.
+  const wellFormed = events.filter(isWellFormed);
+  const fresh = covered === undefined ? wellFormed : wellFormed.filter(e => e.id > covered);
+  const sorted = dedupeById(fresh.sort(compareEvents));
 
   const effective = effectiveParents(declaredParents(sorted, finallyDeleted(sorted)));
 
