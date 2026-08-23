@@ -129,6 +129,85 @@ function entityKey(e: Event): string {
   return `${e.entity}:${e.entityId}`;
 }
 
+/** task id -> the parent id it claims. Only tasks that claim one appear. */
+type ParentMap = Map<string, string>;
+
+/**
+ * The parent each task ends up claiming, last write wins over the sorted log.
+ * Resolved over the whole log rather than the state so far, because the create
+ * of a parent can carry a later timestamp than the create of its child when the
+ * two came from devices whose clocks disagree.
+ */
+function declaredParents(sorted: Event[], tombstoned: Set<string>): ParentMap {
+  const declared: ParentMap = new Map();
+  for (const e of sorted) {
+    if (e.entity !== 'task') continue;
+    if (e.type !== 'create' && e.type !== 'update') continue;
+    if (tombstoned.has(entityKey(e))) continue;
+    const payload = asRecord(e.payload);
+    if (!has(payload, 'parentId')) continue;
+    const value = payload['parentId'];
+    if (typeof value === 'string' && value !== '') declared.set(e.entityId, value);
+    else if (value === null || value === undefined) declared.delete(e.entityId);
+  }
+  return declared;
+}
+
+/**
+ * Which claimed parents actually hold, given the two-level cap: a task may have
+ * a parent only if that parent has none itself. Resolving the claims against
+ * each other rather than rejecting every task whose parent claims a parent
+ * keeps the cap as narrow as it can be, and a cycle resolves to roots.
+ */
+function effectiveParents(declared: ParentMap): ParentMap {
+  const effective: ParentMap = new Map();
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+
+  const resolve = (id: string): void => {
+    if (done.has(id)) return;
+    if (visiting.has(id)) {
+      // A cycle. Treat this link as absent so the tasks in it stay roots.
+      done.add(id);
+      return;
+    }
+    visiting.add(id);
+    const parent = declared.get(id);
+    if (parent !== undefined && parent !== id) {
+      resolve(parent);
+      if (!effective.has(parent)) effective.set(id, parent);
+    }
+    visiting.delete(id);
+    done.add(id);
+  };
+
+  // Sorted, so the resolution order does not depend on how the log arrived.
+  for (const id of [...declared.keys()].sort()) resolve(id);
+  return effective;
+}
+
+/**
+ * Subtasks are capped at two levels. A task may not parent itself, and may not
+ * be parented by a task that is already a subtask. An event that breaks the cap
+ * is skipped rather than thrown on, so one malformed remote event cannot stop a
+ * replay.
+ */
+function parentAllowed(taskId: string, parentId: unknown, effective: ParentMap): boolean {
+  if (typeof parentId !== 'string' || parentId === '') return false;
+  if (parentId === taskId) return false;
+  return !effective.has(parentId);
+}
+
+/** True when the event claims a parent the cap does not permit. */
+function declaresIllegalParent(e: Event, effective: ParentMap): boolean {
+  if (e.entity !== 'task') return false;
+  const payload = asRecord(e.payload);
+  if (!has(payload, 'parentId')) return false;
+  const value = payload['parentId'];
+  if (value === null || value === undefined) return false;
+  return !parentAllowed(e.entityId, value, effective);
+}
+
 function tsOf(e: Event): number {
   return Number.isFinite(e.ts) ? e.ts : 0;
 }
@@ -157,18 +236,24 @@ export function replay(events: Event[], base?: State): State {
     else if (entity === 'tag') delete state.tags[id];
   }
 
+  const effective = effectiveParents(declaredParents(sorted, tombstoned));
+
   // An entity referenced before its create event has been applied is only
   // materialised if the log actually creates it. Without this a delta whose
-  // create was compacted away would resurrect a deleted entity.
+  // create was compacted away would resurrect a deleted entity. A create that
+  // breaks the subtask cap does not count: it is skipped entirely.
   const created = new Set<string>();
   for (const e of sorted) {
-    if (e.type === 'create') created.add(entityKey(e));
+    if (e.type !== 'create') continue;
+    if (declaresIllegalParent(e, effective)) continue;
+    created.add(entityKey(e));
   }
 
   for (const e of sorted) {
     const key = entityKey(e);
     if (tombstoned.has(key)) continue;
-    applyEvent(state, e, created.has(key));
+    if (e.type === 'create' && declaresIllegalParent(e, effective)) continue;
+    applyEvent(state, e, created.has(key), effective);
   }
 
   normalize(state);
@@ -180,11 +265,11 @@ function splitKey(key: string): [string, string] {
   return [key.slice(0, at), key.slice(at + 1)];
 }
 
-function applyEvent(state: State, e: Event, isDeclared: boolean): void {
+function applyEvent(state: State, e: Event, isDeclared: boolean, effective: ParentMap): void {
   const payload = asRecord(e.payload);
   switch (e.entity) {
     case 'task':
-      applyTaskEvent(state, e, payload, isDeclared);
+      applyTaskEvent(state, e, payload, isDeclared, effective);
       return;
     case 'project':
       applyProjectEvent(state, e, payload, isDeclared);
@@ -202,8 +287,22 @@ function touch(entity: { updated: number }, e: Event): void {
   entity.updated = Math.max(entity.updated, tsOf(e));
 }
 
-function applyTaskEvent(state: State, e: Event, payload: Record_, isDeclared: boolean): void {
+function applyTaskEvent(
+  state: State,
+  e: Event,
+  rawPayload: Record_,
+  isDeclared: boolean,
+  effective: ParentMap,
+): void {
   if (e.type === 'delete') return; // handled by the tombstone pass
+
+  // An update whose reparent breaks the cap loses only the reparent. Dropping
+  // the whole event would throw away the title or notes it also carried.
+  let payload = rawPayload;
+  if (e.type === 'update' && declaresIllegalParent(e, effective)) {
+    payload = { ...rawPayload };
+    delete payload['parentId'];
+  }
 
   let task = state.tasks[e.entityId];
   if (!task) {
