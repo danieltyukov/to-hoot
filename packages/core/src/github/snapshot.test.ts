@@ -112,3 +112,64 @@ describe('the one snapshot hydrator', () => {
     expect(out.settings.theme).toBe('system');
   });
 });
+
+describe('what a snapshot round-trip must not lose', () => {
+  const DAY = '2026-08-24';
+  const at = (h: number, m: number): number => new Date(2026, 7, 24, h, m).getTime();
+
+  function stateWithPeriods(): Record<string, unknown> {
+    return {
+      tasks: {
+        t1: {
+          id: 't1',
+          title: 'reply to emails',
+          projectId: 'inbox',
+          created: 1,
+          updated: 1,
+          timeSpentOnDay: { [DAY]: 3_600_000 },
+          workPeriodsOnDay: { [DAY]: [{ startMs: at(11, 6), endMs: at(12, 6) }] },
+          calendarWritten: { [DAY]: 3_600_000 },
+          calendarBlocks: { [DAY]: 1 },
+        },
+      },
+      projects: {},
+      tags: {},
+      todayOrder: [],
+      settings: {},
+    };
+  }
+
+  it('keeps when the work happened, not only how much', () => {
+    // The stretches are the tracked lane and the placement of every calendar
+    // block. Dropping them here empties the lane the moment the repository
+    // compacts, which is the same failure the field was added to end.
+    const task = hydrateState(stateWithPeriods()).tasks.t1!;
+    expect(task.workPeriodsOnDay[DAY]).toEqual([{ startMs: at(11, 6), endMs: at(12, 6) }]);
+  });
+
+  it('keeps how many calendar blocks a day has', () => {
+    // Without it a settled day reads as one written by a build that guessed at
+    // 09:00, and the next sync rewrites blocks that are already correct.
+    expect(hydrateState(stateWithPeriods()).tasks.t1!.calendarBlocks).toEqual({ [DAY]: 1 });
+  });
+
+  it('drops a stretch it cannot draw rather than carrying nonsense forward', () => {
+    const raw = stateWithPeriods();
+    (raw['tasks'] as Record<string, Record<string, unknown>>)['t1']!['workPeriodsOnDay'] = {
+      [DAY]: [{ startMs: 'noon', endMs: 5 }, { startMs: 10, endMs: 5 }, { startMs: at(9, 0), endMs: at(9, 30) }],
+      'not-a-day': [{ startMs: at(9, 0), endMs: at(9, 30) }],
+    };
+    const task = hydrateState(raw).tasks.t1!;
+    expect(task.workPeriodsOnDay[DAY]).toEqual([{ startMs: at(9, 0), endMs: at(9, 30) }]);
+  });
+
+  it('is unbothered by a snapshot written before either field existed', () => {
+    const raw = stateWithPeriods();
+    const t1 = (raw['tasks'] as Record<string, Record<string, unknown>>)['t1']!;
+    delete t1['workPeriodsOnDay'];
+    delete t1['calendarBlocks'];
+    const task = hydrateState(raw).tasks.t1!;
+    expect(task.workPeriodsOnDay).toEqual({});
+    expect(task.calendarBlocks).toEqual({});
+  });
+});
