@@ -33,6 +33,14 @@ export interface TimelineProps {
   trackedTotal?: number;
   plannedTotal?: number;
   heading?: string;
+  /**
+   * Makes the event blocks activatable. Given, each one becomes a button that
+   * hands back its id; absent, they stay inert, which is what a grid of things
+   * you cannot do anything with should be.
+   */
+  onActivateEvent?: (eventId: string) => void;
+  /** The event whose time is accruing right now, if any. */
+  trackingEventId?: string | null;
 }
 
 /*
@@ -50,6 +58,8 @@ export function Timeline({
   trackedTotal = 0,
   plannedTotal = 0,
   heading = 'Today',
+  onActivateEvent,
+  trackingEventId = null,
 }: TimelineProps) {
   const range = hourRange([...events, ...tracked], dayStartMs, startHour, endHour, now);
   const originMs = dayStartMs + range.startHour * 3_600_000;
@@ -153,26 +163,52 @@ export function Timeline({
             style={{ left: GUTTER_WIDTH + TRACKED_LANE_WIDTH }}
             aria-label="Scheduled events"
           >
-            {placedEvents.map(({ span, top, height, column, columns, inlineTime }) => (
-              <li
-                key={span.id}
-                className="event"
-                data-event={span.id}
-                data-inline-time={inlineTime ? '' : undefined}
-                style={{
-                  top,
-                  height,
-                  left: `${(column / columns) * 100}%`,
-                  width: `${100 / columns}%`,
-                  borderInlineStartColor: span.color ?? 'var(--accent)',
-                }}
-              >
-                <span className="event-title">{span.title}</span>
-                <time className="event-time tabular" dateTime={new Date(span.startMs).toISOString()}>
-                  {formatTimeOfDay(span.startMs)}
-                </time>
-              </li>
-            ))}
+            {placedEvents.map(({ span, top, height, column, columns, inlineTime }) => {
+              const tracking = trackingEventId !== null && span.id === trackingEventId;
+              const body = (
+                <>
+                  <span className="event-title">{span.title}</span>
+                  <time className="event-time tabular" dateTime={new Date(span.startMs).toISOString()}>
+                    {formatTimeOfDay(span.startMs)}
+                  </time>
+                </>
+              );
+              return (
+                <li
+                  key={span.id}
+                  className="event"
+                  data-event={span.id}
+                  data-inline-time={inlineTime ? '' : undefined}
+                  data-tracking={tracking ? '' : undefined}
+                  style={{
+                    top,
+                    height,
+                    left: `${(column / columns) * 100}%`,
+                    width: `${100 / columns}%`,
+                    borderInlineStartColor: span.color ?? 'var(--accent)',
+                  }}
+                >
+                  {onActivateEvent === undefined ? (
+                    body
+                  ) : (
+                    <button
+                      type="button"
+                      className="event-action"
+                      // The visible block is a title and a time; on its own that
+                      // reads as a label rather than as something to press. The
+                      // name says what pressing it does, and says when it is
+                      // already doing it.
+                      aria-label={`${tracking ? 'Tracking' : 'Track time on'} ${span.title}, ${formatTimeOfDay(span.startMs)}`}
+                      // Restarting the running timer banks and re-opens the same
+                      // stretch, which draws as a broken pill for no gain.
+                      onClick={tracking ? undefined : () => onActivateEvent(span.id)}
+                    >
+                      {body}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
 
           {showNow ? (

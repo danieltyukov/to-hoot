@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { Http } from '@to-hoot/core';
+
 import App, { TICK_MS } from './App.js';
+import { memoryStore } from './platform/browser.js';
 import { FLUSH_MS, Store } from './store.js';
 import { SyncController } from './sync.js';
 
@@ -17,7 +20,7 @@ const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
  * the same sequence of calls, without the deadlock. That the interval exists and
  * runs at that rate is asserted separately.
  */
-function setup() {
+function setup(options: { http?: Http; settings?: Record<string, unknown> } = {}) {
   const storage = new Map<string, string>();
   let clock = NOW;
   const store = new Store({
@@ -26,10 +29,15 @@ function setup() {
       getItem: key => storage.get(key) ?? null,
       setItem: (key, value) => void storage.set(key, value),
     },
+    vault: memoryStore(),
   });
   // Past the wizard. First run is covered separately, below.
   store.finishSetup();
-  const utils = render(<App store={store} />);
+  // Before the render, deliberately: the calendar reads once on mount and then
+  // on a ten minute timer, so settings that arrive afterwards are settings the
+  // first read never sees.
+  if (options.settings !== undefined) store.saveSettings(options.settings);
+  const utils = render(<App store={store} http={options.http} />);
 
   const advance = (ms: number): void => {
     act(() => {
@@ -656,5 +664,81 @@ describe('every change asks for a sync', () => {
       store.markPushed(store.pending().at(-1)!.id);
     });
     expect(soon).not.toHaveBeenCalled();
+  });
+});
+
+describe('tracking a meeting straight off the timeline', () => {
+  const MEETING = {
+    id: 'goog-evt-1',
+    calendarId: 'work@example.com',
+    title: 'Technical Updates',
+    start: NOW + 2 * 3_600_000,
+    end: NOW + 2.5 * 3_600_000,
+    allDay: false,
+  };
+
+  /** A bridge that answers with one meeting and records nothing else. */
+  function withMeeting() {
+    const written: unknown[] = [];
+    const http: Http = async req => {
+      const body = JSON.parse(req.body ?? '{}') as Record<string, unknown>;
+      if (body['action'] === 'writeLog') written.push(body['entries']);
+      const reply =
+        body['action'] === 'listEvents'
+          ? { ok: true, action: 'listEvents', calendarId: '*', calendarCount: 1, events: [MEETING] }
+          : { ok: true, action: body['action'], calendarId: 'log', written: [], deleted: [], missing: [] };
+      return { status: 200, headers: {}, text: async () => JSON.stringify(reply) };
+    };
+    return { http, written };
+  }
+
+  async function openWithMeeting() {
+    const { http, written } = withMeeting();
+    const utils = setup({
+      http,
+      settings: {
+        calendar: { execUrl: 'https://script.google.com/macros/s/AK/exec', secret: 'x'.repeat(40), icsUrl: '' },
+      },
+    });
+    const block = await screen.findByRole('button', { name: /Track time on Technical Updates/ }, { timeout: 3000 });
+    return { ...utils, written, block };
+  }
+
+  const meetingTask = (store: Store) =>
+    Object.values(store.getSnapshot().state.tasks).find(t => t.calendarEventId === MEETING.id);
+
+  it('creates the task and starts its timer on one press', async () => {
+    const { user, store, block } = await openWithMeeting();
+    await user.click(block);
+
+    const task = meetingTask(store)!;
+    expect(task).toBeDefined();
+    expect(task.title).toBe('Technical Updates');
+    expect(store.getSnapshot().runningTaskId).toBe(task.id);
+  });
+
+  it('reuses the same task the next time that meeting is pressed', async () => {
+    // Otherwise a meeting stopped and resumed leaves a second task behind, and
+    // the time for one meeting is split across two rows.
+    const { user, store, block } = await openWithMeeting();
+    await user.click(block);
+    const first = meetingTask(store)!.id;
+
+    await user.click(screen.getByRole('button', { name: /^Stop timer/ }));
+    await user.click(screen.getByRole('button', { name: /Track time on Technical Updates/ }));
+
+    expect(meetingTask(store)!.id).toBe(first);
+    expect(Object.values(store.getSnapshot().state.tasks)).toHaveLength(1);
+  });
+
+  it('does not write the meeting back to the calendar it came from', async () => {
+    const { user, store, advance, written } = await openWithMeeting();
+    await user.click(screen.getByRole('button', { name: /Track time on Technical Updates/ }));
+    advance(FLUSH_MS + 1_000);
+
+    expect(store.getSnapshot().state.tasks[meetingTask(store)!.id]!.timeSpent).toBeGreaterThan(0);
+    // The meeting is already a block on the user's own calendar. A to-hoot
+    // block beside it would draw the same hour twice.
+    expect(written).toEqual([]);
   });
 });

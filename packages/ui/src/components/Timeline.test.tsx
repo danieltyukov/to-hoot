@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { Timeline } from './Timeline.js';
@@ -215,5 +215,67 @@ describe('Timeline', () => {
     render(<Timeline dayStartMs={DAY_START} startHour={9} endHour={11} />);
     const labels = [...document.querySelectorAll('.hour-label')].map(el => el.textContent);
     expect(labels).toEqual(['09:00', '10:00', '11:00']);
+  });
+});
+
+describe('Timeline events you can track against', () => {
+  const meeting = {
+    id: 'e1',
+    title: 'Technical Updates',
+    startMs: at(16),
+    endMs: at(17),
+  };
+
+  it('leaves an event inert when there is nothing to do with it', () => {
+    render(<Timeline dayStartMs={DAY_START} events={[meeting]} />);
+    expect(screen.queryByRole('button', { name: /Technical Updates/ })).toBeNull();
+  });
+
+  it('names the action, so it can be reached without a mouse', () => {
+    render(<Timeline dayStartMs={DAY_START} events={[meeting]} onActivateEvent={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Track time on Technical Updates, 16:00' })).toBeInTheDocument();
+  });
+
+  it('reports which event was activated, not merely that one was', () => {
+    const activated: string[] = [];
+    render(
+      <Timeline
+        dayStartMs={DAY_START}
+        events={[meeting, { id: 'e2', title: 'M2A Dev', startMs: at(17), endMs: at(18) }]}
+        onActivateEvent={id => activated.push(id)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /M2A Dev/ }));
+    expect(activated).toEqual(['e2']);
+  });
+
+  it('says which meeting is being tracked right now', () => {
+    render(
+      <Timeline
+        dayStartMs={DAY_START}
+        events={[meeting]}
+        onActivateEvent={() => {}}
+        trackingEventId="e1"
+      />,
+    );
+    const button = screen.getByRole('button', { name: /Technical Updates/ });
+    expect(button).toHaveAccessibleName('Tracking Technical Updates, 16:00');
+    expect(eventEl('e1')).toHaveAttribute('data-tracking');
+  });
+
+  it('does not re-activate the meeting already running', () => {
+    // Restarting the running timer banks and re-opens the same stretch, which
+    // shows up as a broken pill on the lane for no gain.
+    const activated: string[] = [];
+    render(
+      <Timeline
+        dayStartMs={DAY_START}
+        events={[meeting]}
+        onActivateEvent={id => activated.push(id)}
+        trackingEventId="e1"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Technical Updates/ }));
+    expect(activated).toEqual([]);
   });
 });
