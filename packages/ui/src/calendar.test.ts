@@ -3,12 +3,13 @@ import {
   DEFAULT_SETTINGS,
   cloneSettings,
   logIdFor,
+  type BridgeEvent,
   type Http,
   type Settings,
 } from '@to-hoot/core';
 import { describe, expect, it } from 'vitest';
 
-import { CalendarService, modeFor, parseIcs } from './calendar.js';
+import { CalendarService, modeFor, parseIcs, timelineEventsFrom } from './calendar.js';
 import { memoryStore } from './platform/browser.js';
 import { Store } from './store.js';
 
@@ -173,6 +174,38 @@ describe('writing tracked time back', () => {
     expect(store.getSnapshot().state.tasks[id]!.calendarWritten[DAY]).toBe(90 * 60_000);
   });
 
+  it('puts the block where the work happened, not at the start of the working day', async () => {
+    const { calendar, written } = trackedStore(90 * 60_000);
+    calendar.syncWriteback();
+    await calendar.idle();
+
+    expect(written[0]!['start']).toBe(NOON - 90 * 60_000);
+    expect(written[0]!['end']).toBe(NOON);
+  });
+
+  it('writes one block per stretch when the day was worked in two sittings', async () => {
+    const { store, calendar, written, id } = trackedStore(30 * 60_000);
+    store.merge([
+      {
+        ...store.getSnapshot().events[0]!,
+        id: '01DELTA0000000000000000009',
+        ts: NOON + 3 * 3_600_000,
+        type: 'timeDelta',
+        entity: 'task',
+        entityId: id,
+        payload: { day: DAY, ms: 20 * 60_000 },
+      },
+    ]);
+    calendar.syncWriteback();
+    await calendar.idle();
+
+    expect(written.map(w => [w['start'], w['end']])).toEqual([
+      [NOON - 30 * 60_000, NOON],
+      [NOON + 3 * 3_600_000 - 20 * 60_000, NOON + 3 * 3_600_000],
+    ]);
+    expect(store.getSnapshot().state.tasks[id]!.calendarBlocks[DAY]).toBe(2);
+  });
+
   it('writes nothing at all the second time, because the delta is zero', async () => {
     // The whole point of the ledger. A repeated sync has to be free, or the
     // calendar fills with rewrites of blocks that have not changed.
@@ -195,6 +228,9 @@ describe('writing tracked time back', () => {
       {
         ...store.getSnapshot().events[0]!,
         id: '01DELTA0000000000000000002',
+        // The stretch that follows the first one, as the tracker flushes it:
+        // twenty more minutes, ending twenty minutes later.
+        ts: NOON + 20 * 60_000,
         type: 'timeDelta',
         entity: 'task',
         entityId: id,
@@ -315,5 +351,36 @@ describe('parseIcs', () => {
   it('returns them in time order', () => {
     const events = parseIcs(feed, from, to);
     expect(events.map(e => e.start)).toEqual([...events.map(e => e.start)].sort((a, b) => a - b));
+  });
+});
+
+describe('putting a calendar day on the timeline', () => {
+  const event = (patch: Partial<BridgeEvent>): BridgeEvent => ({
+    id: 'e1',
+    calendarId: 'primary',
+    title: 'Standup',
+    start: 1_000,
+    end: 2_000,
+    allDay: false,
+    ...patch,
+  });
+
+  it('names an event a shared calendar would only tell it the hours of', () => {
+    // A calendar shared as free/busy comes back with no summary. The hour is
+    // still gone, and an unlabelled box on the grid reads as a rendering bug.
+    expect(timelineEventsFrom([event({ title: '' })])[0]!.title).toBe('Busy');
+  });
+
+  it('leaves out the blocks this app wrote, which the tracked lane already draws', () => {
+    const mine = event({ id: 'ours', toHootId: 't1::2026-08-24' });
+    expect(timelineEventsFrom([mine, event({ id: 'theirs' })]).map(e => e.id)).toEqual(['cal:theirs']);
+  });
+
+  it('leaves out an all-day entry rather than claiming the whole grid for it', () => {
+    expect(timelineEventsFrom([event({ allDay: true })])).toEqual([]);
+  });
+
+  it('leaves out an entry that ends before it starts', () => {
+    expect(timelineEventsFrom([event({ start: 2_000, end: 1_000 })])).toEqual([]);
   });
 });

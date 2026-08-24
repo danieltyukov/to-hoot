@@ -276,3 +276,73 @@ describe('the snapshot watermark', () => {
     expect(replay(log).tasks.t1).toBeUndefined(); // no base, same tolerance
   });
 });
+
+describe('work periods', () => {
+  const at = (h: number, m: number, s = 0): number => new Date(2026, 7, 24, h, m, s).getTime();
+  const DAY = '2026-08-24';
+  const delta = (id: string, ts: number, ms: number, deviceId = 'a'): Event =>
+    ev({ id, ts, deviceId, type: 'timeDelta', payload: { day: DAY, ms } });
+  // A delta only materialises a task the log creates somewhere.
+  const born = (entityId: string): Event =>
+    ev({ id: `c-${entityId}`, ts: 0, type: 'create', entityId, payload: { title: entityId } });
+
+  it('records the stretch a delta covers, ending at the timestamp it was written at', () => {
+    const s = replay([born('t1'), delta('1', at(11, 0, 30), 30_000)]);
+    expect(s.tasks.t1!.workPeriodsOnDay[DAY]).toEqual([
+      { startMs: at(11, 0, 0), endMs: at(11, 0, 30) },
+    ]);
+  });
+
+  it('joins deltas that abut into one stretch', () => {
+    const s = replay([born('t1'), delta('1', at(11, 0, 30), 30_000), delta('2', at(11, 1, 0), 30_000)]);
+    expect(s.tasks.t1!.workPeriodsOnDay[DAY]).toEqual([
+      { startMs: at(11, 0, 0), endMs: at(11, 1, 0) },
+    ]);
+  });
+
+  it('keeps a real break between two stretches', () => {
+    const s = replay([born('t1'), delta('1', at(11, 40), 40 * 60_000), delta('2', at(15, 0), 50 * 60_000)]);
+    expect(s.tasks.t1!.workPeriodsOnDay[DAY]).toEqual([
+      { startMs: at(11, 0), endMs: at(11, 40) },
+      { startMs: at(14, 10), endMs: at(15, 0) },
+    ]);
+  });
+
+  it('is order-independent, so a merge from another device cannot reorder the day', () => {
+    const evs = [born('t1'), delta('1', at(11, 40), 40 * 60_000), delta('2', at(15, 0), 50 * 60_000)];
+    expect(replay([...evs].reverse()).tasks.t1!.workPeriodsOnDay).toEqual(
+      replay(evs).tasks.t1!.workPeriodsOnDay,
+    );
+  });
+
+  it('carries stretches forward when replaying onto a base, so a truncated log keeps the day', () => {
+    const base = replay([born('t1'), delta('1', at(11, 40), 40 * 60_000)]);
+    const later = replay([delta('2', at(15, 0), 50 * 60_000)], base);
+    expect(later.tasks.t1!.workPeriodsOnDay[DAY]).toEqual([
+      { startMs: at(11, 0), endMs: at(11, 40) },
+      { startMs: at(14, 10), endMs: at(15, 0) },
+    ]);
+  });
+
+  it('never joins two tasks, however close their stretches are', () => {
+    const s = replay([
+      born('t1'),
+      born('t2'),
+      delta('1', at(11, 0, 30), 30_000),
+      ev({ id: '2', ts: at(11, 0, 31), type: 'timeDelta', entityId: 't2', payload: { day: DAY, ms: 1_000 } }),
+    ]);
+    expect(s.tasks.t1!.workPeriodsOnDay[DAY]).toHaveLength(1);
+    expect(s.tasks.t2!.workPeriodsOnDay[DAY]).toEqual([
+      { startMs: at(11, 0, 30), endMs: at(11, 0, 31) },
+    ]);
+  });
+
+  it('records no stretch for a payload it refuses to accrue', () => {
+    const s = replay([
+      born('t1'),
+      ev({ id: '1', ts: at(11, 0), type: 'timeDelta', payload: { day: DAY, ms: Number.NaN } }),
+      ev({ id: '2', ts: at(11, 0), type: 'timeDelta', payload: { day: '', ms: 1_000 } }),
+    ]);
+    expect(s.tasks.t1?.workPeriodsOnDay[DAY] ?? []).toEqual([]);
+  });
+});
