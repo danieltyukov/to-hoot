@@ -179,6 +179,19 @@ The error message names which of these it was:
 | A network error on desktop | The redirect host is blocked. The bridge redirects `/exec` to `script.googleusercontent.com`, and both hosts have to be allowed. |
 | An HTML response | The deployment is not published, or is published to the wrong account. |
 
+### What it reads
+
+Every calendar the account can see, merged into one day: work calendars shared
+with you, imported feeds, group calendars. Calendars you have unticked in Google
+Calendar are left out, so the app's day and the browser's agree. A calendar
+shared with you as free/busy has no titles to give, and its hours show as
+"Busy".
+
+If you deployed the script before this and the timeline looks emptier than your
+browser, paste the script again from Settings and redeploy: an older deployment
+reads only the account's own calendar. The calendar check in Settings says so
+when it sees one.
+
 ### Write-back
 
 Tracked time is written to a separate calendar named "to-hoot log", found or
@@ -186,9 +199,14 @@ created on first use. Your real calendars are read and never modified, so a bug
 in write-back can only damage events this app wrote, and you can hide the whole
 layer with one checkbox in Google Calendar.
 
+A day becomes one block per stretch of work, at the times you actually worked.
+Stop for lunch and you get two blocks, not one long one. Days you tracked before
+this app kept that detail have a total and nothing else, so they stay as a single
+block at your workday start.
+
 Writing the same block twice leaves one event: every written event carries a
-`toHootId` of `<taskId>::<day>`, and a re-sync updates by that key rather than
-inserting.
+`toHootId` of `<taskId>::<day>` for the first stretch and `<taskId>::<day>::<n>`
+for the rest, and a re-sync updates by that key rather than inserting.
 
 ## 4. Claude
 

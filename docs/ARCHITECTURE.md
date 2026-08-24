@@ -240,15 +240,44 @@ The calendar bridge is not part of the log. It is a Google Apps Script web app
 deployed to your own account, called over HTTP from the shells' native stacks
 because Apps Script cannot answer a CORS preflight.
 
+Reading covers every calendar the account can see, merged into one day and
+sorted by start. The account's own calendar is rarely the whole story: a
+deployment whose primary calendar is nearly empty would otherwise show an empty
+day beside a browser showing a full one. Calendars you have unticked in Google
+Calendar are left out, as is to-hoot's own log calendar, whose blocks the
+tracked lane already draws. Naming a `calendarId` in the request still reads
+that one calendar and nothing else.
+
 Write-back is idempotent by construction: every written event carries
-`extendedProperties.private.toHootId`, which is `<taskId>::<day>`. A re-sync looks
-the event up by that key and updates it rather than inserting, so writing the same
-block twice leaves one event rather than two. Writes go only to a separate
-calendar named "to-hoot log"; your real calendars are read and never modified.
+`extendedProperties.private.toHootId`, which is `<taskId>::<day>` for the day's
+first stretch and `<taskId>::<day>::<n>` for the rest. A re-sync looks the event
+up by that key and updates it rather than inserting, so writing the same block
+twice leaves one event rather than two. Writes go only to a separate calendar
+named "to-hoot log"; your real calendars are read and never modified.
+
+A day becomes one block per stretch of work, at the clock times the work
+happened, which `workPeriodsOnDay` supplies. Days tracked before that field
+existed have a total and nothing else, and those keep a single block anchored at
+`workdayStart`: a guess, but the only one available, and losing the day from the
+calendar entirely would be worse.
+
+The ledger has two halves and needs both. `calendarWritten` is milliseconds per
+day and decides *whether* to write; `calendarBlocks` is how many blocks that day
+has, and it is what notices a day whose shape changed while its total did not.
+A day with stretches and no block count was written by a build that placed it at
+09:00, and rewriting it is how an existing calendar catches up.
+
+`calendarBlocks` is also what keeps the cost down. Time is flushed every 30s
+while a timer runs, and each flush is another delta: a plan that resent the
+whole day would spend two Calendar calls per block twice a minute. Stretches are
+appended and only the last one grows, so a write sends the last known block and
+anything after it, and leaves a settled morning alone.
 
 An Apps Script execution is killed at six minutes, so no handler walks a long
-history: `listEvents` returns one page and a `nextPageToken`, `writeLog` takes at
-most 50 entries, `deleteLog` at most 100, and the client chunks and loops.
+history: a single-calendar `listEvents` returns one page and a `nextPageToken`,
+a merged one pages internally with hard caps on calendars, pages and events,
+`writeLog` takes at most 50 entries, `deleteLog` at most 100, and the client
+chunks and loops.
 
 ## Reading your own data
 
