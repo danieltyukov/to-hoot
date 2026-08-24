@@ -52,7 +52,13 @@ export function logIdFor(taskId: string, day: string, index = 0): string {
 /** The task fields write-back reads. Anything with these can be planned. */
 export type TrackedTask = Pick<
   Task,
-  'id' | 'title' | 'timeSpentOnDay' | 'workPeriodsOnDay' | 'calendarWritten' | 'calendarBlocks'
+  | 'id'
+  | 'title'
+  | 'timeSpentOnDay'
+  | 'workPeriodsOnDay'
+  | 'calendarWritten'
+  | 'calendarBlocks'
+  | 'calendarEventId'
 >;
 
 export interface WritebackWrite {
@@ -133,6 +139,15 @@ function periodsOn(task: TrackedTask, day: string): WorkPeriod[] {
  * oldest first, and nothing at all for a day already written.
  */
 export function planWriteback(task: TrackedTask, options: PlanOptions): WritebackAction[] {
+  // A task that IS a meeting is already on the calendar, in the block the
+  // meeting itself put there. Writing time back for it would draw the same hour
+  // twice: once as the meeting and once as the record of attending it.
+  //
+  // Total rather than per-day. The point is not that the meeting occupies one
+  // day, it is that this task has a calendar entry of its own and does not need
+  // a second one, whenever the work against it happens.
+  if (typeof task.calendarEventId === 'string' && task.calendarEventId.length > 0) return [];
+
   const days = options.days ?? [...Object.keys(task.timeSpentOnDay), ...Object.keys(task.calendarWritten)];
   const actions: WritebackAction[] = [];
 

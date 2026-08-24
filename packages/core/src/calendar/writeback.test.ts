@@ -227,6 +227,29 @@ describe('planWriteback', () => {
     expect(actions[0]).toMatchObject({ kind: 'delete', toHootIds: [logIdFor('t1', DAY, 0)] });
   });
 
+  it('writes nothing for a task that is a meeting already on the calendar', () => {
+    // Time tracked against a meeting is time the calendar already shows, in the
+    // block the meeting itself put there. A to-hoot block beside it would draw
+    // the same hour twice.
+    const meeting = newTask('t1', 0, {
+      title: 'Technical Updates',
+      calendarEventId: 'goog-evt-1',
+      timeSpentOnDay: { [DAY]: HOUR },
+      workPeriodsOnDay: { [DAY]: [period('16:00', '16:40')] },
+    });
+    expect(planWriteback(meeting, { anchorFor })).toEqual([]);
+  });
+
+  it('still writes for a task whose calendar link was cleared', () => {
+    const freed = newTask('t1', 0, {
+      title: 'Technical Updates',
+      calendarEventId: '',
+      timeSpentOnDay: { [DAY]: HOUR },
+      workPeriodsOnDay: { [DAY]: [period('16:00', '17:00')] },
+    });
+    expect(planWriteback(freed, { anchorFor })).toHaveLength(1);
+  });
+
   it('ignores a day with no time and nothing written', () => {
     expect(planWriteback(task({ [DAY]: 0 }), { anchorFor })).toEqual([]);
   });

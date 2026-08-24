@@ -114,6 +114,44 @@
   gap: 6px;
 }
 
+/*
+ * The block IS the control, so the button is stripped to nothing and made to
+ * fill it. A button that looked like a button would draw a second border inside
+ * the border the block already has, and the grid would read as a form.
+ *
+ * The flex properties are inherited rather than restated: the li switches to a
+ * row under `data-inline-time`, and a button with its own hardcoded column
+ * would put the time back on a line that is not there.
+ */
+.event-action {
+  display: flex;
+  flex-direction: inherit;
+  align-items: inherit;
+  gap: inherit;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* The meeting time is accruing to right now. The accent edge is the same
+   language the tracked lane uses, so the two read as one thing. */
+.event[data-tracking] {
+  border-color: var(--accent);
+  border-inline-start-color: var(--accent);
+}
+
+.event[data-tracking] .event-action {
+  cursor: default;
+}
+
 .event-title {
   overflow: hidden;
   text-overflow: ellipsis;

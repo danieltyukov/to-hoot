@@ -5,6 +5,7 @@ import {
   dayStr,
   plannedToday,
   todayTasks,
+  taskForCalendarEvent,
   workPeriodsOn,
   trackedToday,
   type State,
@@ -258,6 +259,47 @@ export default function App({
 
   const events: TimelineEvent[] = [...scheduled, ...fromCalendar];
 
+  /*
+   * Pressing a block on the day starts tracking against it.
+   *
+   * Two kinds of block, one gesture. A scheduled task already has a task, so it
+   * simply starts. A meeting has none, so one is made for it and tagged with the
+   * event id, which is what makes the second press find the first press's task
+   * rather than leaving a second row behind for the same hour.
+   *
+   * That tag is also what keeps write-back quiet for it: a meeting is already a
+   * block on the user's own calendar, and a to-hoot block beside it would draw
+   * the same hour twice. See `planWriteback`.
+   */
+  const trackBlock = (blockId: string): void => {
+    const block = events.find(e => e.id === blockId);
+    if (block === undefined) return;
+    if (block.taskId !== undefined) {
+      store.start(block.taskId);
+      return;
+    }
+    const source = calendarEvents.find(e => `cal:${e.id}` === blockId);
+    if (source === undefined) return;
+    const taskId =
+      taskForCalendarEvent(state, source.id)?.id ??
+      store.addTask(block.title, {
+        calendarEventId: source.id,
+        // The meeting's own length, so the ring reads twenty minutes of an hour
+        // rather than twenty minutes of nothing.
+        timeEstimate: Math.max(0, source.end - source.start),
+      });
+    store.start(taskId);
+  };
+
+  // Which block the running timer belongs to, in the ids the timeline uses.
+  const runningTask = snapshot.runningTaskId === null ? undefined : state.tasks[snapshot.runningTaskId];
+  const trackingBlockId =
+    runningTask === undefined
+      ? null
+      : runningTask.calendarEventId !== undefined && runningTask.calendarEventId !== ''
+        ? `cal:${runningTask.calendarEventId}`
+        : runningTask.id;
+
   const heading = view === 'today' ? 'Today' : titleOf(view, state);
   const selected = selectedId === null ? undefined : state.tasks[selectedId];
 
@@ -393,6 +435,8 @@ export default function App({
           tracked={spans}
           trackedTotal={tracked + snapshot.pendingMs}
           plannedTotal={planned}
+          onActivateEvent={trackBlock}
+          trackingEventId={trackingBlockId}
         />
       </div>
 

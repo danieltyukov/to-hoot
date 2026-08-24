@@ -181,3 +181,24 @@ export function workPeriodsOn(state: State, day: string): TrackedSpan[] {
   }
   return out.sort((a, b) => a.startMs - b.startMs || (a.id < b.id ? -1 : 1));
 }
+
+/**
+ * The open task tracking a given calendar event, if there is one.
+ *
+ * Finished tasks are skipped on purpose: a recurring meeting clicked again next
+ * week should start a fresh task rather than reopen last week's, and a meeting
+ * ticked off is a meeting the user has said they are done with.
+ *
+ * Ties are broken by the lowest id so the answer never moves. Two devices can
+ * each create a task for the same meeting before they sync, and a lookup that
+ * picked either would start one task on one click and the other on the next.
+ */
+export function taskForCalendarEvent(state: State, eventId: string): Task | undefined {
+  if (eventId === '') return undefined;
+  let found: Task | undefined;
+  for (const task of Object.values(state.tasks)) {
+    if (task.calendarEventId !== eventId || task.isDone) continue;
+    if (found === undefined || task.id < found.id) found = task;
+  }
+  return found;
+}

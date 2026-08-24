@@ -248,6 +248,19 @@ Calendar are left out, as is to-hoot's own log calendar, whose blocks the
 tracked lane already draws. Naming a `calendarId` in the request still reads
 that one calendar and nothing else.
 
+Pressing a block on the day starts tracking against it. A scheduled task
+already has a task and simply starts; a meeting has none, so one is created and
+tagged with the calendar event id. That tag is what makes the second press find
+the first press's task instead of leaving a second row behind for the same hour,
+and `taskForCalendarEvent` skips finished tasks so a recurring meeting pressed
+next week starts fresh rather than reopening last week's.
+
+The same tag switches write-back off for that task: a meeting is already a block
+on the user's own calendar, and a to-hoot block beside it would draw the same
+hour twice. The suppression is per task and total rather than per day, because
+the point is that this task has a calendar entry of its own, not that the work
+happened on one particular day.
+
 Write-back is idempotent by construction: every written event carries
 `extendedProperties.private.toHootId`, which is `<taskId>::<day>` for the day's
 first stretch and `<taskId>::<day>::<n>` for the rest. A re-sync looks the event

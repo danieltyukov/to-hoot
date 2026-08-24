@@ -7,6 +7,7 @@ import {
   taskTotalTime,
   todayTasks,
   trackedToday,
+  taskForCalendarEvent,
   workPeriodsOn,
 } from './selectors.js';
 import type { Event } from './events.js';
@@ -202,5 +203,39 @@ describe('workPeriodsOn', () => {
 
   it('is empty for a day nothing was tracked on', () => {
     expect(workPeriodsOn(replay([task('t1', {})]), TODAY)).toEqual([]);
+  });
+});
+
+describe('taskForCalendarEvent', () => {
+  it('finds the task tracking a given calendar event', () => {
+    const state = replay([
+      task('t1', { calendarEventId: 'goog-evt-1' }),
+      task('t2', { calendarEventId: 'goog-evt-2' }),
+    ]);
+    expect(taskForCalendarEvent(state, 'goog-evt-2')?.id).toBe('t2');
+  });
+
+  it('is undefined for an event nothing tracks yet, and for no event at all', () => {
+    const state = replay([task('t1', {})]);
+    expect(taskForCalendarEvent(state, 'goog-evt-1')).toBeUndefined();
+    expect(taskForCalendarEvent(state, '')).toBeUndefined();
+  });
+
+  it('answers the same task every time when two somehow claim one event', () => {
+    // Two devices can each create a task for the same meeting before they sync.
+    // Whichever this picks, it has to pick it consistently, or one click starts
+    // one task and the next click starts the other.
+    const state = replay([
+      task('t2', { calendarEventId: 'goog-evt-1' }),
+      task('t1', { calendarEventId: 'goog-evt-1' }),
+    ]);
+    expect(taskForCalendarEvent(state, 'goog-evt-1')?.id).toBe('t1');
+  });
+
+  it('never answers with a task that was finished, so a click starts a fresh one', () => {
+    const state = replay([
+      task('t1', { calendarEventId: 'goog-evt-1', isDone: true }),
+    ]);
+    expect(taskForCalendarEvent(state, 'goog-evt-1')).toBeUndefined();
   });
 });

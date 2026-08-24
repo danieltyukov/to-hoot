@@ -192,6 +192,17 @@ browser, paste the script again from Settings and redeploy: an older deployment
 reads only the account's own calendar. The calendar check in Settings says so
 when it sees one.
 
+### Tracking a meeting
+
+Press a meeting on the timeline and the timer starts against it. The first press
+makes a task for it; every press after that finds the same task, so a meeting
+you stop and come back to stays one row rather than becoming several. Pressing a
+different block banks the current one and switches.
+
+Nothing is written back to your calendar for those, on purpose: the meeting is
+already there. Track twenty minutes of an hour-long meeting and to-hoot knows
+you did twenty, while your calendar keeps showing the meeting that was booked.
+
 ### Write-back
 
 Tracked time is written to a separate calendar named "to-hoot log", found or
