@@ -17,12 +17,16 @@
 // this build's own compactor.
 
 import { SCHEMA_VERSION } from '../events.js';
-import { newTask, type Project, type Tag, type Task } from '../models.js';
+import { newTask, type Project, type Tag, type Task, type WorkPeriod } from '../models.js';
+import { joinWorkPeriods } from '../spans.js';
 import { replay } from '../replay.js';
 import { toSyncable, validateSettings, type SyncableSettings } from '../settings.js';
 import { emptyState, type State } from '../state.js';
 
 export const SNAPSHOT_PATH = 'snapshot.json';
+
+/** Stretches are keyed by logical day; anything else cannot have come from one. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * What `snapshot.json` holds, byte for byte identical to the immutable copy it
@@ -131,6 +135,28 @@ function numbers(v: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * A day map of tracked stretches, kept only where it can actually be drawn.
+ *
+ * A snapshot is data read back out of a repository the user can open and edit,
+ * so every stretch is a claim. `joinWorkPeriods` is the same normalisation
+ * replay applies, which is what keeps a state loaded from a snapshot identical
+ * to the same state replayed from events; a stretch it rejects is one that
+ * could not be drawn anyway.
+ */
+function workPeriods(v: unknown): Record<string, WorkPeriod[]> {
+  const out: Record<string, WorkPeriod[]> = {};
+  if (!isRecord(v)) return out;
+  for (const [day, list] of Object.entries(v)) {
+    if (!DAY_KEY.test(day) || !Array.isArray(list)) continue;
+    const kept = joinWorkPeriods(
+      list.filter(isRecord).map(p => ({ startMs: num(p['startMs'], NaN), endMs: num(p['endMs'], NaN) })),
+    );
+    if (kept.length > 0) out[day] = kept;
+  }
+  return out;
+}
+
 function hydrateTask(id: string, raw: Record<string, unknown>): Task {
   const created = num(raw['created'], 0);
   const task = newTask(id, created);
@@ -142,7 +168,12 @@ function hydrateTask(id: string, raw: Record<string, unknown>): Task {
   task.timeEstimate = num(raw['timeEstimate'], 0);
   // `timeSpent` is derived from this and is recomputed by the replay below.
   task.timeSpentOnDay = numbers(raw['timeSpentOnDay']);
+  // When the work happened, and how many calendar blocks stand for it. Absent
+  // from a snapshot written before either existed, which is why both go through
+  // helpers that answer empty rather than undefined.
+  task.workPeriodsOnDay = workPeriods(raw['workPeriodsOnDay']);
   task.calendarWritten = numbers(raw['calendarWritten']);
+  task.calendarBlocks = numbers(raw['calendarBlocks']);
   task.updated = num(raw['updated'], created);
   if (typeof raw['notes'] === 'string') task.notes = raw['notes'];
   if (typeof raw['parentId'] === 'string' && raw['parentId'] !== '') task.parentId = raw['parentId'];
