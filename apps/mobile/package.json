@@ -16,6 +16,9 @@
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
   "scripts": {
     "stage": "node scripts/stage-web.mjs",
     "sync": "node scripts/stage-web.mjs --fresh && cap sync android",

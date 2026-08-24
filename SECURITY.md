@@ -111,23 +111,31 @@ installation, and recovering means uninstalling, which destroys local app data.
 
 ## Known advisories
 
-Two moderate advisories are open against transitive dependencies and neither is
-fixable from this repository today. They are listed here rather than left for a
-reader to find in the Dependabot tab and wonder about.
-
-**`uuid` 7.0.3, missing buffer bounds check in v3/v5/v6 when `buf` is provided.**
-It arrives as `@capacitor/cli` -> `xcode` -> `uuid`. `@capacitor/cli` is a dev
-dependency, `xcode` is the iOS project manipulator, and this project builds only
-for Android, so the package is never loaded by anything that runs. It is not in
-the shipped app. Removing it means Capacitor dropping `xcode` from its CLI.
+One moderate advisory is open against a transitive dependency, and it is not
+fixable from this repository. It is listed here rather than left for a reader to
+find in the Dependabot tab and wonder about.
 
 **`glib` 0.18.5, unsoundness in the `Iterator` and `DoubleEndedIterator` impls
-for `VariantStrIter`.** It arrives through Tauri's GTK stack. `cargo update -p
-glib` finds nothing newer within the range Tauri 2.11 accepts, so the fix has to
-come from a Tauri release rather than from here. The affected iterators are not
-reachable from any code in this repository.
+for `VariantStrIter`.** It arrives through Tauri's GTK stack, and not by one
+route: `cargo tree -i gtk` shows four independent parents (`tao` for the window,
+`muda` for menus, `libappindicator` for the tray, and `tauri` itself), so
+dropping a feature does not drop the dependency. The advisory is fixed in `glib`
+0.20, and `gtk` 0.18 is what pins it below that; Tauri 2.11.5, the current
+release, still builds on `gtk` 0.18. `cargo update -p glib` locks zero packages.
+The fix has to arrive as a Tauri release, not as a change here. The affected
+iterators are not reachable from any code in this repository.
 
-Both are re-checked whenever Tauri or Capacitor is upgraded.
+It is re-checked whenever Tauri is upgraded.
+
+### Closed
+
+**`uuid` 7.0.3, missing buffer bounds check in v3/v5/v6 when `buf` is provided.**
+It arrived as `@capacitor/cli` -> `xcode` -> `uuid`, and is resolved by an
+`overrides` entry in `apps/mobile/package.json` pinning `uuid` to `^11.1.1`.
+`xcode` calls exactly one uuid function, `v4()`, which is unchanged across the
+gap, and the advisory concerns `v3`/`v5`/`v6` with a `buf` argument, which it
+never calls. The override is a real removal rather than a suppression: `uuid`
+7.0.3 is no longer anywhere in `apps/mobile/package-lock.json`.
 
 ## Scope
 
