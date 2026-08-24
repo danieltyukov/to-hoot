@@ -9,8 +9,10 @@ import {
   parseBridgeRequest,
   scriptFailure,
   pickLogCalendar,
+  pickReadableCalendars,
   toBridgeEvent,
   type BridgeResponse,
+  type CalendarListEntry,
   type CalendarPort,
   type EventResource,
   type ListOptions,
@@ -33,9 +35,19 @@ class FakePort implements CalendarPort {
   readonly removed: string[] = [];
   logCalendarCreated = 0;
   throwOnList: Error | undefined;
+  throwOnCalendars: Error | undefined;
+  /** Empty by default, which is a deployment whose list cannot be read. */
+  calendarList: CalendarListEntry[] = [];
+  /** Per calendar id, what its window holds. Falls back to `seedWindow`. */
+  readonly windows = new Map<string, RawCalendarEvent[]>();
   private nextId = 1;
   private page: RawCalendarEvent[] = [];
   private nextPageToken: string | undefined;
+
+  calendars(): CalendarListEntry[] {
+    if (this.throwOnCalendars) throw this.throwOnCalendars;
+    return this.calendarList;
+  }
 
   /**
    * Puts an event in the store as if a previous run had written it. Two of
@@ -68,8 +80,9 @@ class FakePort implements CalendarPort {
       );
       return { items };
     }
-    const page: ListPage = { items: this.page };
-    if (this.nextPageToken !== undefined) page.nextPageToken = this.nextPageToken;
+    const seeded = this.windows.get(calendarId);
+    const page: ListPage = { items: seeded ?? this.page };
+    if (seeded === undefined && this.nextPageToken !== undefined) page.nextPageToken = this.nextPageToken;
     return page;
   }
 
@@ -465,5 +478,146 @@ describe('scriptFailure', () => {
       error: 'script properties unavailable',
     });
     expect(scriptFailure('boom').error).toBe('boom');
+  });
+});
+
+describe('reading more than one calendar', () => {
+  const timed = (id: string, hour: number): RawCalendarEvent => ({
+    id,
+    summary: id,
+    start: { dateTime: `2026-08-24T${String(hour).padStart(2, '0')}:00:00Z` },
+    end: { dateTime: `2026-08-24T${String(hour + 1).padStart(2, '0')}:00:00Z` },
+  });
+
+  function accountWith(entries: CalendarListEntry[]): FakePort {
+    const port = new FakePort();
+    port.calendarList = entries;
+    return port;
+  }
+
+  function listed(port: FakePort): string[] {
+    const res = run({ action: 'listEvents', from: Date.parse('2026-08-24T00:00:00Z'), days: 1 }, port);
+    if (!res.ok || res.action !== 'listEvents') throw new Error('expected a listing');
+    return res.events.map(e => e.id);
+  }
+
+  it('reads every calendar the account can see, not only the one it was deployed under', () => {
+    // The bug this fixes: a deployment whose own primary calendar is nearly
+    // empty showed an empty day, while the browser showed a full one.
+    const port = accountWith([
+      { id: 'primary', summary: 'Main', accessRole: 'owner', primary: true },
+      { id: 'work@example.com', summary: 'Work', accessRole: 'reader' },
+    ]);
+    port.windows.set('primary', [timed('mine', 9)]);
+    port.windows.set('work@example.com', [timed('theirs', 15)]);
+    expect(listed(port)).toEqual(['mine', 'theirs']);
+  });
+
+  it('merges the calendars into one day in start order', () => {
+    const port = accountWith([
+      { id: 'primary', accessRole: 'owner', primary: true },
+      { id: 'b', accessRole: 'reader' },
+    ]);
+    port.windows.set('primary', [timed('late', 16)]);
+    port.windows.set('b', [timed('early', 8)]);
+    expect(listed(port)).toEqual(['early', 'late']);
+  });
+
+  it('leaves out its own log calendar, which the tracked lane already draws', () => {
+    const port = accountWith([
+      { id: 'primary', accessRole: 'owner', primary: true },
+      { id: 'log-calendar-id', summary: 'to-hoot log', accessRole: 'owner' },
+    ]);
+    port.windows.set('primary', [timed('real', 9)]);
+    port.windows.set('log-calendar-id', [timed('ours', 10)]);
+    expect(listed(port)).toEqual(['real']);
+  });
+
+  it('leaves out a calendar the user has unticked in Google Calendar', () => {
+    const port = accountWith([
+      { id: 'primary', accessRole: 'owner', primary: true },
+      { id: 'noise', accessRole: 'reader', selected: false },
+    ]);
+    port.windows.set('primary', [timed('real', 9)]);
+    port.windows.set('noise', [timed('hidden', 10)]);
+    expect(listed(port)).toEqual(['real']);
+  });
+
+  it('reads one calendar and no others when the caller names one', () => {
+    const port = accountWith([
+      { id: 'primary', accessRole: 'owner', primary: true },
+      { id: 'other', accessRole: 'reader' },
+    ]);
+    run({ action: 'listEvents', from: 0, days: 1, calendarId: 'other' }, port);
+    expect(port.listCalls.map(c => c.calendarId)).toEqual(['other']);
+  });
+
+  it('falls back to the deploying account when the calendar list cannot be read', () => {
+    // Some Workspace configurations refuse the list. A day from one calendar
+    // beats an error the reader cannot act on.
+    const port = new FakePort();
+    port.throwOnCalendars = new Error('nope');
+    port.seedWindow([timed('mine', 9)]);
+    expect(listed(port)).toEqual(['mine']);
+    expect(port.listCalls.map(c => c.calendarId)).toEqual(['primary']);
+  });
+
+  it('reports how many calendars it read, so an empty day is diagnosable', () => {
+    // Without this, a day that came back empty because the account lists one
+    // calendar looks exactly like a day that is genuinely empty.
+    const port = accountWith([
+      { id: 'primary', accessRole: 'owner', primary: true },
+      { id: 'b', accessRole: 'reader' },
+      { id: 'c', accessRole: 'freeBusyReader' },
+    ]);
+    const res = run({ action: 'listEvents', from: 0, days: 1 }, port);
+    expect(res.ok && res.action === 'listEvents' ? res.calendarCount : 0).toBe(3);
+  });
+
+  it('reports what it read, so a client is never guessing', () => {
+    const port = accountWith([{ id: 'primary', accessRole: 'owner', primary: true }, { id: 'b', accessRole: 'reader' }]);
+    const res = run({ action: 'listEvents', from: 0, days: 1 }, port);
+    expect(res.ok && res.action === 'listEvents' ? res.calendarId : '').toBe('*');
+  });
+});
+
+describe('pickReadableCalendars', () => {
+  it('puts the account own calendar first and is otherwise stable', () => {
+    expect(
+      pickReadableCalendars(
+        [
+          { id: 'z', accessRole: 'reader' },
+          { id: 'a', accessRole: 'writer' },
+          { id: 'p', accessRole: 'owner', primary: true },
+        ],
+        'to-hoot log',
+      ),
+    ).toEqual(['p', 'a', 'z']);
+  });
+
+  it('keeps a calendar it can only see the busy blocks of', () => {
+    // A meeting with no title still says the hour is gone, which is the whole
+    // question the timeline answers.
+    expect(pickReadableCalendars([{ id: 'busy', accessRole: 'freeBusyReader' }], 'to-hoot log')).toEqual(['busy']);
+  });
+
+  it('drops entries with nothing to read: no id, deleted, hidden, unticked, or ours', () => {
+    expect(
+      pickReadableCalendars(
+        [
+          { summary: 'no id', accessRole: 'owner' },
+          { id: 'gone', accessRole: 'owner', deleted: true },
+          { id: 'hidden', accessRole: 'owner', hidden: true },
+          { id: 'unticked', accessRole: 'owner', selected: false },
+          { id: 'ours', summary: 'to-hoot log', accessRole: 'owner' },
+          { id: 'none', accessRole: 'none' },
+        ],
+        'to-hoot log',
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps a calendar whose selected flag the list simply did not carry', () => {
+    expect(pickReadableCalendars([{ id: 'a', accessRole: 'owner' }], 'to-hoot log')).toEqual(['a']);
   });
 });

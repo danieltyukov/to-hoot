@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
-import type { Http, HttpRequest, HttpResponse } from '@to-hoot/core';
+import { BRIDGE_VERSION, type Http, type HttpRequest, type HttpResponse } from '@to-hoot/core';
 
 import {
   README_PATH,
@@ -373,9 +373,46 @@ describe('testCalendar', () => {
     expect(result.status === 'ok' && result.detail).toContain('Standup at 14:30');
   });
 
+  it('says how many calendars it read, so an empty week is diagnosable', async () => {
+    const http = bridge({ ok: true, action: 'listEvents', calendarCount: 5, events: [] });
+    expect((await testCalendar(http, url, 's')).detail).toContain('5 calendars');
+  });
+
   it('says so plainly when the week is empty', async () => {
     const http = bridge({ ok: true, action: 'listEvents', events: [] });
     expect((await testCalendar(http, url, 's')).detail).toContain('Nothing scheduled');
+  });
+
+  it('says the deployed script is behind, because a stale one reads one calendar', async () => {
+    // The user cannot see which build is deployed. Without this the app quietly
+    // shows a day from one calendar and the browser shows five, and nothing on
+    // screen connects the two.
+    const { http } = transport([
+      [
+        req => req.method === 'GET',
+        json(200, { ok: true, secretConfigured: true, calendarServiceEnabled: true, version: 1 }),
+      ],
+      [/script\.google\.com/, json(200, { ok: true, action: 'listEvents', events: [] })],
+    ]);
+    const result = await testCalendar(http, url, 's');
+    expect(result.status).toBe('ok');
+    expect(result.detail).toContain('older version');
+  });
+
+  it('says nothing about the version when the deployment is current', async () => {
+    const { http } = transport([
+      [
+        req => req.method === 'GET',
+        json(200, {
+          ok: true,
+          secretConfigured: true,
+          calendarServiceEnabled: true,
+          version: BRIDGE_VERSION,
+        }),
+      ],
+      [/script\.google\.com/, json(200, { ok: true, action: 'listEvents', events: [] })],
+    ]);
+    expect((await testCalendar(http, url, 's')).detail).not.toContain('older version');
   });
 
   it('reads the failure out of the body, since Apps Script cannot set a status', async () => {
