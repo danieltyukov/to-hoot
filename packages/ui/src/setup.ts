@@ -2,6 +2,7 @@ import {
   BranchNotFoundError,
   CalendarBridgeClient,
   META_PATH,
+  BRIDGE_VERSION,
   SNAPSHOT_PATH,
   isEmptyRepository,
   DEVICE_ID_RULE,
@@ -617,6 +618,11 @@ function transportMessage(err: unknown): string {
 export interface DeploymentProbe {
   secretConfigured: boolean;
   calendarServiceEnabled: boolean;
+  /**
+   * The bridge version of the deployed script. Zero for a deployment old
+   * enough not to report one, which is behind by definition.
+   */
+  version: number;
 }
 
 /**
@@ -637,11 +643,12 @@ export async function probeDeployment(http: Http, execUrl: string): Promise<Depl
     if (res.status !== 200) return null;
     const body: unknown = JSON.parse(await res.text());
     if (typeof body !== 'object' || body === null) return null;
-    const { secretConfigured, calendarServiceEnabled } = body as Record<string, unknown>;
+    const { secretConfigured, calendarServiceEnabled, version } = body as Record<string, unknown>;
     if (typeof secretConfigured !== 'boolean') return null;
     return {
       secretConfigured,
       calendarServiceEnabled: calendarServiceEnabled === true,
+      version: typeof version === 'number' && Number.isFinite(version) ? version : 0,
     };
   } catch {
     return null;
@@ -689,17 +696,35 @@ export async function testCalendar(
   const client = new CalendarBridgeClient(http, { execUrl: execUrl.trim(), secret });
   try {
     const events = await client.listEvents({ from: now, days: 7 });
+    const read = client.calendarsRead;
+    // Named before the events, because it is what explains them. A week that
+    // came back empty from one calendar is a deployment to fix; a week that
+    // came back empty from five is just an empty week.
+    const scope = read > 1 ? `Connected, reading ${read} calendars.` : 'Connected.';
     return {
       status: 'ok',
       detail:
-        events.length === 0
-          ? 'Connected. Nothing scheduled in the next seven days.'
-          : `Connected. Next: ${describe(events[0]!)}.`,
+        (events.length === 0
+          ? `${scope} Nothing scheduled in the next seven days.`
+          : `${scope} Next: ${describe(events[0]!)}.`) + staleNote(probe),
       value: events,
     };
   } catch (err) {
     return { status: 'error', ...calendarFailure(err, probe) };
   }
+}
+
+/**
+ * What to say about a deployment running an older build of the script.
+ *
+ * Not an error: it connects, it answers, and it writes time back. What it does
+ * not do is read past the calendar it was deployed under, and the symptom of
+ * that is an app showing an empty day beside a browser showing a full one, with
+ * nothing on screen connecting the two.
+ */
+function staleNote(probe: DeploymentProbe | null): string {
+  if (probe === null || probe.version >= BRIDGE_VERSION) return '';
+  return ' The deployed script is an older version: paste it again to read every calendar you can see.';
 }
 
 function describe(event: BridgeEvent): string {

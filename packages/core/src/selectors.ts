@@ -7,6 +7,7 @@
 // to decide which one is right; computing the answer removes the question.
 
 import { dayStr, type Task } from './models.js';
+import type { TrackedSpan } from './spans.js';
 import type { State } from './state.js';
 
 /** The logical day of a task's due field, or undefined when it has none. */
@@ -154,4 +155,29 @@ export function completedPerDay(state: State, days: number, now: number = Date.n
     counts.set(day, (counts.get(day) ?? 0) + 1);
   }
   return dayWindow(days, now, offsetMs).map(day => counts.get(day) ?? 0);
+}
+
+/**
+ * Every stretch of tracked work on one day, across every task, earliest first.
+ *
+ * Read off state rather than off the event log on purpose. A push truncates the
+ * log to what it has not acknowledged, so a lane drawn from the log empties
+ * itself every time the app syncs while the day's totals stay put: the two
+ * halves of the same day would then disagree on screen.
+ */
+export function workPeriodsOn(state: State, day: string): TrackedSpan[] {
+  const out: TrackedSpan[] = [];
+  for (const task of Object.values(state.tasks)) {
+    const periods = task.workPeriodsOnDay?.[day];
+    if (!Array.isArray(periods)) continue;
+    periods.forEach((period, index) => {
+      out.push({
+        id: `${task.id}:${index}`,
+        taskId: task.id,
+        startMs: period.startMs,
+        endMs: period.endMs,
+      });
+    });
+  }
+  return out.sort((a, b) => a.startMs - b.startMs || (a.id < b.id ? -1 : 1));
 }

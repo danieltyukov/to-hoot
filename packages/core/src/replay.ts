@@ -22,6 +22,7 @@ import type { Event } from './events.js';
 import { compareEvents, isWellFormed } from './events.js';
 import type { EventType } from './events.js';
 import { newTask, type Project, type Tag, type Task } from './models.js';
+import { foldWorkPeriods, joinWorkPeriods } from './spans.js';
 import { cloneState, emptyState, type State } from './state.js';
 
 type Record_ = Record<string, unknown>;
@@ -61,8 +62,9 @@ function cloneValue(v: unknown): unknown {
 
 // Fields an event payload may write. Anything absent here is ignored, which is
 // how a malformed or newer-schema event from another device stays harmless.
-// `timeSpent` is derived and `timeSpentOnDay` is written only by timeDelta, so
-// neither is listed: an update can never set a total.
+// `timeSpent` is derived, and `timeSpentOnDay` and `workPeriodsOnDay` are
+// written only by timeDelta, so none of the three is listed: an update can
+// never set a total, nor claim work happened at an hour nothing was tracked at.
 const TASK_FIELDS: FieldTable = {
   title: { check: isString },
   notes: { check: isString, optional: true },
@@ -77,6 +79,7 @@ const TASK_FIELDS: FieldTable = {
   dueWithTime: { check: isNumber, optional: true },
   calendarEventId: { check: isString, optional: true },
   calendarWritten: { check: isNumberMap },
+  calendarBlocks: { check: isNumberMap },
 };
 
 const PROJECT_FIELDS: FieldTable = {
@@ -394,7 +397,7 @@ function applyTaskEvent(
   }
 
   if (e.type === 'timeDelta') {
-    accrue(task, payload);
+    accrue(task, payload, tsOf(e));
     touch(task, e);
     return;
   }
@@ -408,13 +411,19 @@ function applyTaskEvent(
  * Rule 1. Increments add, so two devices tracking the same task at the same
  * time produce a sum. A non-finite ms is dropped rather than stored: one NaN
  * serialises to null and silently zeroes the day.
+ *
+ * `atMs` is the wall clock the delta was written at, which is the only thing
+ * that says WHEN the time went. The sum and the stretch are built from the same
+ * event under the same guards, so the day total and the day's shape can never
+ * disagree about what counted.
  */
-function accrue(task: Task, payload: Record_): void {
+function accrue(task: Task, payload: Record_, atMs: number): void {
   const day = payload['day'];
   const ms = payload['ms'];
   if (typeof day !== 'string' || day === '') return;
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return;
   task.timeSpentOnDay[day] = (task.timeSpentOnDay[day] ?? 0) + ms;
+  task.workPeriodsOnDay[day] = foldWorkPeriods(task.workPeriodsOnDay[day] ?? [], atMs, ms);
 }
 
 /** dueDay and dueWithTime are mutually exclusive; readers check dueWithTime first. */
@@ -497,6 +506,20 @@ function normalize(state: State): void {
       total += value;
     }
     task.timeSpent = total;
+
+    // A snapshot from another build, or from a build before this field existed,
+    // arrives with anything or nothing here. Rebuilt rather than trusted, so
+    // one shape comes out however it went in.
+    const periods = task.workPeriodsOnDay ?? {};
+    task.workPeriodsOnDay = {};
+    for (const [day, list] of Object.entries(periods)) {
+      if (!Array.isArray(list)) continue;
+      // A day with no total has no stretches either: the two are written by the
+      // same event, so a stretch left behind is a stretch nothing accounts for.
+      if ((task.timeSpentOnDay[day] ?? 0) <= 0) continue;
+      const joined = joinWorkPeriods(list);
+      if (joined.length > 0) task.workPeriodsOnDay[day] = joined;
+    }
   }
 
   // Sorted ids give a deterministic append order, and a ULID sorts by creation.

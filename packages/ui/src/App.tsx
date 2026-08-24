@@ -5,7 +5,7 @@ import {
   dayStr,
   plannedToday,
   todayTasks,
-  trackedSpans,
+  workPeriodsOn,
   trackedToday,
   type State,
   type Task,
@@ -26,7 +26,7 @@ import { browserHttp, browserStore } from './platform/browser.js';
 import type { Span, TimelineEvent } from './components/timeline-layout.js';
 import type { Http, Platform } from '@to-hoot/core';
 import { SyncController, type SyncStatus } from './sync.js';
-import { CalendarService } from './calendar.js';
+import { CalendarService, timelineEventsFrom } from './calendar.js';
 import type { BridgeEvent } from '@to-hoot/core';
 import { formatDuration } from './format.js';
 import { Store } from './store.js';
@@ -215,8 +215,10 @@ export default function App({
   const colorOf = (taskId: string | undefined): string | undefined =>
     taskId === undefined ? undefined : state.projects[state.tasks[taskId]?.projectId ?? '']?.color;
 
-  // Core infers the stretches from the log; the colour is the UI's business.
-  const spans: Span[] = trackedSpans(snapshot.events, today).map(span => ({
+  // Core keeps the stretches on the state; the colour is the UI's business.
+  // State rather than the log, because a push truncates the log and the lane
+  // would empty itself a few seconds after every sync.
+  const spans: Span[] = workPeriodsOn(state, today).map(span => ({
     id: span.id,
     startMs: span.startMs,
     endMs: span.endMs,
@@ -252,9 +254,7 @@ export default function App({
    * all-day event is left off: it is a label for the whole day rather than a
    * block within it, and drawing it as one would claim 24 hours of the grid.
    */
-  const fromCalendar: TimelineEvent[] = calendarEvents
-    .filter(e => !e.allDay && e.end > e.start)
-    .map(e => ({ id: `cal:${e.id}`, title: e.title, startMs: e.start, endMs: e.end }));
+  const fromCalendar: TimelineEvent[] = timelineEventsFrom(calendarEvents);
 
   const events: TimelineEvent[] = [...scheduled, ...fromCalendar];
 

@@ -25,8 +25,15 @@ export const LOG_CALENDAR_NAME = 'to-hoot log';
 /** The `extendedProperties.private` key that makes a re-sync an update. */
 export const TO_HOOT_ID_KEY = 'toHootId';
 
-/** Bumped when the wire format changes in a way a client has to notice. */
-export const BRIDGE_VERSION = 1;
+/**
+ * Bumped when the wire format changes in a way a client has to notice.
+ *
+ * 2: a listEvents with no calendarId reads every calendar the account can see
+ *    and merges them, where 1 read only the account's own. The request is
+ *    unchanged, so a client talking to a version 1 deployment still gets an
+ *    answer; it is just a smaller one, and the wizard says so.
+ */
+export const BRIDGE_VERSION = 2;
 
 /** A read window one call can serve comfortably. The client asks again for more. */
 export const MAX_LIST_DAYS = 62;
@@ -41,6 +48,17 @@ export const MAX_WRITE_ENTRIES = 50;
 export const MAX_DELETE_IDS = 100;
 /** How many events sharing one toHootId a single write will clean up. */
 export const MAX_DUPLICATE_CLEANUP = 25;
+/**
+ * What `calendarId` reads back as when the answer came from the whole account
+ * rather than from one calendar. Not a calendar id Google would ever issue.
+ */
+export const MERGED_CALENDAR_ID = '*';
+/** Calendars one merged read will visit. A stop, not a limit anyone reaches. */
+export const MAX_MERGED_CALENDARS = 25;
+/** Pages per calendar in a merged read. Six minutes is the real ceiling. */
+export const MAX_MERGED_PAGES = 4;
+/** Events one merged read will return. Beyond this a day is not a timeline. */
+export const MAX_MERGED_EVENTS = 2_000;
 /** Google rejects longer summaries; a task title is truncated, never dropped. */
 const MAX_SUMMARY_CHARS = 1000;
 const MAX_ID_CHARS = 200;
@@ -130,6 +148,14 @@ export interface ListEventsOk {
   ok: true;
   action: 'listEvents';
   calendarId: string;
+  /**
+   * How many calendars went into this answer. One for a named calendar.
+   *
+   * It exists so an empty day is diagnosable: a day with nothing on it and a
+   * day read from one calendar out of five look identical without it, and the
+   * second one is a deployment problem the user can actually fix.
+   */
+  calendarCount: number;
   events: BridgeEvent[];
   /** Present while the window has more events. The client pages until it is not. */
   nextPageToken?: string;
@@ -212,6 +238,13 @@ export interface CalendarListEntry {
   id?: string;
   summary?: string;
   accessRole?: string;
+  /** The account's own calendar. Read first, so the merged day starts at home. */
+  primary?: boolean;
+  /** False for a calendar the user has unticked in Google Calendar. */
+  selected?: boolean;
+  /** Removed, or hidden from the list. Neither has anything to show. */
+  deleted?: boolean;
+  hidden?: boolean;
 }
 
 /**
@@ -224,6 +257,11 @@ export interface CalendarListEntry {
  */
 export interface CalendarPort {
   list(calendarId: string, opts: ListOptions): ListPage;
+  /**
+   * Every calendar in the account's list. Empty, or throwing, is treated as
+   * "cannot tell", and the read falls back to the deploying account alone.
+   */
+  calendars(): CalendarListEntry[];
   insert(calendarId: string, resource: EventResource): RawCalendarEvent;
   update(calendarId: string, eventId: string, resource: EventResource): RawCalendarEvent;
   remove(calendarId: string, eventId: string): void;
@@ -528,20 +566,118 @@ function findAllByToHootId(calendar: CalendarPort, calendarId: string, toHootId:
   return found;
 }
 
-function handleListEvents(request: ListEventsRequest, calendar: CalendarPort): ListEventsOk {
-  const calendarId = request.calendarId ?? 'primary';
-  const page = calendar.list(calendarId, listOptionsFor(request));
-  const events: BridgeEvent[] = [];
+/**
+ * The calendars a merged read visits: everything the account can see, minus
+ * what has nothing to show and minus this app's own log.
+ *
+ * "Everything the account can see" is deliberately the same set the user sees
+ * in Google Calendar, unticked calendars included only when the list does not
+ * say. A day that disagrees with the browser is worse than a day with one
+ * calendar too many, and the browser is the thing the user is comparing against.
+ *
+ * The log calendar is excluded by name rather than by id, because asking for
+ * the id creates that calendar, and a read must never write.
+ */
+export function pickReadableCalendars(
+  entries: readonly CalendarListEntry[],
+  logCalendarName: string,
+): string[] {
+  const usable = entries.filter(entry => {
+    if (typeof entry.id !== 'string' || entry.id.length === 0) return false;
+    if (entry.deleted === true || entry.hidden === true || entry.selected === false) return false;
+    if ((entry.summary ?? '').trim() === logCalendarName) return false;
+    // `none` is the one role with nothing behind it. Everything else, freeBusy
+    // included, at least says which hours are gone.
+    return entry.accessRole !== 'none';
+  });
+
+  const ids = usable.filter(e => e.primary !== true).map(e => e.id as string).sort();
+  const primary = usable.filter(e => e.primary === true).map(e => e.id as string);
+  return [...primary, ...ids].slice(0, MAX_MERGED_CALENDARS);
+}
+
+/** The account's calendar list, or nothing at all when it cannot be read. */
+function readableCalendars(calendar: CalendarPort): string[] {
+  try {
+    const entries = calendar.calendars();
+    return Array.isArray(entries) ? pickReadableCalendars(entries, LOG_CALENDAR_NAME) : [];
+  } catch {
+    // Some Workspace configurations refuse the list. One calendar beats an
+    // error the reader cannot act on.
+    return [];
+  }
+}
+
+function collectPage(page: ListPage, calendarId: string, into: BridgeEvent[]): void {
   for (const raw of page.items ?? []) {
     if (raw.status === 'cancelled') continue;
     const event = toBridgeEvent(raw, calendarId);
-    if (event) events.push(event);
+    if (event) into.push(event);
   }
-  const out: ListEventsOk = { ok: true, action: 'listEvents', calendarId, events };
+}
+
+/**
+ * One calendar, paged by the client. This is the shape the protocol was born
+ * with, and it stays exactly as it was: a caller that names a calendar gets
+ * that calendar and drives the page token itself.
+ */
+function listOneCalendar(request: ListEventsRequest, calendar: CalendarPort, calendarId: string): ListEventsOk {
+  const page = calendar.list(calendarId, listOptionsFor(request));
+  const events: BridgeEvent[] = [];
+  collectPage(page, calendarId, events);
+  const out: ListEventsOk = { ok: true, action: 'listEvents', calendarId, calendarCount: 1, events };
   if (typeof page.nextPageToken === 'string' && page.nextPageToken.length > 0) {
     out.nextPageToken = page.nextPageToken;
   }
   return out;
+}
+
+/**
+ * The whole account's day, in one answer.
+ *
+ * Paged here rather than by the client, because a page token belongs to one
+ * calendar and there is no honest way to hand back several as one. The window
+ * a timeline asks for is a day, so the caps below are a stop and not a limit:
+ * reaching them means something else is wrong.
+ */
+function listWholeAccount(
+  request: ListEventsRequest,
+  calendar: CalendarPort,
+  calendarIds: readonly string[],
+): ListEventsOk {
+  const events: BridgeEvent[] = [];
+  for (const calendarId of calendarIds) {
+    let pageToken: string | undefined;
+    for (let page = 0; page < MAX_MERGED_PAGES; page++) {
+      const opts = listOptionsFor(pageToken === undefined ? request : { ...request, pageToken });
+      const answer = calendar.list(calendarId, opts);
+      collectPage(answer, calendarId, events);
+      pageToken = typeof answer.nextPageToken === 'string' && answer.nextPageToken.length > 0
+        ? answer.nextPageToken
+        : undefined;
+      if (pageToken === undefined) break;
+    }
+    if (events.length >= MAX_MERGED_EVENTS) break;
+  }
+  // One list in clock order: which calendar an hour came from is a colour, not
+  // an ordering, and a client drawing a day should not have to interleave.
+  events.sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1));
+  return {
+    ok: true,
+    action: 'listEvents',
+    calendarId: MERGED_CALENDAR_ID,
+    calendarCount: calendarIds.length,
+    events: events.slice(0, MAX_MERGED_EVENTS),
+  };
+}
+
+function handleListEvents(request: ListEventsRequest, calendar: CalendarPort): ListEventsOk {
+  if (request.calendarId !== undefined) return listOneCalendar(request, calendar, request.calendarId);
+  const calendarIds = readableCalendars(calendar);
+  // No list means no way to tell what else exists. The account that deployed
+  // the script is the one calendar there is always an answer for.
+  if (calendarIds.length === 0) return listOneCalendar(request, calendar, 'primary');
+  return listWholeAccount(request, calendar, calendarIds);
 }
 
 function handleWriteLog(request: WriteLogRequest, calendar: CalendarPort): WriteLogOk {

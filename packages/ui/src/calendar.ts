@@ -179,52 +179,92 @@ export class CalendarService {
       secret: settings.calendar.secret,
     });
 
-    const writes = actions.filter(a => a.kind === 'write');
-    const deletes = actions.filter(a => a.kind === 'delete');
-    const landed: WritebackAction[] = [];
+    const entries = actions.flatMap(a => (a.kind === 'write' ? a.entries : []));
+    /*
+     * Blocks to remove: a deleted day's, and the tail a day that used to have
+     * more stretches left behind. Both in one call, because both are "this id
+     * should not be on the calendar" and the script answers them the same way.
+     */
+    const removeIds = actions.flatMap(a => (a.kind === 'write' ? a.stale : a.toHootIds));
+    const done = new Set<string>();
 
     /*
      * A failure mid-way through a batch still has to advance the ledger for the
-     * blocks that were written, which is what `partial` on the error carries.
-     * Without it the next sync would write those days a second time, and the
-     * user would watch their calendar fill with duplicates every few minutes.
-     * What is left out stays unwritten and is retried in full.
+     * days that were fully written, which is what `partial` on the error
+     * carries. Without it the next sync would write those days a second time,
+     * and the user would watch their calendar fill with duplicates every few
+     * minutes. What is left out stays unwritten and is retried in full.
      */
     try {
-      if (writes.length > 0) {
-        const results = await client.writeLog(writes.map(a => a.entry));
-        landed.push(...matching(writes, results.map(r => r.toHootId)));
+      if (entries.length > 0) {
+        for (const result of await client.writeLog(entries)) done.add(result.toHootId);
       }
-      if (deletes.length > 0) {
-        const { deleted, missing } = await client.deleteLog(deletes.map(a => a.toHootId));
+      if (removeIds.length > 0) {
+        const { deleted, missing } = await client.deleteLog(removeIds);
         // Already gone counts as done: there is nothing left to remove.
-        landed.push(...matching(deletes, [...deleted, ...missing]));
+        for (const id of [...deleted, ...missing]) done.add(id);
       }
     } catch (err) {
       const partial = (err as { partial?: PartialProgress } | null)?.partial;
       if (partial !== undefined) {
-        landed.push(...matching(writes, (partial.written ?? []).map(r => r.toHootId)));
-        landed.push(...matching(deletes, [...(partial.deleted ?? []), ...(partial.missing ?? [])]));
+        for (const result of partial.written ?? []) done.add(result.toHootId);
+        for (const id of [...(partial.deleted ?? []), ...(partial.missing ?? [])]) done.add(id);
       }
-      this.record(taskId, task, landed);
+      this.record(taskId, task, landed(actions, done));
       throw err;
     }
 
-    this.record(taskId, task, landed);
+    this.record(taskId, task, landed(actions, done));
   }
 
-  private record(taskId: string, task: Task, landed: WritebackAction[]): void {
-    if (landed.length === 0) return;
-    this.store.patchTask(taskId, {
-      calendarWritten: applyWriteback(task.calendarWritten, landed),
-    });
+  private record(taskId: string, task: Task, applied: WritebackAction[]): void {
+    if (applied.length === 0) return;
+    const { calendarWritten, calendarBlocks } = applyWriteback(task, applied);
+    this.store.patchTask(taskId, { calendarWritten, calendarBlocks });
   }
 }
 
-/** The actions whose ids the script confirmed. */
-function matching(actions: WritebackAction[], ids: readonly string[]): WritebackAction[] {
-  const done = new Set(ids);
-  return actions.filter(a => done.has(a.toHootId));
+/** Every id one action stands or falls by. */
+function idsOf(action: WritebackAction): string[] {
+  return action.kind === 'write'
+    ? [...action.entries.map(e => e.toHootId), ...action.stale]
+    : action.toHootIds;
+}
+
+/**
+ * The actions the script confirmed in full.
+ *
+ * A day is all or nothing on purpose. Recording a day whose second block failed
+ * would leave the ledger claiming a calendar that does not exist, and the delta
+ * would never bring the app back to fix it.
+ */
+function landed(actions: WritebackAction[], done: ReadonlySet<string>): WritebackAction[] {
+  return actions.filter(a => idsOf(a).every(id => done.has(id)));
+}
+
+/**
+ * The calendar's day, as blocks a timeline can draw.
+ *
+ * Three things are left out, and each one for a different reason. An all-day
+ * entry is a label for the whole day rather than a block within it, and drawing
+ * it as one would claim twenty-four hours of the grid. An entry that ends
+ * before it starts cannot be laid out at all. And a block this app wrote is
+ * already the tracked lane: drawn again as an event it would double every
+ * session, once in each column.
+ */
+export function timelineEventsFrom(
+  events: readonly BridgeEvent[],
+): Array<{ id: string; title: string; startMs: number; endMs: number }> {
+  return events
+    .filter(e => !e.allDay && e.end > e.start && e.toHootId === undefined)
+    .map(e => ({
+      id: `cal:${e.id}`,
+      // A calendar shared as free/busy comes back with no summary at all. The
+      // hour is still gone, and an unlabelled box reads as a rendering bug.
+      title: e.title === '' ? 'Busy' : e.title,
+      startMs: e.start,
+      endMs: e.end,
+    }));
 }
 
 function startOfDay(now: number, offsetMs: number): number {

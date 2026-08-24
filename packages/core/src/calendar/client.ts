@@ -110,6 +110,17 @@ export class CalendarBridgeClient {
   private readonly execUrl: string;
   private readonly secret: string;
 
+  /**
+   * How many calendars the last `listEvents` read, or zero before the first.
+   *
+   * Read off the answer rather than returned with the events, because every
+   * caller but one wants the events and nothing else. The one that wants this
+   * is the setup check: an empty week and a week read from one calendar out of
+   * five look identical to a reader, and only the second is a problem they can
+   * do something about.
+   */
+  calendarsRead = 0;
+
   constructor(http: Http, config: CalendarBridgeConfig) {
     if (config.execUrl.length === 0) {
       throw new CalendarBridgeError('bad-request', undefined, 'the calendar bridge has no deployment URL configured');
@@ -159,6 +170,7 @@ export class CalendarBridgeClient {
         throw new CalendarBridgeError('bad-response', undefined, 'the bridge answered listEvents with something else');
       }
       events.push(...answer.events);
+      this.calendarsRead = typeof answer.calendarCount === 'number' ? answer.calendarCount : 1;
       pageToken = answer.nextPageToken;
       if (pageToken === undefined || pageToken.length === 0) return events;
     }

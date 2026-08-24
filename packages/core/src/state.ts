@@ -1,7 +1,7 @@
 // The replayed state. This is a projection of the event log, never a source of
 // truth in its own right, which is why it is plain data with no methods.
 
-import type { Project, Tag, Task } from './models.js';
+import type { Project, Tag, Task, WorkPeriod } from './models.js';
 import {
   DEFAULT_SYNCABLE_SETTINGS,
   cloneSyncableSettings,
@@ -35,13 +35,33 @@ export interface State {
   coversThrough?: string;
 }
 
+/**
+ * A day map of stretches, copied one level down.
+ *
+ * The period objects are never mutated in place once joined, so copying the
+ * arrays is a deep enough copy. Written as a loop rather than as an
+ * entries/map/fromEntries chain because this runs once per task on every
+ * replay, and for the overwhelming majority of tasks there is nothing here at
+ * all: the chain allocated three throwaway arrays each time to copy nothing.
+ */
+function cloneWorkPeriods(
+  src: Record<string, WorkPeriod[]> | undefined,
+): Record<string, WorkPeriod[]> {
+  const out: Record<string, WorkPeriod[]> = {};
+  if (src === undefined) return out;
+  for (const day of Object.keys(src)) out[day] = [...(src[day] ?? [])];
+  return out;
+}
+
 export function cloneTask(t: Task): Task {
   return {
     ...t,
     tagIds: [...t.tagIds],
     subTaskIds: [...t.subTaskIds],
     timeSpentOnDay: { ...t.timeSpentOnDay },
+    workPeriodsOnDay: cloneWorkPeriods(t.workPeriodsOnDay),
     calendarWritten: { ...t.calendarWritten },
+    calendarBlocks: { ...t.calendarBlocks },
   };
 }
 

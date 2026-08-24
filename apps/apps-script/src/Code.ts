@@ -135,11 +135,11 @@ function calendarExists(api: CalendarAdvancedService, calendarId: string): boole
   }
 }
 
-function writableCalendars(api: CalendarAdvancedService): CalendarListEntry[] {
+function calendarList(api: CalendarAdvancedService, minAccessRole: string): CalendarListEntry[] {
   const out: CalendarListEntry[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_CALENDAR_LIST_PAGES; page++) {
-    const args: Record<string, unknown> = { maxResults: 250, minAccessRole: 'writer', showHidden: true };
+    const args: Record<string, unknown> = { maxResults: 250, minAccessRole, showHidden: true };
     if (pageToken !== undefined) args['pageToken'] = pageToken;
     const answer = api.CalendarList.list(args);
     for (const item of answer.items ?? []) out.push(item);
@@ -147,6 +147,26 @@ function writableCalendars(api: CalendarAdvancedService): CalendarListEntry[] {
     if (pageToken === undefined || pageToken.length === 0) break;
   }
   return out;
+}
+
+/** Somewhere to write a log: owner or writer. Used to adopt or create it. */
+function writableCalendars(api: CalendarAdvancedService): CalendarListEntry[] {
+  return calendarList(api, 'writer');
+}
+
+/**
+ * Everything the account can see, for reading a day.
+ *
+ * `freeBusyReader` is included on purpose. A calendar shared at that level
+ * gives back events with no summary, and an hour that is gone with no title on
+ * it is still the answer to "what does my day look like": leaving those out is
+ * what makes an app's calendar disagree with the browser's.
+ *
+ * `showHidden` is on so the list carries every entry; which of them to read is
+ * decided by `pickReadableCalendars`, in a file that can be tested.
+ */
+function readableCalendars(api: CalendarAdvancedService): CalendarListEntry[] {
+  return calendarList(api, 'freeBusyReader');
 }
 
 /**
@@ -206,6 +226,7 @@ function makeCalendarPort(): CalendarPort | undefined {
   if (api === undefined) return undefined;
   return {
     list: (calendarId, opts) => api.Events.list(calendarId, opts),
+    calendars: () => readableCalendars(api),
     insert: (calendarId, resource) => api.Events.insert(resource, calendarId),
     update: (calendarId, eventId, resource) => api.Events.update(resource, calendarId, eventId),
     remove: (calendarId, eventId) => {

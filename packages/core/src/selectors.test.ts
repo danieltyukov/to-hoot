@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { replay } from './replay.js';
-import { completedPerDay, consistency, plannedToday, taskTotalTime, todayTasks, trackedToday } from './selectors.js';
+import {
+  completedPerDay,
+  consistency,
+  plannedToday,
+  taskTotalTime,
+  todayTasks,
+  trackedToday,
+  workPeriodsOn,
+} from './selectors.js';
 import type { Event } from './events.js';
 
 const NOW = new Date(2026, 7, 23, 12, 0).getTime();
@@ -163,5 +171,36 @@ describe('taskTotalTime', () => {
 
   it('is zero for a task that does not exist', () => {
     expect(taskTotalTime(replay([]), 'nobody')).toBe(0);
+  });
+});
+
+describe('workPeriodsOn', () => {
+  const at = (h: number, m: number): number => new Date(2026, 7, 23, h, m).getTime();
+
+  it('reads the day off replayed state, not off the log it was replayed from', () => {
+    // The lane has to survive a push: the log is truncated to what has not been
+    // acknowledged, and only state carries the rest of the day.
+    const state = replay([
+      task('t1', {}),
+      evt({ entityId: 't1', type: 'timeDelta', ts: at(11, 40), payload: { day: TODAY, ms: 40 * 60_000 } }),
+    ]);
+    expect(workPeriodsOn(state, TODAY)).toEqual([
+      { id: 't1:0', taskId: 't1', startMs: at(11, 0), endMs: at(11, 40) },
+    ]);
+    expect(workPeriodsOn(replay([], state), TODAY)).toHaveLength(1);
+  });
+
+  it('orders the stretches of every task together, earliest first', () => {
+    const state = replay([
+      task('t1', {}),
+      task('t2', {}),
+      evt({ entityId: 't1', type: 'timeDelta', ts: at(15, 0), payload: { day: TODAY, ms: 60_000 } }),
+      evt({ entityId: 't2', type: 'timeDelta', ts: at(11, 0), payload: { day: TODAY, ms: 60_000 } }),
+    ]);
+    expect(workPeriodsOn(state, TODAY).map(p => p.taskId)).toEqual(['t2', 't1']);
+  });
+
+  it('is empty for a day nothing was tracked on', () => {
+    expect(workPeriodsOn(replay([task('t1', {})]), TODAY)).toEqual([]);
   });
 });

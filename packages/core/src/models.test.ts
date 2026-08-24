@@ -30,7 +30,8 @@ describe('DEFAULT_TASK and newTask', () => {
   it('describes a task with no time, no tags and no children', () => {
     expect(DEFAULT_TASK).toEqual({
       title: '', isDone: false, projectId: 'inbox', tagIds: [], subTaskIds: [],
-      timeEstimate: 0, timeSpent: 0, timeSpentOnDay: {}, calendarWritten: {},
+      timeEstimate: 0, timeSpent: 0, timeSpentOnDay: {}, workPeriodsOnDay: {},
+      calendarWritten: {}, calendarBlocks: {},
     });
     expect(DEFAULT_TASK).not.toHaveProperty('isToday');
   });

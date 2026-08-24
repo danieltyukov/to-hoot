@@ -376,6 +376,25 @@ describe('App', () => {
     expect(screen.getByText('<1m tracked')).toBeInTheDocument();
   });
 
+  it('keeps the tracked lane after a push truncates the log it was drawn from', async () => {
+    // The regression this guards: the lane used to be inferred from the event
+    // log, which a push empties. The day's totals survived and its shape did
+    // not, so the timeline went blank a few seconds after every sync.
+    const { user, store, advance, container } = setup();
+    await addTask(user, 'Rewire the bench');
+
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    advance(FLUSH_MS + 45_000);
+    await user.click(screen.getByRole('button', { name: /^Stop timer/ }));
+    expect(container.querySelectorAll('.lane-tracked [data-tracked]').length).toBeGreaterThan(0);
+
+    const last = store.getSnapshot().events.at(-1)!.id;
+    act(() => store.markPushed(last));
+
+    expect(store.getSnapshot().events).toHaveLength(0);
+    expect(container.querySelectorAll('.lane-tracked [data-tracked]').length).toBeGreaterThan(0);
+  });
+
   it('shows a subtask under its parent and refuses a third level', async () => {
     const { user, container } = setup();
     await addTask(user, 'Rewire the bench');

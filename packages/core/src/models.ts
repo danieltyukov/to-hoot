@@ -1,6 +1,20 @@
 // Entity models, identity, and logical day strings. Pure data and pure
 // functions: nothing here touches the DOM, the network, or a platform API.
 
+/**
+ * One continuous stretch of tracked work, in epoch milliseconds.
+ *
+ * An inference, not a record, and the difference matters: a timeDelta carries
+ * an increment and the wall clock it was written at, so a delta of 30s stamped
+ * 14:00:30 covers 14:00:00 to 14:00:30. It is only as good as the clock of the
+ * device that wrote it. Good enough to show when a day went, and never a
+ * billing record.
+ */
+export interface WorkPeriod {
+  startMs: number;
+  endMs: number;
+}
+
 /** A unit of work. `timeSpent` is derived; see the rules below. */
 export interface Task {
   id: string;
@@ -24,6 +38,17 @@ export interface Task {
   timeSpent: number;
   /** "YYYY-MM-DD" -> milliseconds. This is the storage of record for time. */
   timeSpentOnDay: Record<string, number>;
+  /**
+   * DERIVED: "YYYY-MM-DD" -> when the work actually happened, joined and sorted.
+   * Never written from an update payload; replay builds it from the same
+   * timeDelta events `timeSpentOnDay` sums.
+   *
+   * It exists because the sum cannot say when. Inferring stretches from the log
+   * at the moment they are needed only works while the log still holds them,
+   * and a push truncates the log to what it has not acknowledged: the totals
+   * survive that, so the stretches have to survive it in the same place.
+   */
+  workPeriodsOnDay: Record<string, WorkPeriod[]>;
 
   /** "YYYY-MM-DD". Mutually exclusive with `dueWithTime`. */
   dueDay?: string;
@@ -33,6 +58,15 @@ export interface Task {
   calendarEventId?: string;
   /** Idempotency ledger for calendar write-back: day -> ms already written. */
   calendarWritten: Record<string, number>;
+  /**
+   * The other half of that ledger: day -> how many blocks are on the calendar.
+   *
+   * One block per work period, so the count moves when the day's shape changes
+   * and not only when its total does. Without it a day that went from three
+   * stretches to two would leave the third block behind forever, since nothing
+   * else records that it was ever written.
+   */
+  calendarBlocks: Record<string, number>;
 
   created: number;
   updated: number;
@@ -153,7 +187,9 @@ export const DEFAULT_TASK: Omit<Task, 'id' | 'created' | 'updated'> = {
   timeEstimate: 0,
   timeSpent: 0,
   timeSpentOnDay: {},
+  workPeriodsOnDay: {},
   calendarWritten: {},
+  calendarBlocks: {},
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -176,7 +212,9 @@ export function newTask(id: string, ts: number, patch: Partial<Task> = {}): Task
     tagIds: [],
     subTaskIds: [],
     timeSpentOnDay: {},
+    workPeriodsOnDay: {},
     calendarWritten: {},
+    calendarBlocks: {},
     id,
     created: ts,
     updated: ts,
