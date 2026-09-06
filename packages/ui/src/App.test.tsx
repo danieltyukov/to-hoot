@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Http } from '@to-hoot/core';
 
-import App, { TICK_MS } from './App.js';
+import App, { TICK_MS, type AppProps } from './App.js';
 import { memoryStore } from './platform/browser.js';
 import { FLUSH_MS, Store } from './store.js';
 import { SyncController } from './sync.js';
+import { fakeFrame } from './test/frame.js';
 
 const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
 
@@ -20,7 +21,15 @@ const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
  * the same sequence of calls, without the deadlock. That the interval exists and
  * runs at that rate is asserted separately.
  */
-function setup(options: { http?: Http; settings?: Record<string, unknown> } = {}) {
+function setup(
+  options: {
+    http?: Http;
+    settings?: Record<string, unknown>;
+    platform?: AppProps['platform'];
+    /** Leave the wizard in front, for the first-run cases. */
+    firstRun?: boolean;
+  } = {},
+) {
   const storage = new Map<string, string>();
   let clock = NOW;
   const store = new Store({
@@ -32,12 +41,12 @@ function setup(options: { http?: Http; settings?: Record<string, unknown> } = {}
     vault: memoryStore(),
   });
   // Past the wizard. First run is covered separately, below.
-  store.finishSetup();
+  if (!options.firstRun) store.finishSetup();
   // Before the render, deliberately: the calendar reads once on mount and then
   // on a ten minute timer, so settings that arrive afterwards are settings the
   // first read never sees.
   if (options.settings !== undefined) store.saveSettings(options.settings);
-  const utils = render(<App store={store} http={options.http} />);
+  const utils = render(<App store={store} http={options.http} platform={options.platform} />);
 
   const advance = (ms: number): void => {
     act(() => {
@@ -448,6 +457,66 @@ describe('App', () => {
     for (const control of container.querySelectorAll('button, input, [role="checkbox"]')) {
       expect(control, control.outerHTML).toHaveAccessibleName();
     }
+  });
+});
+
+describe('a window with no title bar', () => {
+  const shell = (frame: ReturnType<typeof fakeFrame>['frame']): AppProps['platform'] => ({
+    onResume: () => () => undefined,
+    window: frame,
+  });
+
+  it('draws no window controls where the host already has chrome', () => {
+    // A browser tab and a phone: a close button inside the page there would
+    // be a button that closes the wrong thing.
+    setup();
+    expect(screen.queryByRole('group', { name: 'Window' })).not.toBeInTheDocument();
+  });
+
+  it('draws them when the shell hands over its frame', () => {
+    const { frame } = fakeFrame();
+    const { container } = setup({ platform: shell(frame) });
+    const group = screen.getByRole('group', { name: 'Window' });
+    expect(within(group).getAllByRole('button')).toHaveLength(3);
+    // The layout reserves room for them, keyed off the same attribute.
+    expect(container.querySelector('.app')).toHaveAttribute('data-framed');
+  });
+
+  it('moves the window from the headers of every pane', () => {
+    // The top row is the title bar now, all the way across: the brand, the
+    // list heading and the day heading each grab the window.
+    const { frame } = fakeFrame();
+    const { container } = setup({ platform: shell(frame) });
+    const grips = [
+      container.querySelector('.brand-word')!,
+      within(container.querySelector('.pane-tasks')!).getByRole('heading', { name: 'Today' }),
+      within(container.querySelector('.pane-day')!).getByRole('heading', { name: 'Today' }),
+    ];
+    for (const grip of grips) fireEvent.mouseDown(grip, { button: 0, detail: 1 });
+    expect(frame.startDragging).toHaveBeenCalledTimes(3);
+  });
+
+  it('leaves the composer and the rows to themselves', async () => {
+    const { frame } = fakeFrame();
+    const { user } = setup({ platform: shell(frame) });
+    await addTask(user, 'Rewire the bench');
+    fireEvent.mouseDown(screen.getByLabelText('New task'), { button: 0, detail: 1 });
+    fireEvent.mouseDown(screen.getByText('Rewire the bench'), { button: 0, detail: 1 });
+    expect(frame.startDragging).not.toHaveBeenCalled();
+  });
+
+  it('keeps the controls and the grab through the first-run wizard', () => {
+    // Setup is the first thing a new install shows, and a window that
+    // cannot be moved or closed until setup is finished is a trap.
+    const { frame } = fakeFrame();
+    const { container } = setup({ platform: shell(frame), firstRun: true });
+    expect(screen.getByRole('region', { name: 'Setup' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Window' })).toBeInTheDocument();
+    fireEvent.mouseDown(container.querySelector('.wizard-head .brand-word')!, {
+      button: 0,
+      detail: 1,
+    });
+    expect(frame.startDragging).toHaveBeenCalledTimes(1);
   });
 });
 

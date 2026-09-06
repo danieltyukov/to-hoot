@@ -53,7 +53,7 @@ export function Settings({
 }: SettingsProps) {
   return (
     <section className="settings" aria-label="Settings">
-      <header className="settings-head">
+      <header className="settings-head" data-window-drag="">
         <button type="button" className="detail-back" aria-label="Close settings" onClick={onClose}>
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
             <path

@@ -42,6 +42,21 @@ entry as a bare path with no environment, and the workaround has to survive
 that. An explicit value in the environment is left alone. If a machine is still
 blank, add `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
+**No native title bar.** The window is created with `decorations: false`, so
+neither GTK nor the compositor draws a bar above it, the way VS Code and the
+GNOME apps do it. The app's own top row is the title bar: the pane headers
+carry `data-window-drag` and a press on one moves the window, a double press
+maximises it, and the three controls sit in the top-right corner over the day
+header, which reserves the room for them. All of it goes through the
+`WindowFrame` half of the `Platform` contract, implemented in
+`src/platform.ts` over `@tauri-apps/api/window`; `packages/ui` never names
+Tauri. Edge resizing needs nothing from us: Tauri's runtime hit-tests a 5px
+border on the webview of an undecorated window and begins the resize itself
+(`undecorated_resizing.rs` in tauri-runtime-wry). The four window permissions
+the controls need (`minimize`, `toggle-maximize`, `close`, `start-dragging`)
+are in `capabilities/default.json`; `close` goes through the same
+close-requested path as the native button did, so it hides to the tray.
+
 **Single instance.** `tauri-plugin-single-instance` is registered first in the
 builder chain and must stay there. Registered after another plugin it stops
 deduplicating without saying so, and a second launch would open a second copy

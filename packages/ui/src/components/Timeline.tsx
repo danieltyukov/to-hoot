@@ -110,7 +110,7 @@ export function Timeline({
 
   return (
     <section className="timeline" aria-label="Day timeline">
-      <header className="timeline-head">
+      <header className="timeline-head" data-window-drag="">
         <h2>{heading}</h2>
         {/* Permanent, not a hover reveal: the comparison is the point of the
             view, and a number you have to go looking for is a number nobody

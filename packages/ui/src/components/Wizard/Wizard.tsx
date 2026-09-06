@@ -60,7 +60,7 @@ export function Wizard({ http, settings, onSave, onDone, mcpServerPath }: Wizard
 
   return (
     <section className="wizard" aria-label="Setup">
-      <header className="wizard-head">
+      <header className="wizard-head" data-window-drag="">
         <div className="brand">
           <OwlMark size={22} label={null} className="brand-mark" />
           <Wordmark className="brand-word" />

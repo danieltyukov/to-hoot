@@ -75,6 +75,35 @@ export interface FileStore {
   remove(name: string): Promise<void>;
 }
 
+/**
+ * The window's frame, for a shell that draws none.
+ *
+ * The desktop window has no native title bar. The app's own top row is the
+ * title bar, so the three controls the OS would have drawn, and the grab that
+ * moves the window, have to come from the shell. Only a shell that owns a
+ * window supplies this: a browser tab and an Android activity have chrome of
+ * their own and leave it undefined, which is what hides the controls there.
+ */
+export interface WindowFrame {
+  minimize(): Promise<void>;
+  /** Maximises, or restores if already maximised. */
+  toggleMaximize(): Promise<void>;
+  /**
+   * Asks the window to close, the way the native close button would have. What
+   * that means is the shell's decision: the desktop hides to the tray rather
+   * than quitting, so a running timer keeps running.
+   */
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  /** Fires after the window is maximised or restored, by any means. */
+  onMaximizedChange(cb: (maximized: boolean) => void): Unsubscribe;
+  /**
+   * Begins moving the window with the pointer. Only meaningful while a button
+   * is held, so it is called from a pointer-down handler and nowhere else.
+   */
+  startDragging(): Promise<void>;
+}
+
 export interface Platform {
   http: Http;
   /** Settings, and nothing larger. See `files` for the log. */
@@ -98,4 +127,9 @@ export interface Platform {
    * browser have no such signal and infer idleness from a wall-clock gap.
    */
   idleSeconds?(): Promise<number>;
+  /**
+   * The window controls and the grab that moves the window. Desktop only: the
+   * window there has no native title bar, and the app draws what it took away.
+   */
+  window?: WindowFrame;
 }

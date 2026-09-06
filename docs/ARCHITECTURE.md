@@ -13,9 +13,10 @@ and the disagreement is a bug worth reporting.
 
 There is no server. `packages/ui` is the whole application; the desktop and
 mobile targets are shells supplying a `Platform` implementation for HTTP, a
-key-value store, notifications and resume. State is never written directly. Every
-change is an event appended to a log, and state is always the result of replaying
-that log.
+key-value store, notifications and resume, and on the desktop the window frame,
+since that window has no native title bar. State is never written directly.
+Every change is an event appended to a log, and state is always the result of
+replaying that log.
 
 That constraint is the reason two devices can be offline at the same time and
 still agree afterwards.
