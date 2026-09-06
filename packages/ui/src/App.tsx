@@ -21,6 +21,7 @@ import { TaskDetail } from './components/TaskDetail.js';
 import { TaskList } from './components/TaskList.js';
 import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
+import { WindowControls, windowGrab } from './components/WindowControls.js';
 import { Settings } from './components/Settings/Settings.js';
 import { Wizard } from './components/Wizard/Wizard.js';
 import { browserHttp, browserStore } from './platform/browser.js';
@@ -55,8 +56,11 @@ export interface AppProps {
   http?: Http;
   /** Absolute path to the built MCP server, for the command the wizard prints. */
   mcpServerPath?: string;
-  /** The shell. Used for the resume signal; absent in tests and in SSR. */
-  platform?: Pick<Platform, 'onResume'> | undefined;
+  /**
+   * The shell. Used for the resume signal and, on a desktop whose window has
+   * no title bar, for the window controls. Absent in tests and in SSR.
+   */
+  platform?: Pick<Platform, 'onResume' | 'window'> | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -308,20 +312,37 @@ export default function App({
     setPane('tasks');
   };
 
+  /*
+   * The window frame, where the shell draws none. The desktop hands over its
+   * controls and the app puts them in its own top-right corner, in place of
+   * the title bar that is not there. The browser and the phone hand over
+   * nothing and get nothing, since their chrome is already on screen. Both
+   * roots carry the controls and the grab, so the window can be moved and
+   * closed from the wizard as well as from the app.
+   */
+  const frame = platform?.window;
+  const framed = frame === undefined ? undefined : '';
+  const grab = windowGrab(frame);
+  const controls = frame === undefined ? null : <WindowControls frame={frame} />;
+
   if (!snapshot.setupDone) {
     return (
-      <Wizard
-        http={http}
-        settings={snapshot.settings}
-        onSave={patch => store.saveSettings(patch)}
-        onDone={() => store.finishSetup()}
-        mcpServerPath={mcpServerPath}
-      />
+      <div className="app-frame" data-framed={framed} onMouseDown={grab}>
+        {controls}
+        <Wizard
+          http={http}
+          settings={snapshot.settings}
+          onSave={patch => store.saveSettings(patch)}
+          onDone={() => store.finishSetup()}
+          mcpServerPath={mcpServerPath}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="app" data-pane={pane}>
+    <div className="app" data-pane={pane} data-framed={framed} onMouseDown={grab}>
+      {controls}
       <div className="pane pane-lists">
         <Sidebar
           projects={projects}

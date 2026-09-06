@@ -67,3 +67,56 @@ export function CheckGlyph(props: GlyphProps) {
     </svg>
   );
 }
+
+/*
+ * The window controls, for the desktop shell that draws no native title bar.
+ * Drawn to the same 16px grid and the same 1.2 to 1.6 stroke as the rest, so
+ * they read as part of the interface rather than as a widget borrowed from
+ * whichever toolkit the window happens to be in.
+ */
+
+export function MinimizeGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M4 10.5 H12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+export function MaximizeGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="4" y="4" width="8" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </Glyph>
+  );
+}
+
+/** Two offset frames: the window is maximised and this puts it back. */
+export function RestoreGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M6.5 5.5 V4.5 A1 1 0 0 1 7.5 3.5 H11.5 A1 1 0 0 1 12.5 4.5 V8.5 A1 1 0 0 1 11.5 9.5 H10.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+      <rect x="3.5" y="6.5" width="7" height="6" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </Glyph>
+  );
+}
+
+export function CloseGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </Glyph>
+  );
+}

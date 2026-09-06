@@ -56,7 +56,7 @@ export function Sidebar({
 
   return (
     <nav className="sidebar" aria-label="Views">
-      <div className="brand">
+      <div className="brand" data-window-drag="">
         {/* The logo, not the icon: it has room here, and 22px is above the size
             where its brow and eyes close up. OwlIcon keeps the 16px cases, the
             favicon and the launcher. The word is right beside it, so the mark

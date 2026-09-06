@@ -33,6 +33,7 @@ import type {
   NotifyOptions,
   Platform,
   Unsubscribe,
+  WindowFrame,
 } from '@to-hoot/core';
 
 /**
@@ -213,6 +214,45 @@ async function idleSeconds(): Promise<number> {
   }
 }
 
+/**
+ * The window controls, and the grab that moves the window.
+ *
+ * The window is created with `decorations: false` (tauri.conf.json), so there
+ * is no native title bar: none of GTK's, and none of the compositor's. The app
+ * draws the three buttons itself, in its own top row, and every one of them
+ * comes back here. `close` goes through the same close-requested path the
+ * native button used, which the Rust side answers by hiding to the tray.
+ *
+ * What the webview may ask for is listed in `capabilities/default.json`; a call
+ * this file makes that the capability does not grant is refused at runtime, so
+ * the two have to move together.
+ */
+const frame: WindowFrame = {
+  minimize: () => getCurrentWindow().minimize(),
+  toggleMaximize: () => getCurrentWindow().toggleMaximize(),
+  close: () => getCurrentWindow().close(),
+  isMaximized: () => getCurrentWindow().isMaximized(),
+  onMaximizedChange(cb) {
+    // There is no maximise event, only a resize, and a resize is what a
+    // maximise is. The state is asked for after each one rather than inferred
+    // from the size, so a restore to the same size as before still reads right.
+    const unlisten = getCurrentWindow().onResized(() => {
+      void getCurrentWindow()
+        .isMaximized()
+        .then(cb, () => undefined);
+    });
+    let cancelled = false;
+    void unlisten.then((off) => {
+      if (cancelled) off();
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((off) => off());
+    };
+  },
+  startDragging: () => getCurrentWindow().startDragging(),
+};
+
 export const platform: Platform = {
   http,
   store,
@@ -221,6 +261,7 @@ export const platform: Platform = {
   cancelNotification,
   onResume,
   idleSeconds,
+  window: frame,
 };
 
 declare global {

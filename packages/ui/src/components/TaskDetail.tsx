@@ -93,7 +93,7 @@ export function TaskDetail({
 
   return (
     <section className="detail" aria-label={`Task: ${task.title}`}>
-      <header className="detail-head">
+      <header className="detail-head" data-window-drag="">
         <button type="button" className="detail-back" aria-label="Back to the list" onClick={onClose}>
           <BackGlyph />
         </button>

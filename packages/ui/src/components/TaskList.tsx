@@ -78,7 +78,7 @@ export function TaskList({
   return (
     <section className="list" aria-label={heading ?? 'Tasks'}>
       {heading === undefined ? null : (
-        <header className="list-head">
+        <header className="list-head" data-window-drag="">
           <h2>{heading}</h2>
           <span className="micro">{open.length} left</span>
         </header>

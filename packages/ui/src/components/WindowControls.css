@@ -1,0 +1,49 @@
+/*
+ * The window controls sit in the app's top-right corner, over the far end of
+ * whichever pane header is there. They are out of the flow on purpose: the
+ * header they cover reserves --window-controls-w for them (App.css), and the
+ * position is the window's corner regardless of which pane is showing.
+ */
+
+.window-controls {
+  position: absolute;
+  top: 11px;
+  inset-inline-end: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  width: var(--window-controls-w);
+  padding-inline-end: 6px;
+  /* Above a pinned pane header, which takes 1 in the narrow layout. */
+  z-index: 2;
+}
+
+/* The same shape as the sidebar's add control: a small square, the control
+   radius, and a tint under the pointer. Nothing here is drawn like a toolkit's
+   title bar button, because this is not a toolkit's title bar. */
+.window-control {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-control);
+  color: var(--faint);
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.window-control:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.window-control:active {
+  background-color: var(--pressed);
+}
+
+/* Close is the one that costs something to press by mistake, so it is the one
+   that says so under the pointer. */
+.window-close:hover {
+  color: var(--danger);
+}

@@ -7,11 +7,35 @@
  */
 
 .app {
+  /* The containing block for the window controls, which sit in its corner. */
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(300px, 400px);
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   background: var(--bg);
+}
+
+/* The wizard's root, on first run: the same corner for the same controls. */
+.app-frame {
+  position: relative;
+  height: 100%;
+}
+
+/*
+ * With no title bar, the window controls sit over the far end of the top row,
+ * and the header under them keeps its own text out from under them. The day
+ * header may wrap: at the narrow end of its pane there is no room for the
+ * heading, the totals and the controls on one line, and a total hidden under
+ * a button is a total nobody sees.
+ */
+[data-framed] .timeline-head {
+  flex-wrap: wrap;
+  padding-inline-end: var(--window-controls-w);
+}
+
+[data-framed] .wizard-head {
+  padding-inline-end: var(--window-controls-w);
 }
 
 .pane {
@@ -111,6 +135,20 @@
   .app-foot {
     grid-row: 2;
     flex-wrap: wrap;
+  }
+
+  /* One pane fills the window here and its header scrolls with it, so under
+     the window controls the header is pinned instead: the controls then
+     always sit over a header, and never over a row's own buttons passing
+     underneath. */
+  [data-framed] .list-head,
+  [data-framed] .detail-head,
+  [data-framed] .settings-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-inline-end: var(--window-controls-w);
+    background: var(--surface);
   }
 
   .tabs {
