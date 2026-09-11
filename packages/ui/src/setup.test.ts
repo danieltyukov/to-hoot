@@ -17,6 +17,7 @@ import {
   testCalendar,
   testIcs,
   testSync,
+  endpointUrl,
   testWorker,
   verifyToken,
   wranglerCommands,
@@ -565,6 +566,43 @@ describe('the generated commands', () => {
     expect(wranglerCommands({ pathSecret: 'a', owner: 'o', repo: 'r', branch: 'master' })).toContain(
       'GITHUB_BRANCH      # master',
     );
+  });
+
+  describe('composing the endpoint URL', () => {
+    // The step people get wrong by hand, and every way of getting it wrong
+    // arrives as the same 404 a Worker that is down would give.
+    const SECRET = 'abc123';
+
+    it('adds the path the endpoint answers on', () => {
+      expect(endpointUrl('https://to-hoot-mcp.someone.workers.dev', SECRET)).toBe(
+        'https://to-hoot-mcp.someone.workers.dev/mcp/abc123',
+      );
+    });
+
+    it('does not leave two slashes where wrangler printed a trailing one', () => {
+      expect(endpointUrl('https://to-hoot-mcp.someone.workers.dev/', SECRET)).toBe(
+        'https://to-hoot-mcp.someone.workers.dev/mcp/abc123',
+      );
+    });
+
+    it('adds the scheme to a hostname copied out of a terminal', () => {
+      expect(endpointUrl('to-hoot-mcp.someone.workers.dev', SECRET)).toBe(
+        'https://to-hoot-mcp.someone.workers.dev/mcp/abc123',
+      );
+    });
+
+    it('leaves a finished endpoint exactly as it was pasted', () => {
+      // Someone pasting one knows which secret is deployed on it, and that is
+      // not necessarily the one held here: rotating it in the app changes
+      // nothing about the Worker until the commands are run again.
+      const pasted = 'https://to-hoot-mcp.someone.workers.dev/mcp/olderSecret';
+      expect(endpointUrl(pasted, SECRET)).toBe(pasted);
+    });
+
+    it('is empty until there is something to compose', () => {
+      expect(endpointUrl('', SECRET)).toBe('');
+      expect(endpointUrl('   ', SECRET)).toBe('');
+    });
   });
 
   it('never puts a secret in a URL or a file', () => {

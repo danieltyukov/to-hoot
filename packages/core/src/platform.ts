@@ -132,4 +132,16 @@ export interface Platform {
    * window there has no native title bar, and the app draws what it took away.
    */
   window?: WindowFrame;
+  /**
+   * Opens a URL wherever the host opens links, which is a browser that is not
+   * this one.
+   *
+   * A shell that leaves this undefined is saying its webview already follows a
+   * link on its own, which is true of a browser tab and not of a Tauri window:
+   * there, an anchor with no handler navigates the application away from
+   * itself, or does nothing at all. The setup steps link to Cloudflare and to
+   * Claude, so this is what makes those links work in the two places the app
+   * actually ships.
+   */
+  openUrl?(url: string): Promise<void>;
 }

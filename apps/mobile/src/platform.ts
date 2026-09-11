@@ -7,6 +7,7 @@
 
 import { CapacitorHttp } from '@capacitor/core';
 import { App } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -273,6 +274,19 @@ export interface MobilePlatform extends Platform {
 // No `idleSeconds`. Android has no OS-level idle signal to read, and the app
 // infers idleness from the wall-clock gap across a resume instead, which is
 // what `onResume` is for.
+/**
+ * Opens a URL in the phone's browser, in a Custom Tab over the app.
+ *
+ * Not `window.open`: the WebView is the application, so a link followed inside
+ * it replaces the app with a web page and leaves no way back to the task list.
+ * A Custom Tab is the system browser, with the user's own session and their own
+ * password manager, which matters when the link is a sign-in page at Cloudflare
+ * or at Claude.
+ */
+async function openUrl(url: string): Promise<void> {
+  await Browser.open({ url });
+}
+
 export const platform: MobilePlatform = {
   http,
   store,
@@ -281,6 +295,7 @@ export const platform: MobilePlatform = {
   cancelNotification,
   onResume,
   haptics,
+  openUrl,
 };
 
 declare global {

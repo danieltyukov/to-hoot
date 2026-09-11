@@ -44,13 +44,13 @@ blank, add `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
 **No native title bar.** The window is created with `decorations: false`, so
 neither GTK nor the compositor draws a bar above it, the way VS Code and the
-GNOME apps do it. The app's own top row is the title bar: the pane headers
-carry `data-window-drag` and a press on one moves the window, a double press
-maximises it, and the three controls sit in the top-right corner over the day
-header, which reserves the room for them. All of it goes through the
-`WindowFrame` half of the `Platform` contract, implemented in
-`src/platform.ts` over `@tauri-apps/api/window`; `packages/ui` never names
-Tauri. Edge resizing needs nothing from us: Tauri's runtime hit-tests a 5px
+GNOME apps do it. The app draws its own instead: one strip across the window
+with the brand at the left, what the window is showing in the middle, and the
+three controls at the right. The strip is a drag region, and so are the pane
+headers under it: a press moves the window, a double press maximises it. All
+of it goes through the `WindowFrame` half of the `Platform` contract,
+implemented in `src/platform.ts` over `@tauri-apps/api/window`; `packages/ui`
+never names Tauri. Edge resizing needs nothing from us: Tauri's runtime hit-tests a 5px
 border on the webview of an undecorated window and begins the resize itself
 (`undecorated_resizing.rs` in tauri-runtime-wry). The four window permissions
 the controls need (`minimize`, `toggle-maximize`, `close`, `start-dragging`)
@@ -64,6 +64,14 @@ writing to the same event log.
 
 **The tray is a menu.** Linux emits no click events for a tray icon, so nothing
 hangs off a click handler. Closing the window hides it; Quit is in the tray menu.
+
+**A link opens outside this window.** An anchor in a Tauri window is not a link
+to anywhere: the window is the application, so following one either navigates
+the app away from itself or, under this CSP, does nothing at all. The setup
+steps link to Cloudflare and to Claude, so the shell implements `openUrl` over
+`tauri-plugin-opener`, which runs the open in Rust through xdg-open. Which URLs
+it will accept is `opener:allow-open-url` in the capability file, not a decision
+made in TypeScript.
 
 **What the app may reach** is in `src-tauri/capabilities/default.json`, not in
 the CSP: `tauri-plugin-http` runs requests in Rust, outside the webview, which

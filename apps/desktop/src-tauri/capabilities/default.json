@@ -22,6 +22,15 @@
     "fs:allow-remove",
     "store:default",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://dash.cloudflare.com/*" },
+        { "url": "https://claude.ai/*" },
+        { "url": "https://github.com/*" },
+        { "url": "https://developers.cloudflare.com/*" }
+      ]
+    },
+    {
       "identifier": "http:default",
       "allow": [
         { "url": "https://api.github.com/*" },

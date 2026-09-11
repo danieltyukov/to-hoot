@@ -88,6 +88,18 @@ function browserOnResume(cb: () => void): Unsubscribe {
   return () => document.removeEventListener('visibilitychange', handler);
 }
 
+/**
+ * A new tab, with the opener severed.
+ *
+ * `noopener` is not decoration here: without it the page that opens keeps a
+ * handle on this one through `window.opener` and can navigate it somewhere
+ * else, which is a real thing that happens to pages linking out to a
+ * dashboard someone is about to sign into.
+ */
+async function browserOpenUrl(url: string): Promise<void> {
+  globalThis.window?.open(url, '_blank', 'noopener,noreferrer');
+}
+
 export const browserPlatform: Platform = {
   http: browserHttp,
   store: browserStore(),
@@ -95,6 +107,7 @@ export const browserPlatform: Platform = {
   notify: browserNotify,
   cancelNotification: browserCancelNotification,
   onResume: browserOnResume,
+  openUrl: browserOpenUrl,
   // No idleSeconds. A browser cannot see what the user is doing in another
   // window, and guessing from this page's own events would be a worse answer
   // than admitting there is none.

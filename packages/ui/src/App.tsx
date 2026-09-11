@@ -58,10 +58,11 @@ export interface AppProps {
   /** Absolute path to the built MCP server, for the command the wizard prints. */
   mcpServerPath?: string;
   /**
-   * The shell. Used for the resume signal and, on a desktop whose window has
-   * no title bar, for the window controls. Absent in tests and in SSR.
+   * The shell. Used for the resume signal, for the window a desktop draws no
+   * title bar for, and for opening a link somewhere that is not this window.
+   * Absent in tests and in SSR.
    */
-  platform?: Pick<Platform, 'onResume' | 'window'> | undefined;
+  platform?: Pick<Platform, 'onResume' | 'window' | 'openUrl'> | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -338,6 +339,7 @@ export default function App({
             onSave={patch => store.saveSettings(patch)}
             onDone={() => store.finishSetup()}
             mcpServerPath={mcpServerPath}
+            openUrl={platform?.openUrl}
           />
         </div>
       </div>
@@ -401,6 +403,7 @@ export default function App({
               onImport={text => store.importJson(text)}
               onClose={() => setShowSettings(false)}
               mcpServerPath={mcpServerPath}
+              openUrl={platform?.openUrl}
             />
           ) : selected === undefined ? (
             <TaskList

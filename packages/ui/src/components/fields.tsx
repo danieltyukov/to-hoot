@@ -58,6 +58,44 @@ export function Copyable({
   );
 }
 
+/**
+ * A link out of the app, drawn as a button.
+ *
+ * Always an anchor, so a browser follows it the way a browser follows links,
+ * with a middle click and a context menu and everything else people expect. The
+ * two shells hand over `openUrl` and it is handled instead: a Tauri window and
+ * an Android WebView are the application, so a link followed inside one either
+ * navigates the app away from itself or silently does nothing.
+ */
+export function ExternalLink({
+  href,
+  openUrl,
+  children,
+}: {
+  href: string;
+  openUrl?: ((url: string) => Promise<void>) | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      className="button link-button"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={
+        openUrl === undefined
+          ? undefined
+          : event => {
+              event.preventDefault();
+              void openUrl(href);
+            }
+      }
+    >
+      {children}
+    </a>
+  );
+}
+
 export interface SecretFieldProps {
   id: string;
   label: string;

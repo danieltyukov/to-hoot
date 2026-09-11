@@ -112,6 +112,22 @@
   font-size: 10px;
 }
 
+/* The Claude step's three stages each hold a field, a code pane and a row of
+   buttons, so they need the room a one-line numbered item does not. */
+.step-stages {
+  gap: 22px;
+}
+
+.step-stages li {
+  gap: 10px;
+}
+
+.step-stage-head {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--text);
+}
+
 .step-actions {
   display: flex;
   align-items: baseline;
