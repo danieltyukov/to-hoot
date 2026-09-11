@@ -5,18 +5,17 @@ import { CloseGlyph, MaximizeGlyph, MinimizeGlyph, RestoreGlyph } from '../icons
 import './WindowControls.css';
 
 /*
- * The three buttons a title bar would have carried, for a window that has no
- * title bar.
+ * The three buttons a native title bar would have carried, at the end of the
+ * one the app draws itself.
  *
- * The desktop window is undecorated: no native bar, no compositor bar, only
- * the app's own top row. That row is dense with the app's own headings, so the
- * controls sit over its far end rather than in a strip of their own, which is
- * what an extra bar across the top would have been. The pane header under
- * them reserves the width (`--window-controls-w`) so nothing is covered.
+ * The desktop window is undecorated: no native bar and no compositor bar, so
+ * `TitleBar` is the window's top strip and this is the cluster in its corner.
+ * Every press comes back to the shell through `WindowFrame`, which is what
+ * keeps `packages/ui` free of any mention of Tauri.
  *
- * Rendered only when the shell hands over a `WindowFrame`. In a browser tab or
- * on a phone the host already has chrome, and a second close button inside the
- * page would be a button that closes the wrong thing.
+ * Rendered only where there is a frame to drive. In a browser tab or on a
+ * phone the host already has chrome, and a second close button inside the page
+ * would be a button that closes the wrong thing.
  */
 
 export interface WindowControlsProps {
@@ -104,10 +103,10 @@ const CLICKABLE = [
  * The gesture a title bar gives a window: press and drag to move it, press
  * twice to maximise or restore it.
  *
- * One handler on the root, rather than one per header. The pane headers carry
- * `data-window-drag` to say they are the title bar now, and the root decides
- * what a press inside one means. A press on a control inside the header is a
- * press on the control; a press anywhere else in it is a grab. Mouse events
+ * One handler on the root, rather than one per region. The title bar and the
+ * pane headers carry `data-window-drag`, and the root decides what a press
+ * inside one means. A press on a control inside a drag region is a press on
+ * the control; a press anywhere else in it is a grab. Mouse events
  * rather than pointer events, because `detail` (the click count) is what tells
  * a grab from a double press, and pointer events do not carry it.
  *

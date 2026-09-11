@@ -163,4 +163,26 @@ describe('the rules the component tests lean on', () => {
     expect(tokens).toMatch(/--row-h:\s*36px/);
     expect(tokens).toMatch(/@media \(pointer: coarse\)\s*\{\s*:root\s*\{\s*--row-h:\s*44px/);
   });
+
+  it('shows the brand once, in the title bar, while the window is framed', () => {
+    // Both are rendered: the sidebar's copy is what a browser tab and a phone
+    // see, and a window with its own title bar would show the word twice.
+    const app = FILES.find(f => f.name === 'App.css')!.css;
+    expect(app).toMatch(/\[data-framed\] \.sidebar \.brand\s*\{[^}]*display:\s*none/);
+  });
+
+  it('draws the today ring inside its own cell', () => {
+    // A positive offset put 2.5px of ring on each side of an 11px cell sitting
+    // in a 3px gap, which closed the gap and hung over the end of the row.
+    const grid = FILES.find(f => f.name.endsWith('ConsistencyGrid.css'))!.css;
+    const today = /\.grid-cell\[data-today\]\s*\{([^}]*)\}/.exec(grid)![1]!;
+    expect(today).toMatch(/outline-offset:\s*-\d/);
+  });
+
+  it('holds both footer blocks to one height, so their labels share a line', () => {
+    // An 11px strip of squares beside a 17px number, each centred on its own,
+    // is what put "last 14 days" three pixels below "today".
+    const app = FILES.find(f => f.name === 'App.css')!.css;
+    expect(app).toMatch(/\.foot-lines\s*\{[^}]*grid-template-rows:\s*auto minmax\(/);
+  });
 });

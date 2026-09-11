@@ -103,11 +103,10 @@
   --sidebar-min: 180px;
   --sidebar-max: 240px;
 
-  /* The three window controls the desktop draws in place of a title bar: three
-     26px buttons, the gaps between them, the inset from the window edge, and a
-     breath of room before the first. The pane header underneath reserves the
-     same width, so the two share a value. */
-  --window-controls-w: 96px;
+  /* The title bar the desktop draws in place of the native one. 36px is the
+     height every frameless desktop application settles on, and it is the one
+     row in the app that is chrome rather than content. */
+  --titlebar-h: 36px;
 
   color-scheme: light;
 }

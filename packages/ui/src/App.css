@@ -6,36 +6,37 @@
  * a fix in the task list is made once.
  */
 
-.app {
-  /* The containing block for the window controls, which sit in its corner. */
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(300px, 400px);
-  grid-template-rows: minmax(0, 1fr) auto;
+/*
+ * The window, which is the title bar (when there is one to draw) above
+ * everything else. Unframed this is a wrapper with no visual effect at all:
+ * a browser tab and an Android activity have chrome of their own.
+ */
+.shell {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   background: var(--bg);
 }
 
-/* The wizard's root, on first run: the same corner for the same controls. */
+.app {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(300px, 400px);
+  grid-template-rows: minmax(0, 1fr) auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* The wizard's root, on first run, under the same title bar. */
 .app-frame {
-  position: relative;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-/*
- * With no title bar, the window controls sit over the far end of the top row,
- * and the header under them keeps its own text out from under them. The day
- * header may wrap: at the narrow end of its pane there is no room for the
- * heading, the totals and the controls on one line, and a total hidden under
- * a button is a total nobody sees.
- */
-[data-framed] .timeline-head {
-  flex-wrap: wrap;
-  padding-inline-end: var(--window-controls-w);
-}
-
-[data-framed] .wizard-head {
-  padding-inline-end: var(--window-controls-w);
+/* The brand belongs in one place. With a title bar carrying it, the sidebar's
+   own copy would be the same word twice, eleven pixels apart. */
+[data-framed] .sidebar .brand {
+  display: none;
 }
 
 .pane {
@@ -82,11 +83,21 @@
   gap: 9px;
 }
 
-/* Label over value, so each block stays narrow enough that the pair fits a
-   360px phone on one row instead of stacking into a second. */
+/*
+ * Label over content, so each block stays narrow enough that the pair fits a
+ * 360px phone on one row instead of stacking into a second.
+ *
+ * The content row is held to the height of a line of text, which is what makes
+ * the two blocks the same height and therefore puts their two labels on one
+ * line. Without it the 11px grid strip is shorter than the number beside it,
+ * `align-items: center` centres each block on its own, and "last 14 days" sits
+ * three pixels below "today".
+ */
 .foot-lines {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(calc(var(--fs-mini) * 1.45), auto);
+  align-items: center;
+  justify-items: start;
   gap: 4px;
 }
 
@@ -135,20 +146,6 @@
   .app-foot {
     grid-row: 2;
     flex-wrap: wrap;
-  }
-
-  /* One pane fills the window here and its header scrolls with it, so under
-     the window controls the header is pinned instead: the controls then
-     always sit over a header, and never over a row's own buttons passing
-     underneath. */
-  [data-framed] .list-head,
-  [data-framed] .detail-head,
-  [data-framed] .settings-head {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding-inline-end: var(--window-controls-w);
-    background: var(--surface);
   }
 
   .tabs {

@@ -36,9 +36,17 @@
   opacity: 0.7;
 }
 
-/* Today. Without it the row is fourteen squares with no anchor and no
-   direction; with it, it is a record that ends here. */
+/*
+ * Today. Without it the row is fourteen squares with no anchor and no
+ * direction; with it, it is a record that ends here.
+ *
+ * A negative offset, so the ring is drawn inside the cell's own 11px box. At
+ * +1.5px it was 2.5px of ring on each side of a cell sitting in a 3px gap: it
+ * closed the gap to its neighbour and hung over the end of the row, which made
+ * a strip of evenly spaced squares look unevenly spaced at the one cell that
+ * mattered most.
+ */
 .grid-cell[data-today] {
-  outline: 1px solid var(--border-strong);
-  outline-offset: 1.5px;
+  outline: 1px solid var(--faint);
+  outline-offset: -1px;
 }

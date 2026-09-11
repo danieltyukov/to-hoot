@@ -460,35 +460,60 @@ describe('App', () => {
   });
 });
 
-describe('a window with no title bar', () => {
+describe('the title bar the app draws itself', () => {
   const shell = (frame: ReturnType<typeof fakeFrame>['frame']): AppProps['platform'] => ({
     onResume: () => () => undefined,
     window: frame,
   });
 
-  it('draws no window controls where the host already has chrome', () => {
+  it('draws none where the host already has chrome', () => {
     // A browser tab and a phone: a close button inside the page there would
     // be a button that closes the wrong thing.
-    setup();
+    const { container } = setup();
+    expect(container.querySelector('.titlebar')).toBeNull();
     expect(screen.queryByRole('group', { name: 'Window' })).not.toBeInTheDocument();
   });
 
-  it('draws them when the shell hands over its frame', () => {
+  it('draws one strip with the three controls when the shell hands over its frame', () => {
     const { frame } = fakeFrame();
     const { container } = setup({ platform: shell(frame) });
-    const group = screen.getByRole('group', { name: 'Window' });
+    const bar = container.querySelector('.titlebar')!;
+    expect(bar).toBeInTheDocument();
+    const group = within(bar as HTMLElement).getByRole('group', { name: 'Window' });
     expect(within(group).getAllByRole('button')).toHaveLength(3);
-    // The layout reserves room for them, keyed off the same attribute.
-    expect(container.querySelector('.app')).toHaveAttribute('data-framed');
+    // The layout keys off the same attribute, one element above the panes.
+    expect(container.querySelector('.shell')).toHaveAttribute('data-framed');
   });
 
-  it('moves the window from the headers of every pane', () => {
-    // The top row is the title bar now, all the way across: the brand, the
-    // list heading and the day heading each grab the window.
+  it('says what the window is showing, as a title bar does', async () => {
+    const { frame } = fakeFrame();
+    const { container, user } = setup({ platform: shell(frame) });
+    const where = (): string | null => container.querySelector('.titlebar-where')!.textContent;
+
+    expect(where()).toBe('Today');
+
+    // The open task, the way an editor names the open file.
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByText('Rewire the bench'));
+    expect(where()).toBe('Rewire the bench');
+
+    await user.click(screen.getByRole('button', { name: 'Back to the list' }));
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(where()).toBe('Settings');
+  });
+
+  it('is not announced, because every word of it is a heading underneath', () => {
+    // Read out, it would say "Today" twice before reaching the task list.
+    const { frame } = fakeFrame();
+    const { container } = setup({ platform: shell(frame) });
+    expect(container.querySelector('.titlebar-title')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('moves the window from the strip and from the headers of every pane', () => {
     const { frame } = fakeFrame();
     const { container } = setup({ platform: shell(frame) });
     const grips = [
-      container.querySelector('.brand-word')!,
+      container.querySelector('.titlebar .brand-word')!,
       within(container.querySelector('.pane-tasks')!).getByRole('heading', { name: 'Today' }),
       within(container.querySelector('.pane-day')!).getByRole('heading', { name: 'Today' }),
     ];
@@ -505,14 +530,15 @@ describe('a window with no title bar', () => {
     expect(frame.startDragging).not.toHaveBeenCalled();
   });
 
-  it('keeps the controls and the grab through the first-run wizard', () => {
+  it('keeps the strip and the grab through the first-run wizard', () => {
     // Setup is the first thing a new install shows, and a window that
     // cannot be moved or closed until setup is finished is a trap.
     const { frame } = fakeFrame();
     const { container } = setup({ platform: shell(frame), firstRun: true });
     expect(screen.getByRole('region', { name: 'Setup' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Window' })).toBeInTheDocument();
-    fireEvent.mouseDown(container.querySelector('.wizard-head .brand-word')!, {
+    expect(container.querySelector('.titlebar-where')).toHaveTextContent('Setup');
+    fireEvent.mouseDown(container.querySelector('.titlebar .brand-word')!, {
       button: 0,
       detail: 1,
     });
