@@ -26,6 +26,8 @@ export interface WizardProps {
   onDone: () => void;
   /** Absolute path to the built MCP server, for the generated command. */
   mcpServerPath?: string;
+  /** The shell's way of opening a link, where the host will not follow one. */
+  openUrl?: ((url: string) => Promise<void>) | undefined;
 }
 
 /*
@@ -41,7 +43,7 @@ export interface WizardProps {
  * well-formed URL and then fails a week later, in the background, with no
  * wizard on screen, has moved the problem rather than solved it.
  */
-export function Wizard({ http, settings, onSave, onDone, mcpServerPath }: WizardProps) {
+export function Wizard({ http, settings, onSave, onDone, mcpServerPath, openUrl }: WizardProps) {
   const [at, setAt] = useState(0);
   const step = STEPS[at]!;
   const isLast = at === STEPS.length - 1;
@@ -55,7 +57,15 @@ export function Wizard({ http, settings, onSave, onDone, mcpServerPath }: Wizard
     local: <StepLocal />,
     sync: <StepSync http={http} settings={settings} onSave={onSave} />,
     calendar: <StepCalendar http={http} settings={settings} onSave={onSave} />,
-    claude: <StepClaude http={http} settings={settings} onSave={onSave} mcpServerPath={mcpServerPath} />,
+    claude: (
+      <StepClaude
+        http={http}
+        settings={settings}
+        onSave={onSave}
+        mcpServerPath={mcpServerPath}
+        openUrl={openUrl}
+      />
+    ),
   };
 
   return (

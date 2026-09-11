@@ -85,6 +85,12 @@ plugin declares it; the adapter never exercises it, and it is Play-restricted,
 so `tools:node="remove"` takes it back out. Check with
 `aapt2 dump permissions` on the built APK, not by reading the source manifest.
 
+**A link opens in a Custom Tab, not in the WebView.** The WebView is the
+application, so a link followed inside it replaces the app with a web page and
+leaves no way back to the task list. `openUrl` goes through `@capacitor/browser`,
+which is the system browser with the user's own session and password manager in
+it, and that matters when the link is a sign-in page at Cloudflare or at Claude.
+
 **Two kinds of storage.** `store` is Preferences, for settings. `files` is
 `@capacitor/filesystem` under the app data directory, for the event log and its
 snapshots: SharedPreferences commits asynchronously with `apply()` and rewrites

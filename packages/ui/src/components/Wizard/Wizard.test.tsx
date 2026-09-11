@@ -354,13 +354,47 @@ describe('Wizard', () => {
     ]);
     await go(user, 'claude');
     await user.type(
-      screen.getByLabelText('Endpoint URL'),
+      screen.getByLabelText('Worker URL'),
       'https://to-hoot-mcp.someone.workers.dev/mcp/abc',
     );
     await user.click(screen.getByRole('button', { name: 'Test endpoint' }));
 
     await waitFor(() => expect(screen.getByText(/1 tools: list_tasks/)).toBeInTheDocument());
     expect(JSON.parse(seen.at(-1)!.body!)).toMatchObject({ method: 'tools/list' });
+  });
+
+  it('adds the path secret to the base URL wrangler printed', async () => {
+    // What is pasted is what the deploy printed. Assembling the endpoint by
+    // hand is the step people get wrong, and it fails as a 404 that looks
+    // exactly like a Worker that is down.
+    const { user, seen } = setup([
+      [/workers\.dev/, { body: { result: { tools: [{ name: 'list_tasks' }] } } }],
+    ]);
+    await go(user, 'claude');
+    const secret = (screen.getByLabelText('Path secret') as HTMLInputElement).value;
+    expect(secret).not.toBe('');
+    await user.type(
+      screen.getByLabelText('Worker URL'),
+      'https://to-hoot-mcp.someone.workers.dev',
+    );
+    await user.click(screen.getByRole('button', { name: 'Test endpoint' }));
+
+    await waitFor(() => expect(screen.getByText(/1 tools: list_tasks/)).toBeInTheDocument());
+    expect(seen.at(-1)!.url).toBe(`https://to-hoot-mcp.someone.workers.dev/mcp/${secret}`);
+  });
+
+  it('links out to the two places the steps send you', async () => {
+    const { user, container } = setup();
+    await go(user, 'claude');
+    const links = [...container.querySelectorAll('a.link-button')].map(a => a.getAttribute('href'));
+    expect(links).toContain('https://dash.cloudflare.com');
+    expect(links).toContain('https://claude.ai/settings/connectors');
+    // Every one opens away from the app, which is the only thing that makes
+    // sense in a window that is itself the application.
+    for (const link of container.querySelectorAll('a.link-button')) {
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+    }
   });
 
   it('gives every control a name the mobile suite can address it by', async () => {

@@ -21,7 +21,8 @@ import { TaskDetail } from './components/TaskDetail.js';
 import { TaskList } from './components/TaskList.js';
 import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
-import { WindowControls, windowGrab } from './components/WindowControls.js';
+import { TitleBar } from './components/TitleBar.js';
+import { windowGrab } from './components/WindowControls.js';
 import { Settings } from './components/Settings/Settings.js';
 import { Wizard } from './components/Wizard/Wizard.js';
 import { browserHttp, browserStore } from './platform/browser.js';
@@ -57,10 +58,11 @@ export interface AppProps {
   /** Absolute path to the built MCP server, for the command the wizard prints. */
   mcpServerPath?: string;
   /**
-   * The shell. Used for the resume signal and, on a desktop whose window has
-   * no title bar, for the window controls. Absent in tests and in SSR.
+   * The shell. Used for the resume signal, for the window a desktop draws no
+   * title bar for, and for opening a link somewhere that is not this window.
+   * Absent in tests and in SSR.
    */
-  platform?: Pick<Platform, 'onResume' | 'window'> | undefined;
+  platform?: Pick<Platform, 'onResume' | 'window' | 'openUrl'> | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -313,201 +315,208 @@ export default function App({
   };
 
   /*
-   * The window frame, where the shell draws none. The desktop hands over its
-   * controls and the app puts them in its own top-right corner, in place of
-   * the title bar that is not there. The browser and the phone hand over
-   * nothing and get nothing, since their chrome is already on screen. Both
-   * roots carry the controls and the grab, so the window can be moved and
-   * closed from the wizard as well as from the app.
+   * The window frame, where the shell draws none. The desktop hands one over
+   * and the app draws its own title bar with it; the browser and the phone
+   * hand over nothing and get nothing, since their chrome is already on
+   * screen. The grab lives on the shell around both roots, so the window can
+   * be moved and closed from the wizard as well as from the app.
    */
   const frame = platform?.window;
   const framed = frame === undefined ? undefined : '';
   const grab = windowGrab(frame);
-  const controls = frame === undefined ? null : <WindowControls frame={frame} />;
+
+  /** What the title bar says the window is showing, as VS Code names the file. */
+  const windowTitle = showSettings ? 'Settings' : (selected?.title ?? heading);
 
   if (!snapshot.setupDone) {
     return (
-      <div className="app-frame" data-framed={framed} onMouseDown={grab}>
-        {controls}
-        <Wizard
-          http={http}
-          settings={snapshot.settings}
-          onSave={patch => store.saveSettings(patch)}
-          onDone={() => store.finishSetup()}
-          mcpServerPath={mcpServerPath}
-        />
+      <div className="shell" data-framed={framed} onMouseDown={grab}>
+        {frame === undefined ? null : <TitleBar frame={frame} title="Setup" />}
+        <div className="app-frame">
+          <Wizard
+            http={http}
+            settings={snapshot.settings}
+            onSave={patch => store.saveSettings(patch)}
+            onDone={() => store.finishSetup()}
+            mcpServerPath={mcpServerPath}
+            openUrl={platform?.openUrl}
+          />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="app" data-pane={pane} data-framed={framed} onMouseDown={grab}>
-      {controls}
-      <div className="pane pane-lists">
-        <Sidebar
-          projects={projects}
-          tags={tags}
-          active={view}
-          onSelect={next => {
-            setView(next);
-            setSelectedId(null);
-            setPane('tasks');
-          }}
-          counts={counts}
-          onAddProject={title => setView(`project:${store.addProject(title)}`)}
-          onAddTag={title => store.addTag(title)}
-          footer={
-            <div className="sidebar-tools">
-              <ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />
-              <button
-                type="button"
-                className="theme-toggle"
-                aria-pressed={showSettings}
-                onClick={() => {
-                  setShowSettings(true);
-                  setSelectedId(null);
-                  setPane('tasks');
-                }}
-              >
-                Settings
-              </button>
-            </div>
-          }
-        />
-      </div>
-
-      {/* The detail replaces the list rather than opening beside it: one
-          implementation for the desktop and the phone, and on a desktop the day
-          timeline stays visible while a task is being planned. */}
-      <div className="pane pane-tasks">
-        {showSettings ? (
-          <Settings
-            http={http}
-            settings={snapshot.settings}
-            theme={snapshot.theme}
-            eventCount={snapshot.events.length}
-            onSave={patch => store.saveSettings(patch)}
-            onSetTheme={t => store.setTheme(t)}
-            syncStatus={syncStatus}
-            onSyncNow={() => sync.syncNow()}
-            storageError={snapshot.storageError}
-            onStartFreshLog={() => void store.startFreshLog()}
-            onExport={() => store.exportJson()}
-            onImport={text => store.importJson(text)}
-            onClose={() => setShowSettings(false)}
-            mcpServerPath={mcpServerPath}
-          />
-        ) : selected === undefined ? (
-          <TaskList
-            heading={heading}
-            tasks={visible}
-            projects={state.projects}
-            trackedFor={store.trackedFor}
-            runningTaskId={snapshot.runningTaskId}
-            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
-            onStart={id => store.start(id)}
-            onStop={() => store.stop()}
-            onSelect={select}
-            onAdd={title => store.addTask(title, defaultsFor(view, today))}
-            notice={
-              snapshot.idleGap !== null ? (
-                <IdlePrompt
-                  gap={snapshot.idleGap}
-                  interrupted={state.tasks[snapshot.idleGap.taskId]}
-                  choices={todayTasks(state, now)}
-                  onResolve={taskId => store.resolveIdle(taskId)}
-                />
-              ) : view === 'today' ? (
-                <TodayState open={open.length} done={done.length} />
-              ) : null
-            }
-            empty={view === 'today' ? null : <EmptyState>{emptyCopyFor(view)}</EmptyState>}
-          />
-        ) : (
-          <TaskDetail
-            task={selected}
-            state={state}
-            tracked={store.trackedFor(selected.id)}
-            pendingMs={snapshot.pendingMs}
-            today={today}
-            runningTaskId={snapshot.runningTaskId}
-            onClose={() => setSelectedId(null)}
-            onPatch={(id, patch) => store.patchTask(id, patch)}
-            onAddSubtask={(parentId, title) => store.addSubtask(parentId, title)}
-            onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
-            onStart={id => store.start(id)}
-            onStop={() => store.stop()}
-            onDelete={id => {
-              store.deleteTask(id);
+    <div className="shell" data-framed={framed} onMouseDown={grab}>
+      {frame === undefined ? null : <TitleBar frame={frame} title={windowTitle} />}
+      <div className="app" data-pane={pane}>
+        <div className="pane pane-lists">
+          <Sidebar
+            projects={projects}
+            tags={tags}
+            active={view}
+            onSelect={next => {
+              setView(next);
               setSelectedId(null);
+              setPane('tasks');
             }}
-            onSelect={select}
+            counts={counts}
+            onAddProject={title => setView(`project:${store.addProject(title)}`)}
+            onAddTag={title => store.addTag(title)}
+            footer={
+              <div className="sidebar-tools">
+                <ThemeToggle theme={snapshot.theme} onChange={t => store.setTheme(t)} />
+                <button
+                  type="button"
+                  className="theme-toggle"
+                  aria-pressed={showSettings}
+                  onClick={() => {
+                    setShowSettings(true);
+                    setSelectedId(null);
+                    setPane('tasks');
+                  }}
+                >
+                  Settings
+                </button>
+              </div>
+            }
           />
-        )}
-      </div>
-
-      <div className="pane pane-day">
-        <Timeline
-          dayStartMs={startOfDay(now, offsetMs)}
-          startHour={hourOf(state.settings.workdayStart, 9)}
-          endHour={hourOf(state.settings.workdayEnd, 17)}
-          now={now}
-          events={events}
-          tracked={spans}
-          trackedTotal={tracked + snapshot.pendingMs}
-          plannedTotal={planned}
-          onActivateEvent={trackBlock}
-          trackingEventId={trackingBlockId}
-        />
-      </div>
-
-      {/* Both halves are labelled and both carry a number. Unlabelled, a ring
-          at zero beside fourteen pale cells reads as a skeleton that never
-          finished loading, which is what it looked like before. */}
-      <footer className="app-foot">
-        <div className="foot-block">
-          <ProgressRing tracked={tracked + snapshot.pendingMs} planned={planned} size={34} />
-          <div className="foot-lines">
-            <span className="micro">today</span>
-            <span className="foot-value tabular">
-              {planned > 0
-                ? `${formatDuration(tracked + snapshot.pendingMs)} of ${formatDuration(planned)}`
-                : `${formatDuration(tracked + snapshot.pendingMs)} tracked`}
-            </span>
-          </div>
         </div>
 
-        <div className="foot-lines">
-          <span className="micro">last {GRID_DAYS} days</span>
-          <ConsistencyGrid
-            tracked={consistency(state, GRID_DAYS, now)}
-            completed={completedPerDay(state, GRID_DAYS, now)}
+        {/* The detail replaces the list rather than opening beside it: one
+            implementation for the desktop and the phone, and on a desktop the day
+            timeline stays visible while a task is being planned. */}
+        <div className="pane pane-tasks">
+          {showSettings ? (
+            <Settings
+              http={http}
+              settings={snapshot.settings}
+              theme={snapshot.theme}
+              eventCount={snapshot.events.length}
+              onSave={patch => store.saveSettings(patch)}
+              onSetTheme={t => store.setTheme(t)}
+              syncStatus={syncStatus}
+              onSyncNow={() => sync.syncNow()}
+              storageError={snapshot.storageError}
+              onStartFreshLog={() => void store.startFreshLog()}
+              onExport={() => store.exportJson()}
+              onImport={text => store.importJson(text)}
+              onClose={() => setShowSettings(false)}
+              mcpServerPath={mcpServerPath}
+              openUrl={platform?.openUrl}
+            />
+          ) : selected === undefined ? (
+            <TaskList
+              heading={heading}
+              tasks={visible}
+              projects={state.projects}
+              trackedFor={store.trackedFor}
+              runningTaskId={snapshot.runningTaskId}
+              onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+              onStart={id => store.start(id)}
+              onStop={() => store.stop()}
+              onSelect={select}
+              onAdd={title => store.addTask(title, defaultsFor(view, today))}
+              notice={
+                snapshot.idleGap !== null ? (
+                  <IdlePrompt
+                    gap={snapshot.idleGap}
+                    interrupted={state.tasks[snapshot.idleGap.taskId]}
+                    choices={todayTasks(state, now)}
+                    onResolve={taskId => store.resolveIdle(taskId)}
+                  />
+                ) : view === 'today' ? (
+                  <TodayState open={open.length} done={done.length} />
+                ) : null
+              }
+              empty={view === 'today' ? null : <EmptyState>{emptyCopyFor(view)}</EmptyState>}
+            />
+          ) : (
+            <TaskDetail
+              task={selected}
+              state={state}
+              tracked={store.trackedFor(selected.id)}
+              pendingMs={snapshot.pendingMs}
+              today={today}
+              runningTaskId={snapshot.runningTaskId}
+              onClose={() => setSelectedId(null)}
+              onPatch={(id, patch) => store.patchTask(id, patch)}
+              onAddSubtask={(parentId, title) => store.addSubtask(parentId, title)}
+              onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
+              onStart={id => store.start(id)}
+              onStop={() => store.stop()}
+              onDelete={id => {
+                store.deleteTask(id);
+                setSelectedId(null);
+              }}
+              onSelect={select}
+            />
+          )}
+        </div>
+
+        <div className="pane pane-day">
+          <Timeline
+            dayStartMs={startOfDay(now, offsetMs)}
+            startHour={hourOf(state.settings.workdayStart, 9)}
+            endHour={hourOf(state.settings.workdayEnd, 17)}
             now={now}
-            dayOffsetMs={offsetMs}
+            events={events}
+            tracked={spans}
+            trackedTotal={tracked + snapshot.pendingMs}
+            plannedTotal={planned}
+            onActivateEvent={trackBlock}
+            trackingEventId={trackingBlockId}
           />
         </div>
-      </footer>
 
-      <nav className="tabs" aria-label="Panes">
-        {(
-          [
-            ['lists', 'Lists'],
-            ['tasks', 'Tasks'],
-            ['day', 'Day'],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className="tab"
-            data-tab={id}
-            aria-current={pane === id ? 'page' : undefined}
-            onClick={() => setPane(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+        {/* Both halves are labelled and both carry a number. Unlabelled, a ring
+            at zero beside fourteen pale cells reads as a skeleton that never
+            finished loading, which is what it looked like before. */}
+        <footer className="app-foot">
+          <div className="foot-block">
+            <ProgressRing tracked={tracked + snapshot.pendingMs} planned={planned} size={34} />
+            <div className="foot-lines">
+              <span className="micro">today</span>
+              <span className="foot-value tabular">
+                {planned > 0
+                  ? `${formatDuration(tracked + snapshot.pendingMs)} of ${formatDuration(planned)}`
+                  : `${formatDuration(tracked + snapshot.pendingMs)} tracked`}
+              </span>
+            </div>
+          </div>
+
+          <div className="foot-lines">
+            <span className="micro">last {GRID_DAYS} days</span>
+            <ConsistencyGrid
+              tracked={consistency(state, GRID_DAYS, now)}
+              completed={completedPerDay(state, GRID_DAYS, now)}
+              now={now}
+              dayOffsetMs={offsetMs}
+            />
+          </div>
+        </footer>
+
+        <nav className="tabs" aria-label="Panes">
+          {(
+            [
+              ['lists', 'Lists'],
+              ['tasks', 'Tasks'],
+              ['day', 'Day'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className="tab"
+              data-tab={id}
+              aria-current={pane === id ? 'page' : undefined}
+              onClick={() => setPane(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
     </div>
   );
 }

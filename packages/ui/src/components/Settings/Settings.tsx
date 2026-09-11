@@ -19,6 +19,8 @@ export interface SettingsProps {
   onImport: (text: string) => { ok: true; added: number } | { ok: false; error: string };
   onClose: () => void;
   mcpServerPath?: string;
+  /** The shell's way of opening a link, where the host will not follow one. */
+  openUrl?: ((url: string) => Promise<void>) | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
   /** Set when the log on disk cannot be read or written. */
@@ -46,6 +48,7 @@ export function Settings({
   onImport,
   onClose,
   mcpServerPath,
+  openUrl,
   syncStatus = null,
   onSyncNow,
   storageError = null,
@@ -108,6 +111,7 @@ export function Settings({
             settings={settings}
             onSave={onSave}
             mcpServerPath={mcpServerPath}
+            openUrl={openUrl}
           />
         </Section>
 

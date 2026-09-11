@@ -255,10 +255,18 @@ the repository:
 A blank value counts as unset, so an empty token fails by name instead of as a
 401 from GitHub.
 
-### Claude web and Cowork, over a Worker
+### Claude on the web, on your phone, and Cowork, over a Worker
 
-These need a public URL, which means a free Cloudflare account. The Worker is
-stateless and holds nothing but the secrets you set on it.
+None of them can reach a program on your machine, so they need a public URL,
+which means a free Cloudflare account with no payment method on it. The Worker
+is stateless and holds nothing but the secrets you set on it.
+
+The app has all of this in **Settings, Claude**, in three numbered stages, with
+the path secret already generated and the commands already filled in. What
+follows is the same thing written out.
+
+**1. Deploy it**, on a computer with this repository checked out. Each command
+prompts for its value, so nothing lands in your shell history.
 
 ```
 cd apps/worker
@@ -269,9 +277,22 @@ npx wrangler secret put GITHUB_TOKEN
 npx wrangler deploy
 ```
 
-Then add `https://<name>.<subdomain>.workers.dev/mcp/<secret>` to Claude as a
-custom connector, with authentication set to none, and press **Test connection**
-in the app, which performs a real `tools/list` against it.
+Cloudflare's one-click "Deploy to Cloudflare" button is deliberately not offered
+for this. It treats the linked subdirectory as the root of a new repository and
+requires the application to be self-contained inside it, and `apps/worker`
+depends on `@to-hoot/core` through the workspace, so the button would produce a
+repository that cannot build.
+
+**2. Tell the app where it landed.** Paste the `workers.dev` URL that
+`wrangler deploy` printed into the Worker URL field. The app adds `/mcp/` and
+the path secret for you, which is the step that is easy to get wrong by hand and
+fails as a 404 indistinguishable from a Worker that is down. Press **Test
+endpoint**, which performs a real `tools/list` against it.
+
+**3. Add it to Claude.** In Claude, open Settings, then Connectors, then Add
+custom connector. Paste the endpoint URL and leave authentication set to none.
+The same connector then works in Claude on the web and in the Claude app on
+your phone.
 
 **That URL is a credential.** Anyone holding it can read and write your task
 list. Treat it the way you would treat the token itself; `SECURITY.md` explains

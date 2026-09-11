@@ -841,6 +841,45 @@ export function wranglerCommands(input: {
   return lines.join('\n');
 }
 
+/**
+ * Where the endpoint lives, as a path segment. The Worker answers here and
+ * 404s everywhere else, so the secret is in the path rather than in a query
+ * string: query strings are what proxies, browser histories and access logs
+ * record in full.
+ */
+const MCP_PREFIX = '/mcp/';
+
+/**
+ * The endpoint URL, from the base `wrangler deploy` printed and the secret this
+ * app generated.
+ *
+ * Assembling it by hand is the step people get wrong, and the failure is
+ * indistinguishable from a Worker that is down: a missing path segment, a
+ * trailing slash, or the scheme left off a copied hostname all arrive as a 404.
+ *
+ * A value that already carries the path is taken exactly as it is. Someone
+ * pasting a finished endpoint knows which secret is deployed on it, and that
+ * is not necessarily the one held here: rotating the secret in this app changes
+ * nothing about the Worker until the commands are run again.
+ */
+export function endpointUrl(base: string, pathSecret: string): string {
+  const trimmed = base.trim();
+  if (trimmed === '') return '';
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  if (withScheme.includes(MCP_PREFIX)) return withScheme.replace(/\/+$/, '');
+  if (pathSecret === '') return withScheme.replace(/\/+$/, '');
+  return `${withScheme.replace(/\/+$/, '')}${MCP_PREFIX}${pathSecret}`;
+}
+
+/** The dashboard where a Worker is deployed and its logs are read. */
+export const CLOUDFLARE_DASHBOARD = 'https://dash.cloudflare.com';
+
+/** Where a custom connector is added to Claude. */
+export const CLAUDE_CONNECTORS = 'https://claude.ai/settings/connectors';
+
+/** The long-form version of these steps, for anyone who wants the reasoning. */
+export const SETUP_GUIDE = 'https://github.com/danieltyukov/to-hoot/blob/main/docs/SETUP.md';
+
 /** Runs a real tools/list against the deployed worker. */
 export async function testWorker(http: Http, url: string): Promise<Check<string[]>> {
   const trimmed = url.trim();

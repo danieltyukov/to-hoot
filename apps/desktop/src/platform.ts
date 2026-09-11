@@ -17,6 +17,7 @@ import {
   writeTextFile,
 } from '@tauri-apps/plugin-fs';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { openUrl as openExternal } from '@tauri-apps/plugin-opener';
 import {
   isPermissionGranted,
   requestPermission,
@@ -253,6 +254,18 @@ const frame: WindowFrame = {
   startDragging: () => getCurrentWindow().startDragging(),
 };
 
+/**
+ * Hands a URL to the desktop's own browser, through the OS.
+ *
+ * An anchor in this window is not a link to anywhere: the window is the
+ * application, so following one either navigates the app away from itself or,
+ * with this CSP, does nothing at all. The plugin runs the open in Rust through
+ * xdg-open, and `capabilities/default.json` fixes which URLs it will accept.
+ */
+async function openUrl(url: string): Promise<void> {
+  await openExternal(url);
+}
+
 export const platform: Platform = {
   http,
   store,
@@ -262,6 +275,7 @@ export const platform: Platform = {
   onResume,
   idleSeconds,
   window: frame,
+  openUrl,
 };
 
 declare global {

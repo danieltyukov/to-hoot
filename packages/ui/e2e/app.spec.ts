@@ -24,6 +24,76 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByLabel('New task')).toBeVisible();
 });
 
+/**
+ * A shell that hands over a window frame, which is what turns the app's own
+ * title bar on. The desktop build is the only place that really happens, and
+ * this is the only kind of test that can measure the result: the strip is
+ * centred on the window, which is a fact about a viewport.
+ */
+async function framed(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (window as unknown as { __toHootPlatform?: unknown }).__toHootPlatform = {
+      http: async (req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) => {
+        const res = await fetch(req.url, { method: req.method ?? 'GET', headers: req.headers, body: req.body });
+        const headers: Record<string, string> = {};
+        res.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
+        const text = await res.text();
+        return { status: res.status, headers, text: async () => text };
+      },
+      store: {
+        get: async (k: string) => localStorage.getItem('to-hoot:' + k),
+        set: async (k: string, v: string) => localStorage.setItem('to-hoot:' + k, v),
+        remove: async (k: string) => localStorage.removeItem('to-hoot:' + k),
+        keys: async () => [],
+      },
+      files: {
+        read: async (n: string) => localStorage.getItem('to-hoot:file:' + n),
+        write: async (n: string, c: string) => localStorage.setItem('to-hoot:file:' + n, c),
+        remove: async (n: string) => localStorage.removeItem('to-hoot:file:' + n),
+      },
+      notify: async () => 1,
+      cancelNotification: async () => undefined,
+      onResume: () => () => undefined,
+      window: {
+        minimize: async () => undefined,
+        toggleMaximize: async () => undefined,
+        close: async () => undefined,
+        isMaximized: async () => false,
+        onMaximizedChange: () => () => undefined,
+        startDragging: async () => undefined,
+      },
+    };
+  });
+  await page.goto('/');
+  await expect(page.getByLabel('New task')).toBeVisible();
+}
+
+test('the title bar spans the window and centres its title', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await framed(page);
+
+  const bar = await page.locator('.titlebar').boundingBox();
+  expect(bar!.x).toBe(0);
+  expect(bar!.width).toBe(DESKTOP.width);
+
+  // Centred on the window, not on the space left between the brand and the
+  // controls, which is what a three-column layout would have given.
+  const title = await page.locator('.titlebar-title').boundingBox();
+  expect(Math.abs(title!.x + title!.width / 2 - DESKTOP.width / 2)).toBeLessThan(1);
+
+  // The brand is in the strip, so the sidebar does not say it a second time.
+  await expect(page.locator('.sidebar .brand')).toBeHidden();
+  await expect(page.locator('.titlebar .brand-word')).toBeVisible();
+
+  // Both pane headers start where the strip ends, on one line.
+  const [list, day] = await Promise.all([
+    page.locator('.pane-tasks .list-head').boundingBox(),
+    page.locator('.timeline-head').boundingBox(),
+  ]);
+  expect(list!.y).toBe(bar!.height);
+  expect(day!.y).toBe(bar!.height);
+});
+
 test('three panes on desktop, tabs on mobile', async ({ page }) => {
   await page.setViewportSize(DESKTOP);
   for (const name of ['lists', 'tasks', 'day'] as const) {
@@ -229,3 +299,39 @@ test('every control the mobile suite has to address carries a name', async ({ pa
   expect(unnamed).toEqual([]);
 });
 
+
+test('the footer puts its two labels on one line', async ({ page }) => {
+  // A computed-layout fact, which is why it is here and not in the unit tests:
+  // jsdom evaluates a stylesheet and has no box to measure it against. An 11px
+  // strip of squares beside a 17px number, each block centred on its own, put
+  // "last 14 days" three pixels below "today".
+  await page.setViewportSize(DESKTOP);
+  const labels = page.locator('.app-foot .micro');
+  await expect(labels).toHaveCount(2);
+  const [today, days] = await Promise.all([
+    labels.nth(0).boundingBox(),
+    labels.nth(1).boundingBox(),
+  ]);
+  expect(Math.abs(today!.y - days!.y)).toBeLessThan(1);
+});
+
+test('the fourteen days are evenly spaced, today included', async ({ page }) => {
+  // Today's ring used to be drawn 1.5px outside an 11px cell sitting in a 3px
+  // gap, so it closed the gap to its neighbour and hung over the end of the row.
+  await page.setViewportSize(DESKTOP);
+  const cells = page.locator('.grid-cell');
+  await expect(cells).toHaveCount(14);
+
+  const boxes = await cells.evaluateAll(els =>
+    els.map(el => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right };
+    }),
+  );
+  const gaps = boxes.slice(1).map((box, i) => Math.round(box.left - boxes[i]!.right));
+  expect(new Set(gaps).size).toBe(1);
+
+  // And the marked cell stays inside the strip it belongs to.
+  const wrap = await page.locator('.grid-wrap').boundingBox();
+  expect(boxes.at(-1)!.right).toBeLessThanOrEqual(wrap!.x + wrap!.width + 0.5);
+});

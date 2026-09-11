@@ -65,6 +65,14 @@
   color: var(--text);
 }
 
+/* An anchor wearing the button's clothes: a link is inline text by default, and
+   these sit in a row of real buttons. */
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .button:disabled {
   color: var(--faint);
   cursor: default;
