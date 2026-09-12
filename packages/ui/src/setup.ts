@@ -874,8 +874,13 @@ export function endpointUrl(base: string, pathSecret: string): string {
 /** The dashboard where a Worker is deployed and its logs are read. */
 export const CLOUDFLARE_DASHBOARD = 'https://dash.cloudflare.com';
 
-/** Where a custom connector is added to Claude. */
-export const CLAUDE_CONNECTORS = 'https://claude.ai/settings/connectors';
+/**
+ * Where a custom connector is added to Claude.
+ *
+ * Under Customize rather than Settings: connectors moved, and the old path now
+ * lands on a page whose entire content is a sentence saying so.
+ */
+export const CLAUDE_CONNECTORS = 'https://claude.ai/customize/connectors';
 
 /** The long-form version of these steps, for anyone who wants the reasoning. */
 export const SETUP_GUIDE = 'https://github.com/danieltyukov/to-hoot/blob/main/docs/SETUP.md';

@@ -288,6 +288,17 @@ describe('GitHubClient', () => {
     }
   });
 
+  it('names itself on every request, which GitHub refuses to serve without', async () => {
+    // A missing User-Agent is a 403 whose body is about administrative rules,
+    // and it is invisible on any host whose stack sends one for free. A
+    // Cloudflare Worker sends none, which is where this actually bit.
+    await client.commitFiles('msg', [{ path: 'a', content: 'x' }]);
+    expect(http.calls.length).toBeGreaterThan(0);
+    for (const call of http.calls) {
+      expect(call.headers['user-agent']).toBe('to-hoot');
+    }
+  });
+
   it('deletes a path with a null sha entry rather than a second commit', async () => {
     await client.commitFiles('msg', [{ path: 'a', content: 'x' }], ['gone.json']);
     const tree = http.calls.find(c => c.url.endsWith('/git/trees'))!;

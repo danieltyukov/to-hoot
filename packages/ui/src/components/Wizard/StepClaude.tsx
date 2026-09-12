@@ -206,9 +206,10 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
         <li>
           <h4 className="step-stage-head">Add it to Claude</h4>
           <p className="prose">
-            In Claude, open Settings, then Connectors, then Add custom connector. Paste the
-            endpoint URL and leave authentication set to none. The same connector then works in
-            Claude on the web and in the Claude app on your phone.
+            In Claude, open Customize, then Connectors, then Add custom connector. Paste the
+            endpoint URL and leave the second step empty, since this endpoint has no
+            authentication to configure. The same connector then works in Claude on the web and
+            in the Claude app on your phone.
           </p>
           <div className="step-actions">
             <ExternalLink href={CLAUDE_CONNECTORS} openUrl={openUrl}>

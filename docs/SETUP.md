@@ -289,10 +289,11 @@ the path secret for you, which is the step that is easy to get wrong by hand and
 fails as a 404 indistinguishable from a Worker that is down. Press **Test
 endpoint**, which performs a real `tools/list` against it.
 
-**3. Add it to Claude.** In Claude, open Settings, then Connectors, then Add
-custom connector. Paste the endpoint URL and leave authentication set to none.
-The same connector then works in Claude on the web and in the Claude app on
-your phone.
+**3. Add it to Claude.** In Claude, open Customize, then Connectors, then Add
+custom connector. Paste the endpoint URL, and leave the second step empty:
+this endpoint has no authentication to configure. Press Connect, and Claude
+lists the nine tools. The same connector then works in Claude on the web and in
+the Claude app on your phone.
 
 **That URL is a credential.** Anyone holding it can read and write your task
 list. Treat it the way you would treat the token itself; `SECURITY.md` explains

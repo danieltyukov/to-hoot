@@ -388,7 +388,7 @@ describe('Wizard', () => {
     await go(user, 'claude');
     const links = [...container.querySelectorAll('a.link-button')].map(a => a.getAttribute('href'));
     expect(links).toContain('https://dash.cloudflare.com');
-    expect(links).toContain('https://claude.ai/settings/connectors');
+    expect(links).toContain('https://claude.ai/customize/connectors');
     // Every one opens away from the app, which is the only thing that makes
     // sense in a window that is itself the application.
     for (const link of container.querySelectorAll('a.link-button')) {
