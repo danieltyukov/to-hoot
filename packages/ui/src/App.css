@@ -16,6 +16,25 @@
   flex-direction: column;
   height: 100%;
   background: var(--bg);
+  /*
+   * The system bars, paid for here and nowhere else.
+   *
+   * Android has drawn the WebView edge to edge since API 35 and offers no
+   * opt-out at the 36 this app targets, and `viewport-fit=cover` in index.html
+   * asks for the same thing. The viewport therefore spans the status bar and
+   * the navigation bar, and whatever sits at the top or bottom of a screen
+   * lands under one of them: the setup header under the clock, its Back and
+   * Next buttons under the navigation bar.
+   *
+   * Both screens hang off this element, so one rule covers the wizard and the
+   * app, and nothing scrolls under a bar. Every inset is zero on the desktop
+   * and in a browser, which is why there is no media query around it.
+   */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  /* Landscape on a phone with a cutout, where the notch takes a side. */
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
 }
 
 .app {
@@ -148,13 +167,13 @@
     flex-wrap: wrap;
   }
 
+  /* The bottom inset is the shell's, not this strip's. Paying it twice put a
+     navigation bar's worth of empty room under the tabs. */
   .tabs {
     display: flex;
     grid-column: 1;
     grid-row: 3;
     border-top: 1px solid var(--border);
-    /* The home indicator sits under the last few pixels of the viewport. */
-    padding-bottom: env(safe-area-inset-bottom, 0);
   }
 }
 

@@ -185,4 +185,27 @@ describe('the rules the component tests lean on', () => {
     const app = FILES.find(f => f.name === 'App.css')!.css;
     expect(app).toMatch(/\.foot-lines\s*\{[^}]*grid-template-rows:\s*auto minmax\(/);
   });
+
+  it('pays the system bar insets once, at the root both screens hang from', () => {
+    // Android has drawn the WebView edge to edge since API 35 and gives no
+    // opt-out at the 36 this app targets, and index.html asks for exactly that
+    // with viewport-fit=cover. The viewport therefore spans the status bar and
+    // the navigation bar, and something has to pay the insets back. Paying them
+    // on .shell covers the wizard and the app in the one place both hang from:
+    // without it the setup header sat under the clock and its Back and Next
+    // buttons sat under the navigation bar, dimmed and half untappable.
+    const app = FILES.find(f => f.name === 'App.css')!.css;
+    const shell = /\.shell\s*\{([^}]*)\}/.exec(app)![1]!;
+    expect(shell).toMatch(/padding-top:\s*env\(safe-area-inset-top/);
+    expect(shell).toMatch(/padding-bottom:\s*env\(safe-area-inset-bottom/);
+  });
+
+  it('pays each of those insets exactly once', () => {
+    // The tab strip used to pay the bottom inset itself, which was right while
+    // it was the only chrome that did. With the root paying it, a second copy
+    // is a second gap, and the tabs float a navigation bar's height too high.
+    const app = FILES.find(f => f.name === 'App.css')!.css;
+    expect(app.match(/env\(safe-area-inset-top/g) ?? []).toHaveLength(1);
+    expect(app.match(/env\(safe-area-inset-bottom/g) ?? []).toHaveLength(1);
+  });
 });

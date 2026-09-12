@@ -193,3 +193,40 @@ test('a master repository round-trips without ever creating a main ref', async (
   await page.locator('[data-step="claude"]').click();
   await expect(page.locator('.copyable-text').last()).toContainText('GITHUB_BRANCH      # master');
 });
+
+test('holds the wizard chrome clear of the phone system bars', async ({ page }) => {
+  /*
+   * Chromium cannot be told to report real safe-area insets, so this forces a
+   * phone's worth of them onto the shell and checks what the layout then does.
+   *
+   * Which is to say it proves the arithmetic, not the rule: it would still pass
+   * with the `env()` padding deleted from App.css, because it supplies its own.
+   * styles.test.ts is what fails if the rule goes. What is worth a viewport is
+   * the part that cannot be read off a stylesheet, and the part that made the
+   * fix worth checking rather than assuming: a shell that is `height: 100%`
+   * grows past the screen once it takes padding unless `box-sizing` is
+   * border-box, and a wizard footer that is lifted by a navigation bar's height
+   * is one edit away from being pushed off the bottom of the screen instead.
+   */
+  const top = 40;
+  const bottom = 48;
+  await page.setViewportSize({ width: 412, height: 915 });
+  await page.addStyleTag({
+    content: `.shell { padding-top: ${top}px; padding-bottom: ${bottom}px; }`,
+  });
+
+  const head = (await page.locator('.wizard-head').boundingBox())!;
+  const foot = (await page.locator('.wizard-foot').boundingBox())!;
+  const viewport = page.viewportSize()!.height;
+
+  expect(head.y).toBeGreaterThanOrEqual(top);
+  expect(foot.y + foot.height).toBeLessThanOrEqual(viewport - bottom);
+
+  // Lifted clear, not pushed off: a shell that outgrew the viewport would put
+  // the footer past the bottom of the screen and scroll the page to reach it.
+  await expect(page.getByRole('button', { name: 'Next' })).toBeInViewport();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollHeight - window.innerHeight,
+  );
+  expect(overflow).toBe(0);
+});
