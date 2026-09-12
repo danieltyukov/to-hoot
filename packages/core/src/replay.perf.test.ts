@@ -140,18 +140,36 @@ function foldOne(count: number): () => void {
 
 describe('replay scales linearly in the task count', () => {
   it('does not go superlinear when the tasks quadruple', () => {
-    const small = fastestMs(foldOne(SMALL));
-    const large = fastestMs(foldOne(LARGE));
+    const small = foldOne(SMALL);
+    const large = foldOne(LARGE);
+
+    /*
+     * The best ratio of several rounds, not the ratio of one pair of bests.
+     *
+     * Each half is already the fastest of fifteen runs, which removes noise
+     * within a measurement and not between two of them: a scheduler that
+     * happens to interrupt every sample of the large fold inflates the ratio on
+     * its own. Noise can only ever make a fold look slower, never faster, so
+     * the smallest ratio across rounds is the closest reading to the truth, and
+     * a real regression stays high in every round.
+     *
+     * This is not a widened bound. It shipped at 9 with one round and failed a
+     * release on a shared CI runner at 9.77, which is noise: the cheapest of
+     * the three regressions it guards against reads 12.4.
+     */
+    const rounds = 3;
+    const readings: number[] = [];
+    for (let i = 0; i < rounds; i++) {
+      readings.push(fastestMs(large) / fastestMs(small));
+    }
+    const ratio = Math.min(...readings);
 
     // Measured on this machine, quadrupling the tasks. Clean sits at 5.3 to 6.0
     // across fresh processes (above 4 because the id sort is n log n and the
     // fold's own work is not free). Reverting ANY ONE of the three groupings to
     // its quadratic form: children 20.1, projects 12.4, tags 12.5. Nine sits
     // with roughly half again of margin on each side.
-    expect(
-      large / small,
-      `${SMALL} tasks ${small.toFixed(2)}ms, ${LARGE} tasks ${large.toFixed(2)}ms`,
-    ).toBeLessThan(9);
+    expect(ratio, `ratios ${readings.map(r => r.toFixed(2)).join(', ')}`).toBeLessThan(9);
   });
 
   it('does not regress by an order of magnitude', () => {
