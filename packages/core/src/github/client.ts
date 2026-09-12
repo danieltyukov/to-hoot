@@ -128,6 +128,22 @@ export class RepositoryNotVisibleError extends GitHubError {
 
 const API_BASE = 'https://api.github.com';
 const API_VERSION = '2022-11-28';
+
+/**
+ * GitHub refuses a request that carries no User-Agent, with a 403 whose body
+ * talks about administrative rules rather than about the missing header.
+ *
+ * Every host had one for free except the one that matters here. Node's fetch,
+ * Tauri's Rust client and Capacitor's native stack each send their own, so the
+ * omission was invisible until the Cloudflare Worker made its first real call:
+ * a Worker's fetch sends no User-Agent at all, and the remote MCP endpoint
+ * answered its own tool list happily and then 403ed the moment it went to
+ * GitHub for data.
+ *
+ * A browser forbids setting this header and drops it silently, which is the
+ * right outcome there: it sends its own.
+ */
+const USER_AGENT = 'to-hoot';
 const ACCEPT = 'application/vnd.github+json';
 /** A non-executable regular file. Every path this app writes is one. */
 const BLOB_MODE = '100644';
@@ -462,6 +478,7 @@ export class GitHubClient implements RepoClient {
       accept: ACCEPT,
       authorization: `Bearer ${this.config.token}`,
       'x-github-api-version': API_VERSION,
+      'user-agent': USER_AGENT,
       ...extra,
     };
     if (body !== undefined) headers['content-type'] = 'application/json';
