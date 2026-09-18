@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { newEvent, type Event } from '../events.js';
-import { dayStr } from '../models.js';
+import { newEvent, type EntityKind, type Event } from '../events.js';
+import { ENTITY_COLORS, dayStr } from '../models.js';
 import {
   TOOLS,
   memoryBackend,
@@ -25,6 +25,14 @@ function seed(...events: Event[]): Event[] {
 function ev(entityId: string, payload: unknown, type: Event['type'] = 'create'): Event {
   return newEvent({ deviceId: 'seed', type, entity: 'task', entityId, payload, ts: NOW - 60_000 });
 }
+
+/** A project or tag that already exists when the tool runs. */
+function entity(kind: EntityKind, entityId: string, payload: unknown): Event {
+  return newEvent({ deviceId: 'seed', type: 'create', entity: kind, entityId, payload, ts: NOW - 120_000 });
+}
+
+const RADIO = entity('project', 'p-radio', { title: 'Radio', color: '#c2603f', isArchived: false });
+const URGENT = entity('tag', 'g-urgent', { title: 'Urgent', color: '#c2603f' });
 
 interface Harness {
   ctx: ToolContext;
@@ -55,7 +63,7 @@ function harness(events: Event[] = [], now: number = NOW): Harness {
 }
 
 describe('tool registry', () => {
-  it('exposes the nine tools once each', () => {
+  it('exposes the fifteen tools once each', () => {
     expect(TOOLS.map(t => t.name)).toEqual([
       'list_tasks',
       'search_tasks',
@@ -66,16 +74,24 @@ describe('tool registry', () => {
       'start_timer',
       'stop_timer',
       'log_time',
+      'list_projects',
+      'add_project',
+      'update_project',
+      'list_tags',
+      'add_tag',
+      'update_tag',
     ]);
   });
 
   it('marks the reads readOnlyHint and the reruns idempotentHint', () => {
     const readOnly = TOOLS.filter(t => t.annotations.readOnlyHint === true).map(t => t.name);
-    expect(readOnly).toEqual(['list_tasks', 'search_tasks', 'today']);
+    expect(readOnly).toEqual(['list_tasks', 'search_tasks', 'today', 'list_projects', 'list_tags']);
 
     const idempotent = TOOLS.filter(t => t.annotations.idempotentHint === true).map(t => t.name);
     expect(idempotent).toContain('update_task');
     expect(idempotent).toContain('complete_task');
+    expect(idempotent).toContain('update_project');
+    expect(idempotent).toContain('update_tag');
   });
 
   it('gives every tool a JSON-schema-convertible object schema', () => {
@@ -93,6 +109,8 @@ describe('add_task', () => {
 
     expect(out.task.title).toBe('Write the brief');
     expect(out.task.projectId).toBe('inbox');
+    expect(out.task.project).toBe('Inbox');
+    expect(out.task.tags).toBeUndefined();
     expect(out.task.estimateMinutes).toBe(30);
     expect(h.backend.appended).toHaveLength(1);
     expect(h.backend.appended[0]!.type).toBe('create');
@@ -226,6 +244,8 @@ describe('read-only tools', () => {
     await h.call('list_tasks');
     await h.call('search_tasks', { query: 'alpha' });
     await h.call('today');
+    await h.call('list_projects');
+    await h.call('list_tags');
 
     expect(h.backend.appended).toEqual([]);
   });
@@ -491,5 +511,349 @@ describe('timers', () => {
 
     expect(out.isError).toBe(true);
     expect(await h.ctx.timers.read()).toBeNull();
+  });
+});
+
+describe('names beside ids', () => {
+  const events = seed(
+    RADIO,
+    URGENT,
+    ev('a', { title: 'Alpha', projectId: 'p-radio', tagIds: ['g-urgent'] }),
+    ev('b', { title: 'Beta' }),
+  );
+
+  it('shows the project and tag titles on every task', async () => {
+    const h = harness(events);
+    const out = await h.json('list_tasks');
+    const a = out.tasks.find((t: { id: string }) => t.id === 'a');
+    const b = out.tasks.find((t: { id: string }) => t.id === 'b');
+
+    expect(a).toMatchObject({ projectId: 'p-radio', project: 'Radio', tagIds: ['g-urgent'], tags: ['Urgent'] });
+    expect(b).toMatchObject({ projectId: 'inbox', project: 'Inbox' });
+    expect(b.tagIds).toBeUndefined();
+    expect(b.tags).toBeUndefined();
+  });
+
+  it('gives a tag id nothing answers to no title rather than the id as one', async () => {
+    const h = harness(seed(URGENT, ev('a', { title: 'Alpha', tagIds: ['g-urgent', 'g-gone'] })));
+    const out = await h.json('list_tasks');
+
+    expect(out.tasks[0].tagIds).toEqual(['g-urgent', 'g-gone']);
+    expect(out.tasks[0].tags).toEqual(['Urgent']);
+  });
+
+  it('adds a task to an existing project and tag by title, ignoring case and whitespace', async () => {
+    const h = harness(events);
+    const out = await h.json('add_task', { title: 'Gamma', project: ' radio ', tags: ['URGENT'] });
+
+    expect(out.task).toMatchObject({ projectId: 'p-radio', project: 'Radio', tagIds: ['g-urgent'], tags: ['Urgent'] });
+    // Nothing was created: the titles matched.
+    expect(h.backend.appended).toHaveLength(1);
+    expect(h.backend.appended[0]!.entity).toBe('task');
+  });
+
+  it('creates a missing project and tag in the same batch, ahead of the task', async () => {
+    const h = harness(events);
+    const out = await h.json('add_task', { title: 'Delta', project: 'Garden', tags: ['Urgent', 'Weekend'] });
+
+    expect(h.backend.appended.map(e => `${e.type} ${e.entity}`)).toEqual([
+      'create project',
+      'create tag',
+      'create task',
+    ]);
+    const [project, tag, task] = h.backend.appended as [Event, Event, Event];
+    // One project and one tag exist already, so both take the second colour.
+    expect(project.payload).toEqual({ title: 'Garden', color: ENTITY_COLORS[1], isArchived: false });
+    expect(tag.payload).toEqual({ title: 'Weekend', color: ENTITY_COLORS[1] });
+    expect(task.payload).toMatchObject({ projectId: project.entityId, tagIds: ['g-urgent', tag.entityId] });
+    // ULIDs minted in order sort in order, so replay applies the creates first too.
+    expect(project.id < tag.id && tag.id < task.id).toBe(true);
+    expect(project.deviceId).toBe(DEVICE);
+
+    expect(out.task).toMatchObject({ project: 'Garden', tags: ['Urgent', 'Weekend'] });
+  });
+
+  it('creates one tag for two spellings of a new title in the same call', async () => {
+    const h = harness(events);
+    const out = await h.json('add_task', { title: 'Delta', tags: ['Weekend', 'weekend ', 'Urgent'] });
+
+    expect(h.backend.appended.filter(e => e.entity === 'tag')).toHaveLength(1);
+    expect(out.task.tags).toEqual(['Weekend', 'Urgent']);
+  });
+
+  it('resolves "Inbox" to the built-in project rather than creating one', async () => {
+    const h = harness(events);
+    const out = await h.json('update_task', { id: 'a', project: 'inbox' });
+
+    expect(out.task.projectId).toBe('inbox');
+    expect(out.task.project).toBe('Inbox');
+    expect(h.backend.appended).toHaveLength(1);
+  });
+
+  it('moves a task with update_task and creates the project it names', async () => {
+    const h = harness(events);
+    const out = await h.json('update_task', { id: 'b', project: 'Garden', tags: [] });
+
+    expect(h.backend.appended.map(e => e.entity)).toEqual(['project', 'task']);
+    expect(h.backend.appended[1]!.payload).toEqual({ projectId: h.backend.appended[0]!.entityId, tagIds: [] });
+    expect(out.task.project).toBe('Garden');
+  });
+
+  it('refuses the id and the title of one field together, before touching the log', async () => {
+    const h = harness(events);
+
+    const both = [
+      h.call('add_task', { title: 'x', project: 'Radio', projectId: 'p-radio' }),
+      h.call('add_task', { title: 'x', tags: ['Urgent'], tagIds: ['g-urgent'] }),
+      h.call('update_task', { id: 'a', project: 'Radio', projectId: 'p-radio' }),
+      h.call('update_task', { id: 'a', tags: ['Urgent'], tagIds: ['g-urgent'] }),
+      h.call('list_tasks', { project: 'Radio', projectId: 'p-radio' }),
+      h.call('list_tasks', { tag: 'Urgent', tagId: 'g-urgent' }),
+    ];
+    for (const out of await Promise.all(both)) {
+      expect(out.isError).toBe(true);
+      expect(out.text).toContain('not both');
+    }
+    expect(h.backend.appended).toHaveLength(0);
+  });
+
+  it('lists by project and tag title, and an unknown title lists nothing', async () => {
+    const h = harness(events);
+    const ids = (out: { tasks: { id: string }[] }) => out.tasks.map(t => t.id);
+
+    expect(ids(await h.json('list_tasks', { project: 'radio' }))).toEqual(['a']);
+    expect(ids(await h.json('list_tasks', { tag: 'urgent' }))).toEqual(['a']);
+    expect(ids(await h.json('list_tasks', { project: 'Inbox' }))).toEqual(['b']);
+    expect(await h.json('list_tasks', { project: 'Nowhere' })).toEqual({ total: 0, tasks: [] });
+    expect(await h.json('list_tasks', { tag: 'Nowhere' })).toEqual({ total: 0, tasks: [] });
+  });
+
+  it('refuses a blank title without writing anything', async () => {
+    const h = harness(events);
+
+    expect((await h.call('add_task', { title: 'x', project: '   ' })).isError).toBe(true);
+    expect((await h.call('add_task', { title: 'x', tags: ['Urgent', ' '] })).isError).toBe(true);
+    expect(h.backend.appended).toHaveLength(0);
+  });
+});
+
+describe('list_projects', () => {
+  it('lists every project with its open-task count, the Inbox included, archived flagged', async () => {
+    const h = harness(
+      seed(
+        entity('project', 'p-b', { title: 'Bravo', color: '#5f7346', isArchived: true }),
+        entity('project', 'p-a', { title: 'Alpha', color: '#c2603f', isArchived: false }),
+        ev('t1', { title: 'One', projectId: 'p-a' }),
+        ev('t2', { title: 'Two', projectId: 'p-a', isDone: true, doneOn: NOW - 1000 }),
+        ev('t3', { title: 'Three' }),
+        // A task whose project is gone reads as Inbox everywhere, so it counts there.
+        ev('t4', { title: 'Four', projectId: 'p-gone' }),
+      ),
+    );
+
+    const out = await h.json('list_projects');
+
+    expect(out.inbox).toEqual({ openTasks: 2 });
+    expect(out.projects).toEqual([
+      { id: 'p-a', title: 'Alpha', color: '#c2603f', archived: false, openTasks: 1 },
+      { id: 'p-b', title: 'Bravo', color: '#5f7346', archived: true, openTasks: 0 },
+    ]);
+  });
+
+  it('reports an empty Inbox and no projects on a fresh log', async () => {
+    expect(await harness().json('list_projects')).toEqual({ inbox: { openTasks: 0 }, projects: [] });
+  });
+});
+
+describe('add_project', () => {
+  it('appends one project create with the next palette colour and returns it', async () => {
+    const h = harness(seed(RADIO));
+    const out = await h.json('add_project', { title: 'Garden' });
+
+    expect(h.backend.appended).toHaveLength(1);
+    expect(h.backend.appended[0]).toMatchObject({
+      type: 'create',
+      entity: 'project',
+      deviceId: DEVICE,
+      payload: { title: 'Garden', color: ENTITY_COLORS[1], isArchived: false },
+    });
+    expect(out).toEqual({
+      created: true,
+      project: { id: h.backend.appended[0]!.entityId, title: 'Garden', color: ENTITY_COLORS[1], archived: false, openTasks: 0 },
+    });
+  });
+
+  it('takes an explicit colour and trims the title', async () => {
+    const h = harness();
+    const out = await h.json('add_project', { title: '  Garden ', color: '#123abc' });
+
+    expect(h.backend.appended[0]!.payload).toEqual({ title: 'Garden', color: '#123abc', isArchived: false });
+    expect(out.project.color).toBe('#123abc');
+  });
+
+  it('refuses a title already in use, ignoring case, and names the existing id', async () => {
+    const h = harness(seed(RADIO));
+    const out = await h.call('add_project', { title: 'RADIO' });
+
+    expect(out.isError).toBe(true);
+    expect(out.text).toContain('p-radio');
+    expect(h.backend.appended).toHaveLength(0);
+  });
+
+  it('refuses a blank title, the Inbox, and a colour that is not a hex triplet', async () => {
+    const h = harness();
+
+    expect((await h.call('add_project', { title: '' })).isError).toBe(true);
+    expect((await h.call('add_project', { title: '   ' })).isError).toBe(true);
+    const inbox = await h.call('add_project', { title: 'inbox' });
+    expect(inbox.isError).toBe(true);
+    expect(inbox.text).toContain('built-in');
+    const colour = await h.call('add_project', { title: 'Garden', color: 'red' });
+    expect(colour.isError).toBe(true);
+    expect(colour.text).toContain('hex colour');
+    expect(h.backend.appended).toHaveLength(0);
+  });
+});
+
+describe('update_project', () => {
+  const events = seed(
+    RADIO,
+    entity('project', 'p-garden', { title: 'Garden', color: '#8a6d3b', isArchived: false }),
+    ev('t1', { title: 'One', projectId: 'p-radio' }),
+  );
+
+  it('emits an update carrying only the fields it was given', async () => {
+    const h = harness(events);
+    const out = await h.json('update_project', { id: 'p-radio', title: 'Radio show', archived: true });
+
+    expect(h.backend.appended).toHaveLength(1);
+    expect(h.backend.appended[0]).toMatchObject({
+      type: 'update',
+      entity: 'project',
+      entityId: 'p-radio',
+      payload: { title: 'Radio show', isArchived: true },
+    });
+    expect(out).toEqual({
+      updated: true,
+      project: { id: 'p-radio', title: 'Radio show', color: '#c2603f', archived: true, openTasks: 1 },
+    });
+  });
+
+  it('recolours and unarchives', async () => {
+    const h = harness(seed(entity('project', 'p-a', { title: 'A', color: '#c2603f', isArchived: true })));
+    const out = await h.json('update_project', { id: 'p-a', color: '#4a6670', archived: false });
+
+    expect(h.backend.appended[0]!.payload).toEqual({ color: '#4a6670', isArchived: false });
+    expect(out.project).toMatchObject({ color: '#4a6670', archived: false });
+  });
+
+  it('lets a project keep its own title in a different case', async () => {
+    const h = harness(events);
+    const out = await h.json('update_project', { id: 'p-radio', title: 'RADIO' });
+
+    expect(out.project.title).toBe('RADIO');
+  });
+
+  it('refuses an unknown id, the inbox, a rename onto another project, and a call that changes nothing', async () => {
+    const h = harness(events);
+
+    const ghost = await h.call('update_project', { id: 'ghost', color: '#000000' });
+    expect(ghost.isError).toBe(true);
+    expect(ghost.text).toContain('ghost');
+    const inbox = await h.call('update_project', { id: 'inbox', title: 'Home' });
+    expect(inbox.isError).toBe(true);
+    expect(inbox.text).toContain('built-in');
+    const clash = await h.call('update_project', { id: 'p-radio', title: 'garden' });
+    expect(clash.isError).toBe(true);
+    expect(clash.text).toContain('p-garden');
+    expect((await h.call('update_project', { id: 'p-radio' })).isError).toBe(true);
+    expect(h.backend.appended).toHaveLength(0);
+  });
+});
+
+describe('list_tags', () => {
+  it('lists every tag with its open-task count', async () => {
+    const h = harness(
+      seed(
+        entity('tag', 'g-b', { title: 'Bravo', color: '#5f7346' }),
+        URGENT,
+        ev('t1', { title: 'One', tagIds: ['g-urgent', 'g-urgent'] }),
+        ev('t2', { title: 'Two', tagIds: ['g-urgent'], isDone: true, doneOn: NOW - 1000 }),
+        ev('t3', { title: 'Three', tagIds: ['g-b', 'g-urgent'] }),
+      ),
+    );
+
+    const out = await h.json('list_tags');
+
+    expect(out).toEqual({
+      tags: [
+        { id: 'g-b', title: 'Bravo', color: '#5f7346', openTasks: 1 },
+        { id: 'g-urgent', title: 'Urgent', color: '#c2603f', openTasks: 2 },
+      ],
+    });
+  });
+});
+
+describe('add_tag', () => {
+  it('appends one tag create with the next palette colour and returns it', async () => {
+    const h = harness(seed(URGENT));
+    const out = await h.json('add_tag', { title: 'Weekend' });
+
+    expect(h.backend.appended).toHaveLength(1);
+    expect(h.backend.appended[0]).toMatchObject({
+      type: 'create',
+      entity: 'tag',
+      payload: { title: 'Weekend', color: ENTITY_COLORS[1] },
+    });
+    expect(out).toEqual({
+      created: true,
+      tag: { id: h.backend.appended[0]!.entityId, title: 'Weekend', color: ENTITY_COLORS[1], openTasks: 0 },
+    });
+  });
+
+  it('refuses a title already in use, ignoring case, and names the existing id', async () => {
+    const h = harness(seed(URGENT));
+    const out = await h.call('add_tag', { title: ' urgent' });
+
+    expect(out.isError).toBe(true);
+    expect(out.text).toContain('g-urgent');
+    expect(h.backend.appended).toHaveLength(0);
+  });
+
+  it('refuses a blank title', async () => {
+    const h = harness();
+
+    expect((await h.call('add_tag', { title: '' })).isError).toBe(true);
+    expect((await h.call('add_tag', { title: '  ' })).isError).toBe(true);
+    expect(h.backend.appended).toHaveLength(0);
+  });
+});
+
+describe('update_tag', () => {
+  const events = seed(URGENT, entity('tag', 'g-later', { title: 'Later', color: '#8a6d3b' }));
+
+  it('emits an update carrying only the fields it was given', async () => {
+    const h = harness(events);
+    const out = await h.json('update_tag', { id: 'g-urgent', title: 'Now', color: '#a4494f' });
+
+    expect(h.backend.appended).toHaveLength(1);
+    expect(h.backend.appended[0]).toMatchObject({
+      type: 'update',
+      entity: 'tag',
+      entityId: 'g-urgent',
+      payload: { title: 'Now', color: '#a4494f' },
+    });
+    expect(out).toEqual({ updated: true, tag: { id: 'g-urgent', title: 'Now', color: '#a4494f', openTasks: 0 } });
+  });
+
+  it('refuses an unknown id, a rename onto another tag, and a call that changes nothing', async () => {
+    const h = harness(events);
+
+    expect((await h.call('update_tag', { id: 'ghost', title: 'x' })).isError).toBe(true);
+    const clash = await h.call('update_tag', { id: 'g-urgent', title: 'LATER' });
+    expect(clash.isError).toBe(true);
+    expect(clash.text).toContain('g-later');
+    expect((await h.call('update_tag', { id: 'g-urgent' })).isError).toBe(true);
+    expect(h.backend.appended).toHaveLength(0);
   });
 });

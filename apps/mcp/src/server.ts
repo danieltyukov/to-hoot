@@ -1,15 +1,18 @@
 // One `McpServer` instance with every shared tool on it.
 //
 // The registration loop itself lives in core, next to the tools, so this server
-// and the Worker cannot end up advertising different schemas for the same nine
-// names. What is left here is genuinely this host's: the identity it announces
-// and the capabilities it declares.
+// and the Worker cannot end up advertising different schemas for the same
+// fifteen names. What is left here is genuinely this host's: the identity it
+// announces and the capabilities it declares.
 
 import { McpServer } from '@modelcontextprotocol/server';
 import type { ServeStdioOptions } from '@modelcontextprotocol/server/stdio';
+import { VERSION } from '@to-hoot/core';
 import { registerTools, type ToolContext } from '@to-hoot/core/tools';
 
-export const SERVER_INFO = { name: 'to-hoot', version: '0.1.0' } as const;
+// The version is the package's, so what a client sees in `initialize` is the
+// release it is talking to and not a literal nobody remembers to bump.
+export const SERVER_INFO = { name: 'to-hoot', version: VERSION } as const;
 
 /**
  * How a 2025-era opening is handled, as one exported constant rather than a

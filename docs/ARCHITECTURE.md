@@ -159,11 +159,25 @@ At one sync per minute per device that is roughly 240 requests an hour against a
 5,000 per hour primary limit and a 500 per hour content-generating secondary
 limit.
 
+The Cloudflare Worker behind the claude.ai connector reads the same repository
+on a tighter budget: 50 subrequests and 10ms of CPU per request on the free
+tier. It reads `snapshot.json`, and then every `events/<deviceId>/<ulid>.json`
+in the tree when there are at most 32 of them, each blob cached by its SHA so an
+unchanged file is fetched once per isolate, and replays that tail onto the
+snapshot together with its own recent writes. Above 32 files it reads none of
+them and falls back to the snapshot plus its own writes, rather than reading
+some and not others. The cap is why compaction also triggers on file count,
+below.
+
 ## Compaction
 
-When the log grows past 500 events beyond the snapshot, the next sync folds
-everything older into a new snapshot and deletes those event files, in the same
-commit. `snapshot.json` holds:
+When the log grows past 500 events beyond the snapshot, or the tree holds 30 or
+more event files however few events they carry, the next sync folds everything
+older into a new snapshot and deletes those event files, in the same commit.
+The event threshold keeps replay on a device cheap. The file threshold keeps
+the tail the Worker reads inside its cap of 32: a phone syncing one event at a
+time can put thirty files in the tree with thirty events in them, which the
+first threshold would never notice. `snapshot.json` holds:
 
 ```ts
 interface SnapshotFile {
@@ -178,6 +192,14 @@ The immutable copy is the point. Two devices can decide to compact at the same
 moment; they write different filenames, and only one of them wins the ref. A
 fixed snapshot path could be clobbered between another device's write and its
 read, leaving `snapshot.json` pointing at bytes nobody wrote.
+
+The copies are not kept. Once `snapshot.json` names a new one, nothing reads the
+old ones, so the compaction that writes a copy also deletes every earlier
+`snapshot-<seq>-<rand>.json` in the tree, in the same commit. The copy being
+written has a fresh name and is never on its own deletion list, and the list
+comes from the tree at the head the commit is swapped against, so it can only
+name paths the parent commit has. A repository therefore holds one copy at
+rest, and a second only while a compaction is in flight.
 
 Compaction never changes what state replays to for the events it folded. It only
 moves the starting point.

@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { SyncEngine, SyncConflictError, SNAPSHOT_PATH, META_PATH, type SnapshotFile } from './sync.js';
+import {
+  DEFAULT_COMPACT_FILE_THRESHOLD,
+  META_PATH,
+  SNAPSHOT_PATH,
+  SyncConflictError,
+  SyncEngine,
+  type SnapshotFile,
+} from './sync.js';
 import { GitHubClient, type CommitOutcome, type RepoClient, type TreeEntry, type TreeFile } from './client.js';
 import { newEvent, type Event } from '../events.js';
 import { replay } from '../replay.js';
@@ -119,7 +126,9 @@ describe('SyncEngine', () => {
   let engine: SyncEngine;
   const events = [addTask('t1', 'one')];
 
-  function makeEngine(over: { deviceId?: string; compactThreshold?: number; maxAttempts?: number } = {}): SyncEngine {
+  function makeEngine(
+    over: { deviceId?: string; compactThreshold?: number; compactFileThreshold?: number; maxAttempts?: number } = {},
+  ): SyncEngine {
     return new SyncEngine({ client: gh, deviceId: 'dev-a', ...over });
   }
 
@@ -383,8 +392,123 @@ describe('SyncEngine', () => {
     const second = readSnapshot();
     expect(second.file).not.toBe(first.file);
     expect(second.seq).toBe(first.seq + 1);
-    // The earlier immutable copy is still there and still says what it said.
-    expect(gh.files.get(first.file)).toBe(JSON.stringify(first));
+    // The earlier immutable copy is gone: once snapshot.json moved on, nothing
+    // pointed at it. The new one is what snapshot.json now names.
+    expect(gh.files.has(first.file)).toBe(false);
+    expect(gh.files.get(second.file)).toBe(gh.files.get(SNAPSHOT_PATH));
+  });
+
+  it('deletes every earlier snapshot copy in the commit that writes the new one', async () => {
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'one', { id: idAt(1) })]));
+    await makeEngine({ compactThreshold: 1 }).push([]);
+    const first = readSnapshot();
+    gh.blob(...eventFile('dev-a', [addTask('t2', 'two', { id: idAt(9) })]));
+
+    const commits = await capturePushCommits(makeEngine({ compactThreshold: 1 }), []);
+    const second = readSnapshot();
+
+    expect(commits).toHaveLength(1);
+    expect(commits[0].deletions).toContain(first.file);
+    // The copy being written has a fresh name, so it is never on its own list,
+    // and the fixed path every reader opens is rewritten, not deleted.
+    expect(commits[0].deletions).not.toContain(second.file);
+    expect(commits[0].deletions).not.toContain(SNAPSHOT_PATH);
+    expect(gh.files.has(first.file)).toBe(false);
+    expect(gh.files.has(second.file)).toBe(true);
+  });
+
+  it('sweeps copies left behind by earlier builds, and nothing else', async () => {
+    // Forty-one of these sat in the owner's repository before copies were
+    // cleaned up. Whatever their sequence numbers, one compaction removes them.
+    gh.blob('snapshot-3-01ARZ3NDEKTSV4RRFFQ69G5FAV.json', '{"seq":3}');
+    gh.blob('snapshot-17-01ARZ3NDEKTSV4RRFFQ69G5FAW.json', '{"seq":17}');
+    gh.blob('README.md', 'kept');
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'one')]));
+
+    const commits = await capturePushCommits(makeEngine({ compactThreshold: 1 }), []);
+
+    expect(commits[0].deletions).toEqual(
+      expect.arrayContaining([
+        'snapshot-3-01ARZ3NDEKTSV4RRFFQ69G5FAV.json',
+        'snapshot-17-01ARZ3NDEKTSV4RRFFQ69G5FAW.json',
+      ]),
+    );
+    expect(gh.files.has('snapshot-3-01ARZ3NDEKTSV4RRFFQ69G5FAV.json')).toBe(false);
+    expect(gh.files.has('README.md')).toBe(true);
+    // The copies were never read: they are deleted by path alone.
+    expect(gh.blobReads).not.toContain(expect.stringContaining('seq'));
+  });
+
+  it('compacts on file count when the event threshold is nowhere near', async () => {
+    for (let i = 1; i <= 3; i++) {
+      gh.blob(...eventFile('dev-a', [addTask(`t${i}`, `task ${i}`, { id: idAt(i) })]));
+    }
+
+    await expect(makeEngine({ compactThreshold: 500, compactFileThreshold: 4 }).maybeCompact()).resolves.toBe(false);
+    expect(gh.commits).toHaveLength(0);
+
+    await expect(makeEngine({ compactThreshold: 500, compactFileThreshold: 3 }).maybeCompact()).resolves.toBe(true);
+    expect(Object.keys(readSnapshot().state.tasks).sort()).toEqual(['t1', 't2', 't3']);
+    expect([...gh.files.keys()].filter(path => path.startsWith('events/'))).toEqual([]);
+  });
+
+  it('compacts a push on file count too, in the same commit as the batch', async () => {
+    for (let i = 1; i <= 3; i++) {
+      gh.blob(...eventFile('dev-b', [addTask(`t${i}`, `task ${i}`, { deviceId: 'dev-b', id: idAt(i) })]));
+    }
+
+    const engine = makeEngine({ compactThreshold: 500, compactFileThreshold: 3 });
+    const result = await engine.push([addTask('t9', 'nine', { id: idAt(9) })]);
+
+    expect(result).toMatchObject({ status: 'ok', compacted: true });
+    expect(gh.commits).toHaveLength(1);
+    // The three files were folded. The batch being pushed sits above the
+    // watermark, which never rises past what the log already held, so it is
+    // written as an event file in the same commit and stays in the log.
+    expect(Object.keys(readSnapshot().state.tasks).sort()).toEqual(['t1', 't2', 't3']);
+    expect([...gh.files.keys()].filter(path => path.startsWith('events/'))).toHaveLength(1);
+    expect(Object.keys((await makeEngine().pullState()).tasks).sort()).toEqual(['t1', 't2', 't3', 't9']);
+  });
+
+  it('keeps the file threshold below the tail the Worker will read', () => {
+    // tools/snapshot.ts reads at most 32 event files; the devices have to
+    // compact before the tree gets there, with room for concurrent batches.
+    expect(DEFAULT_COMPACT_FILE_THRESHOLD).toBe(30);
+  });
+
+  it('exposes the device registry after a pull, as a copy', async () => {
+    gh.blob(
+      META_PATH,
+      JSON.stringify({
+        schemaVersion: 1,
+        devices: { phone: { firstSeen: 1, lastSeen: 5 }, laptop: { firstSeen: 2, lastSeen: 3 } },
+      }),
+    );
+
+    await engine.pull();
+
+    expect(engine.devices).toEqual({
+      laptop: { firstSeen: 2, lastSeen: 3 },
+      phone: { firstSeen: 1, lastSeen: 5 },
+    });
+    const copy = engine.devices;
+    copy['phone']!.lastSeen = 999;
+    delete copy['laptop'];
+    expect(engine.devices).toEqual({
+      laptop: { firstSeen: 2, lastSeen: 3 },
+      phone: { firstSeen: 1, lastSeen: 5 },
+    });
+  });
+
+  it('has no devices until a compaction has written meta.json', async () => {
+    expect(engine.devices).toEqual({});
+    gh.blob(...eventFile('dev-b', [addTask('t2', 'theirs', { deviceId: 'dev-b', ts: 7_000 })]));
+    await makeEngine({ compactThreshold: 1 }).push([addTask('t1', 'mine', { ts: 3_000 })]);
+
+    await engine.pull();
+
+    expect(Object.keys(engine.devices).sort()).toEqual(['dev-a', 'dev-b']);
+    expect(engine.devices['dev-a']).toEqual({ firstSeen: 3_000, lastSeen: 3_000 });
   });
 
   it('refuses a deviceId that is not a single path segment', () => {

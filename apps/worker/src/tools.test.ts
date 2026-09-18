@@ -4,9 +4,11 @@
 //
 // `index.test.ts` sends only `tools/list`, which touches no backend at all, so
 // none of the machinery below it was ever exercised end to end. This is also
-// where the two properties the Worker exists to hold can be observed at the
-// HTTP layer rather than inferred: that a read costs one conditional GET and
-// never reads an event blob, and that a write commits without replaying.
+// where the properties the Worker exists to hold can be observed at the HTTP
+// layer rather than inferred: that a warm read costs one conditional GET, that
+// the log tail is read when it is short and never when it is long, that a tail
+// blob is fetched once however many reads follow, and that a write commits
+// without replaying the whole log.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,6 +50,32 @@ function snapshot(): string {
   });
 }
 
+/**
+ * One event file another device wrote after the snapshot: the task the Worker
+ * could not see before it read the tail.
+ */
+function phoneBatch(): string {
+  return JSON.stringify([
+    {
+      id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      deviceId: 'phone',
+      ts: 2,
+      type: 'create',
+      entity: 'task',
+      entityId: 't-2',
+      payload: {
+        title: 'Written on the phone',
+        projectId: 'inbox',
+        tagIds: [],
+        isDone: false,
+        timeEstimate: 15 * 60_000,
+        dueDay: TODAY,
+      },
+      schemaVersion: 1,
+    },
+  ]);
+}
+
 interface Call {
   method: string;
   path: string;
@@ -56,7 +84,13 @@ interface Call {
 let calls: Call[];
 let committed: { path: string; content: string }[];
 
-function stubGitHub(): void {
+/**
+ * The tree at the head: the snapshot plus `eventFiles` event files, the first
+ * of which holds `phoneBatch`. One by default, which is the ordinary shape of a
+ * repository between two compactions.
+ */
+function stubGitHub(options: { eventFiles?: number } = {}): void {
+  const eventFiles = options.eventFiles ?? 1;
   calls = [];
   committed = [];
   vi.stubGlobal(
@@ -83,18 +117,19 @@ function stubGitHub(): void {
         return json(200, [{ sha: 'c1' }]);
       }
       if (url.pathname === '/repos/o/r/git/trees/c1') {
-        return json(200, {
-          truncated: false,
-          tree: [
-            { type: 'blob', path: 'snapshot.json', sha: 'snap1' },
-            // An event file the Worker must NOT read: reading a blob per event
-            // file is the whole thing this design avoids.
-            { type: 'blob', path: 'events/phone/01.json', sha: 'events1' },
-          ],
-        });
+        const tree = [{ type: 'blob', path: 'snapshot.json', sha: 'snap1' }];
+        for (let i = 1; i <= eventFiles; i++) {
+          tree.push({ type: 'blob', path: `events/phone/${String(i).padStart(2, '0')}.json`, sha: `events${i}` });
+        }
+        return json(200, { truncated: false, tree });
       }
       if (url.pathname === '/repos/o/r/git/blobs/snap1') {
         return json(200, { content: btoa(snapshot()), encoding: 'base64' });
+      }
+      const eventBlob = /^\/repos\/o\/r\/git\/blobs\/events(\d+)$/.exec(url.pathname);
+      if (eventBlob !== null) {
+        const batch = eventBlob[1] === '1' ? phoneBatch() : '[]';
+        return json(200, { content: btoa(batch), encoding: 'base64' });
       }
       if (url.pathname === '/repos/o/r/git/ref/heads/main') {
         return json(200, { object: { sha: 'c1' } });
@@ -178,13 +213,13 @@ beforeEach(stubGitHub);
 afterEach(() => vi.unstubAllGlobals());
 
 describe('a read through the Worker', () => {
-  it('answers today from the snapshot without touching an event blob', async () => {
+  it('answers today from the snapshot plus the event file another device wrote since', async () => {
     const out = await callTool('today', {});
 
     expect(out.isError).toBeUndefined();
     const body = JSON.parse(out.text) as { plannedMinutes: number; tasks: { id: string }[] };
-    expect(body.tasks.map(t => t.id)).toEqual(['t-1']);
-    expect(body.plannedMinutes).toBe(45);
+    expect(body.tasks.map(t => t.id)).toEqual(['t-1', 't-2']);
+    expect(body.plannedMinutes).toBe(60);
 
     expect(calls.map(c => c.path)).toEqual([
       // Resolving the default branch, once per client rather than per request.
@@ -192,13 +227,40 @@ describe('a read through the Worker', () => {
       '/repos/o/r/commits',
       '/repos/o/r/git/trees/c1',
       '/repos/o/r/git/blobs/snap1',
+      '/repos/o/r/git/blobs/events1',
     ]);
-    expect(calls.some(c => c.path.endsWith('/blobs/events1'))).toBe(false);
   });
 
-  it('lists the snapshot task', async () => {
+  it('lists the snapshot task and the tail task', async () => {
     const out = await callTool('list_tasks', {});
-    expect(JSON.parse(out.text).total).toBe(1);
+    const body = JSON.parse(out.text) as { total: number; tasks: { id: string; title: string }[] };
+    expect(body.total).toBe(2);
+    expect(body.tasks.map(t => t.title)).toEqual(['Ship the Worker', 'Written on the phone']);
+  });
+
+  it('fetches an unchanged tail blob once across two reads', async () => {
+    const bindings = env();
+    await callTool('list_tasks', {}, bindings);
+    await callTool('today', {}, bindings);
+
+    expect(calls.filter(c => c.path === '/repos/o/r/git/blobs/events1')).toHaveLength(1);
+  });
+
+  it('skips the tail entirely when the tree holds more event files than the cap', async () => {
+    stubGitHub({ eventFiles: 33 });
+
+    const out = await callTool('today', {});
+
+    // The snapshot alone, and not one of the 33 event blobs was asked for.
+    const body = JSON.parse(out.text) as { tasks: { id: string }[] };
+    expect(body.tasks.map(t => t.id)).toEqual(['t-1']);
+    expect(calls.map(c => c.path)).toEqual([
+      '/repos/o/r',
+      '/repos/o/r/commits',
+      '/repos/o/r/git/trees/c1',
+      '/repos/o/r/git/blobs/snap1',
+    ]);
+    expect(calls.some(c => c.path.includes('/blobs/events'))).toBe(false);
   });
 });
 
@@ -215,6 +277,7 @@ describe('the default-branch lookup', () => {
       '/repos/o/r/commits',
       '/repos/o/r/git/trees/c1',
       '/repos/o/r/git/blobs/snap1',
+      '/repos/o/r/git/blobs/events1',
     ]);
   });
 
@@ -225,6 +288,7 @@ describe('the default-branch lookup', () => {
       '/repos/o/r/commits',
       '/repos/o/r/git/trees/c1',
       '/repos/o/r/git/blobs/snap1',
+      '/repos/o/r/git/blobs/events1',
     ]);
     expect(calls.some(c => c.path === '/repos/o/r')).toBe(false);
   });
@@ -233,7 +297,8 @@ describe('the default-branch lookup', () => {
     const bindings = env();
     await callTool('today', {}, bindings);
     const cold = calls.length;
-    expect(cold).toBe(4);
+    // The branch, the head, the tree, the snapshot and the one tail blob.
+    expect(cold).toBe(5);
 
     await callTool('today', {}, bindings);
 
@@ -243,15 +308,15 @@ describe('the default-branch lookup', () => {
     expect(calls[cold]!.path).toBe('/repos/o/r/commits');
   });
 
-  it('costs a configured client 8 requests for a write and an unconfigured one 9', async () => {
+  it('costs a configured client 9 requests for a write and an unconfigured one 10', async () => {
     await callTool('add_task', { title: 'configured' }, env({ GITHUB_BRANCH: 'main' }));
     const configured = calls.length;
 
     calls.length = 0;
     await callTool('add_task', { title: 'unconfigured' });
 
-    expect(configured).toBe(8);
-    expect(calls).toHaveLength(9);
+    expect(configured).toBe(9);
+    expect(calls).toHaveLength(10);
   });
 });
 
@@ -275,15 +340,16 @@ describe('a write through the Worker', () => {
       'POST /repos/o/r/git/commits',
       'PATCH /repos/o/r/git/refs/heads/main',
     ]);
-    // One to resolve the branch, three to read the snapshot, one conditional
-    // GET on the append's refresh, then four for the commit. Nine of the fifty
-    // the free tier allows.
+    // One to resolve the branch, three to read the snapshot, one per event file
+    // in the tail (one here), one conditional GET on the append's refresh, then
+    // four for the commit. Ten of the fifty the free tier allows, and at most
+    // 41 with the tail at its cap of 32 files.
     //
     // The commit is four and not five even on an unconfigured client: a commit
     // whose first act is resolving the branch would pay a fifth, but every tool
     // here loads state before it appends, so the branch is already resolved and
-    // cached on the client by then. A warm isolate spends eight in total.
-    expect(calls).toHaveLength(9);
+    // cached on the client by then. A configured isolate spends nine in total.
+    expect(calls).toHaveLength(10);
   });
 
   it('reports a refusal as a tool error and commits nothing', async () => {
