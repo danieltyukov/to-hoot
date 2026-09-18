@@ -27,15 +27,23 @@
         { "url": "https://dash.cloudflare.com/*" },
         { "url": "https://claude.ai/*" },
         { "url": "https://github.com/*" },
-        { "url": "https://developers.cloudflare.com/*" }
+        { "url": "https://developers.cloudflare.com/*" },
+        { "url": "https://script.google.com/*" },
+        { "url": "https://calendar.google.com/*" }
       ]
     },
     {
       "identifier": "http:default",
       "allow": [
         { "url": "https://api.github.com/*" },
+        { "url": "https://github.com/*" },
+        { "url": "https://objects.githubusercontent.com/*" },
+        { "url": "https://release-assets.githubusercontent.com/*" },
+        { "url": "https://api.cloudflare.com/*" },
+        { "url": "https://*.workers.dev/*" },
         { "url": "https://script.google.com/*" },
-        { "url": "https://script.googleusercontent.com/*" }
+        { "url": "https://script.googleusercontent.com/*" },
+        { "url": "https://calendar.google.com/*" }
       ]
     }
   ]

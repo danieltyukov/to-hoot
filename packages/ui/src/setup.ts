@@ -4,6 +4,7 @@ import {
   META_PATH,
   BRIDGE_VERSION,
   SNAPSHOT_PATH,
+  VERSION,
   isEmptyRepository,
   DEVICE_ID_RULE,
   GitHubClient,
@@ -12,6 +13,7 @@ import {
   isValidDeviceId,
   type BridgeEvent,
   type Http,
+  type PlatformKind,
 } from '@to-hoot/core';
 
 /*
@@ -929,4 +931,634 @@ function toolNames(text: string): string[] {
   } catch {
     return [];
   }
+}
+
+/*
+ * Sign in with GitHub.
+ *
+ * GitHub's device flow, which is the one OAuth flow that works from a phone
+ * with no server anywhere: the app asks GitHub for a short code, the person
+ * types it into github.com in a browser that already knows them, and the app
+ * polls until GitHub hands over a token. Nothing is pasted and no client secret
+ * exists, because the device flow does not use one.
+ *
+ * The client id names the ToHoot OAuth App and is a public identifier, the way
+ * the GitHub CLI's is. A fork registers its own app and sets
+ * VITE_GITHUB_CLIENT_ID at build time.
+ *
+ * The scope is `repo`, because OAuth Apps have no narrower scope that reaches
+ * a private repository. That is broader than the fine-grained token the token
+ * path asks for, and the token never leaves the device and is never shown,
+ * which is a different posture from one somebody typed. SECURITY.md says so.
+ */
+export const GITHUB_CLIENT_ID: string =
+  (import.meta.env?.['VITE_GITHUB_CLIENT_ID'] as string | undefined) || 'Ov23liL8JUqlMBxGIk3l';
+export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
+export const GITHUB_ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+export const GITHUB_SCOPE = 'repo';
+/** Where a fine-grained token is made, for the path that still takes one. */
+export const GITHUB_NEW_TOKEN = 'https://github.com/settings/personal-access-tokens/new';
+
+export interface DeviceCode {
+  deviceCode: string;
+  /** What the person types, as GitHub formats it: "ABCD-1234". */
+  userCode: string;
+  verificationUri: string;
+  /** Epoch milliseconds. Past it the code is dead and a new one has to be asked for. */
+  expiresAt: number;
+  /** How long to wait between polls. GitHub sets it, and raises it on slow_down. */
+  intervalMs: number;
+}
+
+/** GitHub's OAuth endpoints speak form encoding in and JSON out, when asked. */
+async function oauth(http: Http, url: string, params: Record<string, string>): Promise<Json> {
+  const res = await http({
+    url,
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(params).toString(),
+  });
+  const text = await res.text();
+  let parsed: unknown = undefined;
+  try {
+    parsed = text === '' ? undefined : JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  return { status: res.status, body: parsed };
+}
+
+/** Asks GitHub for a device code. The first half of signing in. */
+export async function startDeviceLogin(
+  http: Http,
+  options: { clientId?: string; now?: () => number } = {},
+): Promise<Check<DeviceCode>> {
+  const clientId = options.clientId ?? GITHUB_CLIENT_ID;
+  const now = options.now ?? Date.now;
+  let res: Json;
+  try {
+    res = await oauth(http, GITHUB_DEVICE_CODE_URL, { client_id: clientId, scope: GITHUB_SCOPE });
+  } catch (err) {
+    return { status: 'error', detail: transportMessage(err) };
+  }
+  const body = res.body as Record<string, unknown> | undefined;
+  if (res.status !== 200 || body === undefined) {
+    return {
+      status: 'error',
+      detail: field(body, 'error_description') ?? `GitHub answered ${res.status}.`,
+      hint: field(body, 'error') === 'device_flow_disabled'
+        ? 'The OAuth App has device flow switched off.'
+        : undefined,
+    };
+  }
+  const deviceCode = field(body, 'device_code');
+  const userCode = field(body, 'user_code');
+  const verificationUri = field(body, 'verification_uri');
+  if (deviceCode === undefined || userCode === undefined || verificationUri === undefined) {
+    return { status: 'error', detail: 'GitHub answered without a device code.' };
+  }
+  const expiresIn = typeof body['expires_in'] === 'number' ? body['expires_in'] : 900;
+  const interval = typeof body['interval'] === 'number' ? body['interval'] : 5;
+  return {
+    status: 'ok',
+    detail: `Enter ${userCode} at ${verificationUri}.`,
+    value: {
+      deviceCode,
+      userCode,
+      verificationUri,
+      expiresAt: now() + expiresIn * 1000,
+      intervalMs: interval * 1000,
+    },
+  };
+}
+
+export type DevicePoll =
+  | { status: 'pending'; intervalMs: number }
+  | { status: 'ok'; token: string }
+  | { status: 'error'; detail: string; hint?: string };
+
+/** One poll. The second half of signing in, repeated until it is not pending. */
+export async function pollDeviceLogin(
+  http: Http,
+  code: DeviceCode,
+  clientId: string = GITHUB_CLIENT_ID,
+): Promise<DevicePoll> {
+  let res: Json;
+  try {
+    res = await oauth(http, GITHUB_ACCESS_TOKEN_URL, {
+      client_id: clientId,
+      device_code: code.deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    });
+  } catch (err) {
+    return { status: 'error', detail: transportMessage(err) };
+  }
+  const body = res.body as Record<string, unknown> | undefined;
+  const token = field(body, 'access_token');
+  if (token !== undefined) return { status: 'ok', token };
+
+  // GitHub answers 200 with an `error` field while the person has not finished,
+  // which is the ordinary case, not a failure.
+  switch (field(body, 'error')) {
+    case 'authorization_pending':
+      return { status: 'pending', intervalMs: code.intervalMs };
+    case 'slow_down': {
+      // The spec adds five seconds to the interval, and GitHub sometimes says
+      // the new interval outright.
+      const said = typeof body?.['interval'] === 'number' ? body['interval'] * 1000 : undefined;
+      return { status: 'pending', intervalMs: said ?? code.intervalMs + 5000 };
+    }
+    case 'expired_token':
+      return {
+        status: 'error',
+        detail: 'The code expired before it was entered.',
+        hint: 'Start again for a new one.',
+      };
+    case 'access_denied':
+      return { status: 'error', detail: 'The sign-in was cancelled on GitHub.' };
+    case undefined:
+      return { status: 'error', detail: `GitHub answered ${res.status} without a token.` };
+    default:
+      return {
+        status: 'error',
+        detail: field(body, 'error_description') ?? `GitHub answered ${field(body, 'error')}.`,
+      };
+  }
+}
+
+export interface WaitOptions {
+  clientId?: string;
+  now?: () => number;
+  /** Injectable so a test does not wait five real seconds per poll. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Asked before every poll; true stops the wait with a cancelled result. */
+  cancelled?: () => boolean;
+}
+
+const realSleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Polls until GitHub hands over a token, the code expires, or the caller
+ * cancels. The interval is GitHub's, and grows when GitHub asks.
+ */
+export async function waitForDeviceLogin(
+  http: Http,
+  code: DeviceCode,
+  options: WaitOptions = {},
+): Promise<Check<string>> {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? realSleep;
+  let current: DeviceCode = code;
+  for (;;) {
+    if (options.cancelled?.() === true) {
+      return { status: 'error', detail: 'Sign-in cancelled.' };
+    }
+    if (now() >= current.expiresAt) {
+      return {
+        status: 'error',
+        detail: 'The code expired before it was entered.',
+        hint: 'Start again for a new one.',
+      };
+    }
+    const poll = await pollDeviceLogin(http, current, options.clientId);
+    if (poll.status === 'ok') return { status: 'ok', detail: 'Signed in.', value: poll.token };
+    if (poll.status === 'error') return poll;
+    current = { ...current, intervalMs: poll.intervalMs };
+    await sleep(poll.intervalMs);
+  }
+}
+
+/*
+ * The repository, found or made.
+ *
+ * With a token in hand nobody should have to type a repository name: the app
+ * looks for the one it would have created and creates it when it is not there.
+ * Another name is one tap away, and the same two functions answer it.
+ */
+export const DEFAULT_REPO_NAME = 'to-hoot-data';
+
+/** The account's own repository by that name, or null when there is none. */
+export async function findDataRepo(
+  http: Http,
+  token: string,
+  login: string,
+  name: string = DEFAULT_REPO_NAME,
+): Promise<Check<RepoTarget | null>> {
+  const repos = await listRepos(http, token);
+  if (repos.status === 'error') return repos;
+  const wanted = name.trim().toLowerCase();
+  const match = repos.value.find(
+    r => r.owner.toLowerCase() === login.toLowerCase() && r.repo.toLowerCase() === wanted,
+  );
+  if (match === undefined) {
+    return { status: 'ok', detail: `No repository called ${name.trim()} yet.`, value: null };
+  }
+  // Re-read the one that matched, because the listing does not say whether it
+  // is private, and a public data repository is worth a sentence of its own.
+  const read = await readRepo(http, token, match.owner, match.repo);
+  if (read.status === 'error') return read;
+  return { status: 'ok', detail: read.detail, value: read.value };
+}
+
+export interface JoinedRepo {
+  target: RepoTarget;
+  /** What was already there. Empty for a repository this call created. */
+  contents: RepoContents;
+  created: boolean;
+}
+
+/**
+ * Finds the data repository or creates it, and reads what is already in it.
+ *
+ * The result is what the device step needs: the names already taken, and
+ * whether this is a first device setting up or a second one joining.
+ */
+export async function joinOrCreateRepo(
+  http: Http,
+  token: string,
+  login: string,
+  name: string = DEFAULT_REPO_NAME,
+): Promise<Check<JoinedRepo>> {
+  const found = await findDataRepo(http, token, login, name);
+  if (found.status === 'error') return found;
+  const empty: RepoContents = { hasLog: false, deviceIds: [], eventFiles: 0, hasSnapshot: false };
+
+  if (found.value === null) {
+    const made = await createDataRepo(http, token, name);
+    if (made.status === 'error') return made;
+    return {
+      status: 'ok',
+      detail: made.detail,
+      value: { target: made.value, contents: empty, created: true },
+    };
+  }
+
+  const inspected = await inspectRepo(http, token, found.value);
+  const contents = inspected.status === 'ok' ? inspected.value : empty;
+  return {
+    status: 'ok',
+    // Joining is the moment someone fears their first device's history is
+    // about to be replaced, so the sentence says outright that it is not.
+    detail: contents.hasLog
+      ? `${found.detail} ${describeContents(contents)} This device joins it, and nothing already there is replaced.`
+      : found.detail,
+    value: { target: found.value, contents, created: false },
+  };
+}
+
+/**
+ * The name this device suggests for itself: what the shell says it is, made
+ * unique against the names already writing to the repository.
+ *
+ * "phone" and "desktop" are what a person would have typed, which is the whole
+ * point of not asking. A second phone becomes "phone-2" rather than a refusal.
+ */
+export function suggestDeviceName(kind: PlatformKind | undefined, taken: readonly string[]): string {
+  const base = kind === 'android' ? 'phone' : kind === 'desktop' ? 'desktop' : 'browser';
+  if (!taken.includes(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!taken.includes(candidate)) return candidate;
+  }
+}
+
+/*
+ * The Claude endpoint, deployed from the app.
+ *
+ * Wrangler is a terminal on a computer with this repository checked out, and
+ * that is the wrong shape for a phone. Cloudflare's own API takes the same
+ * upload wrangler makes: one multipart PUT holding the module and a metadata
+ * part with the compatibility settings and the secrets as bindings. The module
+ * comes from the release that matches this build, so the endpoint always runs
+ * the Worker this app was tested against.
+ *
+ * The API token is used for the deploy and forgotten. It can rewrite every
+ * Worker on the account, and a task app has no business keeping that.
+ */
+export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
+
+/**
+ * The dashboard page a token is made on, with the permission set the deploy
+ * needs prefilled: Workers Scripts to write the script, Account Settings to
+ * list the accounts. The prefill is a dashboard convenience the app cannot
+ * check, so the copy beside the button also names the template to pick.
+ */
+export const CLOUDFLARE_TOKEN_URL =
+  'https://dash.cloudflare.com/profile/api-tokens?' +
+  new URLSearchParams({
+    permissionGroupKeys: JSON.stringify([
+      { key: 'workers_scripts', type: 'edit' },
+      { key: 'account_settings', type: 'read' },
+    ]),
+    name: 'ToHoot',
+    accountId: '*',
+  }).toString();
+
+export const WORKER_SCRIPT_NAME = 'to-hoot-mcp';
+/** Mirrors apps/worker/wrangler.jsonc; a test reads that file and checks. */
+export const WORKER_COMPATIBILITY_DATE = '2026-08-01';
+export const WORKER_COMPATIBILITY_FLAGS = ['nodejs_compat_v2'];
+export const WORKER_BUNDLE_ASSET = 'to-hoot-worker.mjs';
+
+/** The Worker bundle the release workflow publishes beside the APK and the deb. */
+export function workerBundleUrl(version: string = VERSION): string {
+  return `https://github.com/danieltyukov/to-hoot/releases/download/v${version}/${WORKER_BUNDLE_ASSET}`;
+}
+
+export interface CloudflareAccount {
+  id: string;
+  name: string;
+}
+
+async function cloudflare(
+  http: Http,
+  apiToken: string,
+  method: 'GET' | 'POST' | 'PUT',
+  path: string,
+  body?: { contentType: string; text: string },
+): Promise<Json> {
+  const res = await http({
+    url: `${CLOUDFLARE_API}${path}`,
+    method,
+    headers: {
+      authorization: `Bearer ${apiToken}`,
+      accept: 'application/json',
+      ...(body === undefined ? {} : { 'content-type': body.contentType }),
+    },
+    body: body?.text,
+  });
+  const text = await res.text();
+  let parsed: unknown = undefined;
+  try {
+    parsed = text === '' ? undefined : JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  return { status: res.status, body: parsed };
+}
+
+/** Cloudflare's own first error message, which is usually the useful one. */
+function cloudflareMessage(res: Json, fallback: string): string {
+  const errors = (res.body as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    const first = errors[0] as { message?: unknown } | undefined;
+    if (typeof first?.message === 'string') return first.message;
+  }
+  return fallback;
+}
+
+function cloudflareFailure(res: Json): Check<never> {
+  if (res.status === 401 || res.status === 403) {
+    return {
+      status: 'error',
+      detail: 'Cloudflare rejected the token.',
+      hint: 'It needs Workers Scripts: Edit and Account Settings: Read on the account.',
+    };
+  }
+  return { status: 'error', detail: cloudflareMessage(res, `Cloudflare answered ${res.status}.`) };
+}
+
+/** The accounts the token can see. One is the ordinary case. */
+export async function listCloudflareAccounts(
+  http: Http,
+  apiToken: string,
+): Promise<Check<CloudflareAccount[]>> {
+  if (apiToken.trim() === '') return { status: 'error', detail: 'Paste a Cloudflare API token first.' };
+  let res: Json;
+  try {
+    res = await cloudflare(http, apiToken.trim(), 'GET', '/accounts');
+  } catch (err) {
+    return { status: 'error', detail: `Could not reach Cloudflare: ${messageOf(err)}` };
+  }
+  if (res.status !== 200) return cloudflareFailure(res);
+  const rows = (res.body as { result?: unknown } | undefined)?.result;
+  const accounts = (Array.isArray(rows) ? rows : []).flatMap((row): CloudflareAccount[] => {
+    const id = field(row, 'id');
+    if (id === undefined) return [];
+    return [{ id, name: field(row, 'name') ?? id }];
+  });
+  if (accounts.length === 0) {
+    return {
+      status: 'error',
+      detail: 'The token can see no Cloudflare account.',
+      hint: 'Give it Account Settings: Read on the account the endpoint should live in.',
+    };
+  }
+  return {
+    status: 'ok',
+    detail: accounts.length === 1 ? `Cloudflare account: ${accounts[0]!.name}.` : `${accounts.length} accounts.`,
+    value: accounts,
+  };
+}
+
+/** Downloads the Worker bundle for this build from the release. */
+export async function fetchWorkerBundle(http: Http, url: string = workerBundleUrl()): Promise<Check<string>> {
+  let res: { status: number; text: () => Promise<string> };
+  try {
+    res = await http({ url, method: 'GET', headers: { accept: 'application/javascript, */*' } });
+  } catch (err) {
+    return { status: 'error', detail: `Could not download the Worker: ${messageOf(err)}` };
+  }
+  if (res.status === 404) {
+    return {
+      status: 'error',
+      detail: `No Worker bundle is published for version ${VERSION}.`,
+      hint: 'A release builds one. Until then, deploy with wrangler below.',
+    };
+  }
+  if (res.status !== 200) return { status: 'error', detail: `The release answered ${res.status}.` };
+  const text = await res.text();
+  // esbuild ends a module with `export {` or `export default`; a sign-in page
+  // or a release listing has neither.
+  if (!/export\s*(default\b|\{)/.test(text)) {
+    return { status: 'error', detail: 'What came back is not a Worker module.' };
+  }
+  return { status: 'ok', detail: `Downloaded ${Math.round(text.length / 1024)} KB.`, value: text };
+}
+
+export interface MultipartPart {
+  name: string;
+  content: string;
+  contentType: string;
+  filename?: string;
+}
+
+/**
+ * A multipart body as one string, which is the only body shape `Http` carries.
+ *
+ * Both shells pass a string through untouched: Tauri's fetch takes it as it is,
+ * and CapacitorHttp writes any body whose content type it does not recognise
+ * verbatim. A JavaScript module is text, so nothing here needs bytes.
+ */
+export function multipartBody(parts: MultipartPart[], boundary: string): string {
+  const lines: string[] = [];
+  for (const part of parts) {
+    const disposition =
+      part.filename === undefined
+        ? `form-data; name="${part.name}"`
+        : `form-data; name="${part.name}"; filename="${part.filename}"`;
+    lines.push(`--${boundary}`);
+    lines.push(`Content-Disposition: ${disposition}`);
+    lines.push(`Content-Type: ${part.contentType}`);
+    lines.push('');
+    lines.push(part.content);
+  }
+  lines.push(`--${boundary}--`);
+  lines.push('');
+  return lines.join('\r\n');
+}
+
+export interface WorkerUploadInput {
+  apiToken: string;
+  accountId: string;
+  /** The bundled module, from `fetchWorkerBundle`. */
+  bundle: string;
+  /** Every binding the Worker reads, as secrets. */
+  secrets: Record<string, string>;
+  scriptName?: string;
+  /** Injectable for a repeatable body under test. */
+  boundary?: string;
+  /** Injectable for a repeatable subdomain under test. */
+  randomSuffix?: () => string;
+}
+
+export interface WorkerUpload {
+  scriptName: string;
+  subdomain: string;
+  /** `https://<script>.<subdomain>.workers.dev`, with no path. */
+  base: string;
+}
+
+function randomSuffix(): string {
+  return generateSecret(6).toLowerCase();
+}
+
+/**
+ * Uploads the Worker and puts it on a workers.dev hostname.
+ *
+ * Three calls after the upload itself: the account's subdomain (registered
+ * when the account has none, which is the shape a brand new free account is
+ * in), then the script's own workers.dev route switched on. The URL is composed
+ * rather than read back, because the API reports the pieces and not the whole.
+ */
+export async function uploadWorker(http: Http, input: WorkerUploadInput): Promise<Check<WorkerUpload>> {
+  const apiToken = input.apiToken.trim();
+  const scriptName = input.scriptName ?? WORKER_SCRIPT_NAME;
+  const boundary = input.boundary ?? `----ToHoot${generateSecret(24)}`;
+  const metadata = {
+    main_module: 'index.mjs',
+    compatibility_date: WORKER_COMPATIBILITY_DATE,
+    compatibility_flags: WORKER_COMPATIBILITY_FLAGS,
+    bindings: Object.entries(input.secrets)
+      .filter(([, text]) => text !== '')
+      .map(([name, text]) => ({ type: 'secret_text', name, text })),
+    observability: { enabled: true },
+  };
+  const body = multipartBody(
+    [
+      { name: 'metadata', content: JSON.stringify(metadata), contentType: 'application/json' },
+      {
+        name: 'index.mjs',
+        filename: 'index.mjs',
+        content: input.bundle,
+        contentType: 'application/javascript+module',
+      },
+    ],
+    boundary,
+  );
+  const scripts = `/accounts/${input.accountId}/workers/scripts/${scriptName}`;
+
+  try {
+    const uploaded = await cloudflare(http, apiToken, 'PUT', scripts, {
+      contentType: `multipart/form-data; boundary=${boundary}`,
+      text: body,
+    });
+    if (uploaded.status !== 200) return cloudflareFailure(uploaded);
+
+    let subdomain = '';
+    const current = await cloudflare(http, apiToken, 'GET', `/accounts/${input.accountId}/workers/subdomain`);
+    if (current.status === 200) {
+      subdomain = field((current.body as { result?: unknown })?.result, 'subdomain') ?? '';
+    }
+    if (subdomain === '') {
+      // A new account has no workers.dev subdomain until one is registered.
+      // The name has to be unique across Cloudflare, so it carries a random
+      // tail, and a clash is tried again rather than reported.
+      const suffix = input.randomSuffix ?? randomSuffix;
+      for (let attempt = 0; attempt < 3 && subdomain === ''; attempt++) {
+        const wanted = `to-hoot-${suffix()}`;
+        const made = await cloudflare(http, apiToken, 'PUT', `/accounts/${input.accountId}/workers/subdomain`, {
+          contentType: 'application/json',
+          text: JSON.stringify({ subdomain: wanted }),
+        });
+        if (made.status === 200) subdomain = wanted;
+        else if (made.status !== 409 && made.status !== 400) return cloudflareFailure(made);
+      }
+      if (subdomain === '') {
+        return { status: 'error', detail: 'Could not register a workers.dev subdomain.' };
+      }
+    }
+
+    const enabled = await cloudflare(http, apiToken, 'POST', `${scripts}/subdomain`, {
+      contentType: 'application/json',
+      text: JSON.stringify({ enabled: true, previews_enabled: false }),
+    });
+    if (enabled.status !== 200) return cloudflareFailure(enabled);
+
+    const base = `https://${scriptName}.${subdomain}.workers.dev`;
+    return { status: 'ok', detail: `Deployed to ${base}.`, value: { scriptName, subdomain, base } };
+  } catch (err) {
+    return { status: 'error', detail: `Could not reach Cloudflare: ${messageOf(err)}` };
+  }
+}
+
+export interface DeployOptions {
+  /** How many times to ask the new endpoint for its tools while DNS catches up. */
+  attempts?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface Deployed extends WorkerUpload {
+  endpoint: string;
+  tools: string[];
+}
+
+/**
+ * The whole thing: upload, route, then prove it answers.
+ *
+ * A fresh workers.dev hostname can take a few seconds to resolve, so the check
+ * is retried briefly. A deploy that uploaded and then could not be reached is
+ * reported as exactly that, with the URL, rather than as a failed upload.
+ */
+export async function deployWorker(
+  http: Http,
+  input: WorkerUploadInput & { pathSecret: string },
+  options: DeployOptions = {},
+): Promise<Check<Deployed>> {
+  const uploaded = await uploadWorker(http, input);
+  if (uploaded.status === 'error') return uploaded;
+  const endpoint = endpointUrl(uploaded.value.base, input.pathSecret);
+  const attempts = options.attempts ?? 4;
+  const sleep = options.sleep ?? realSleep;
+
+  let last: Check<string[]> | undefined;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(3000);
+    last = await testWorker(http, endpoint);
+    if (last.status === 'ok') {
+      return {
+        status: 'ok',
+        detail: `Deployed. ${last.detail}`,
+        value: { ...uploaded.value, endpoint, tools: last.value },
+      };
+    }
+  }
+  return {
+    status: 'error',
+    detail: `Deployed to ${uploaded.value.base}, but the endpoint did not answer yet.`,
+    hint: `${last?.detail ?? ''} Test it again in a moment.`.trim(),
+  };
 }

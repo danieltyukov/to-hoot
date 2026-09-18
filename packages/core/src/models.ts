@@ -148,6 +148,38 @@ export interface Settings {
 
 export const DEFAULT_PROJECT_ID = 'inbox';
 
+/*
+ * Colours a new project or tag can take.
+ *
+ * Six, spread round the wheel but all held to the same muted, earthy register as
+ * the interface, so a list of projects reads as one palette rather than as a set
+ * of highlighter pens. Every one clears 3:1 against both the light and the dark
+ * background, which is the non-text threshold a 6px dot has to meet. None is in
+ * the blue-to-purple arc: that is where the stock framework colours live, and
+ * where this design deliberately does not go.
+ *
+ * It lives in core rather than in the UI store so that a project Claude creates
+ * through a tool and one created in the app come out of the same palette.
+ */
+export const ENTITY_COLORS = [
+  '#c2603f',
+  '#8a6d3b',
+  '#5f7346',
+  '#3d7350',
+  '#4a6670',
+  '#a4494f',
+] as const;
+
+/**
+ * The colour for the entity that would be number `count + 1`. Cycles, so
+ * consecutive projects never come out the same colour, and a count past the
+ * palette wraps round rather than running out.
+ */
+export function nextEntityColor(count: number): string {
+  const index = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  return ENTITY_COLORS[index % ENTITY_COLORS.length]!;
+}
+
 /**
  * A device id is one path segment: no slash, no leading dot, nothing exotic.
  *

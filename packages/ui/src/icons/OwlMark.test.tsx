@@ -10,7 +10,7 @@ describe.each([
 ])('%s', (_name, Mark) => {
   it('names itself, since it is the only thing identifying the app in the header', () => {
     render(<Mark />);
-    expect(screen.getByRole('img')).toHaveAccessibleName('to-hoot');
+    expect(screen.getByRole('img')).toHaveAccessibleName('ToHoot');
   });
 
   it('goes silent beside a visible wordmark rather than saying the name twice', () => {

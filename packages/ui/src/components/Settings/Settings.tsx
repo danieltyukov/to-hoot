@@ -1,7 +1,8 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
-import type { Http, Settings as CoreSettings, Theme } from '@to-hoot/core';
+import { VERSION, type Http, type PlatformKind, type Settings as CoreSettings, type Theme } from '@to-hoot/core';
 
-import type { SyncStatus } from '../../sync.js';
+import { CalendarGlyph, CloudDeviceGlyph, DesktopGlyph, PhoneGlyph, SparkGlyph, SyncGlyph } from '../../icons/glyphs.js';
+import type { SyncDevice, SyncStatus } from '../../sync.js';
 import { StepCalendar } from '../Wizard/StepCalendar.js';
 import { StepClaude } from '../Wizard/StepClaude.js';
 import { StepSync } from '../Wizard/StepSync.js';
@@ -21,21 +22,30 @@ export interface SettingsProps {
   mcpServerPath?: string;
   /** The shell's way of opening a link, where the host will not follow one. */
   openUrl?: ((url: string) => Promise<void>) | undefined;
+  /** What the shell says it is, which is what names this device. */
+  deviceKind?: PlatformKind | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
   /** Set when the log on disk cannot be read or written. */
   storageError?: string | null;
   onStartFreshLog?: () => void;
+  /** The clock, injectable so "2 minutes ago" is stable under test. */
+  now?: () => number;
 }
 
 /*
- * Everything the wizard sets, afterwards.
+ * Everything the wizard sets, afterwards, and the few things it does not.
  *
- * The three connection sections render the wizard's own step components rather
- * than reimplementing their fields. That is not only less code: it means the
- * live "Test connection" checks, the masking, the secret rotation and the
- * error messages are the same ones, and cannot drift into a version that says
- * something different from what setup said.
+ * One scrolling page of cards. The three connections come first, each a card
+ * with a glyph, a status line and one word of action, because "is the phone
+ * connected" is the question this screen exists to answer. The connection
+ * cards expand into the wizard's own step components rather than a second copy
+ * of their fields, so the checks, the masking and the messages cannot drift
+ * from what setup said.
+ *
+ * The Devices card is new and is the answer to "will I see the phone's tasks
+ * here": every device that writes to the repository is listed with the last
+ * moment it did.
  */
 export function Settings({
   http,
@@ -49,11 +59,15 @@ export function Settings({
   onClose,
   mcpServerPath,
   openUrl,
+  deviceKind,
   syncStatus = null,
   onSyncNow,
   storageError = null,
   onStartFreshLog,
+  now = Date.now,
 }: SettingsProps) {
+  const synced = settings.github.owner !== '' && settings.github.repo !== '';
+
   return (
     <section className="settings" aria-label="Settings">
       <header className="settings-head" data-window-drag="">
@@ -73,39 +87,55 @@ export function Settings({
       </header>
 
       <div className="settings-body">
-        <Section title="Sync" summary={syncSummary(settings, syncStatus)}>
+        <h3 className="micro settings-group">Connections</h3>
+
+        <Card
+          id="sync"
+          glyph={<SyncGlyph />}
+          title="Sync"
+          status={syncSummary(settings, syncStatus, now())}
+          connected={synced}
+        >
           {syncStatus === null || syncStatus.phase === 'unconfigured' ? null : (
-            <div className="step settings-sync">
+            <div className="settings-status">
               <p className="test-result" role="status" data-status={statusTone(syncStatus)}>
                 {syncStatus.detail}
                 {syncStatus.at === null ? null : (
-                  <span className="test-hint">
-                    Last synced at {new Date(syncStatus.at).toLocaleTimeString()}.
-                  </span>
+                  <span className="test-hint">Last synced {ago(syncStatus.at, now())}.</span>
                 )}
               </p>
               {onSyncNow === undefined ? null : (
-                <div className="settings-choice">
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={syncStatus.phase === 'syncing'}
-                    onClick={onSyncNow}
-                  >
-                    {syncStatus.phase === 'syncing' ? 'Syncing' : 'Sync now'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={syncStatus.phase === 'syncing'}
+                  onClick={onSyncNow}
+                >
+                  {syncStatus.phase === 'syncing' ? 'Syncing' : 'Sync now'}
+                </button>
               )}
             </div>
           )}
-          <StepSync http={http} settings={settings} onSave={onSave} />
-        </Section>
+          <StepSync http={http} settings={settings} onSave={onSave} deviceKind={deviceKind} openUrl={openUrl} />
+        </Card>
 
-        <Section title="Calendar" summary={describeCalendar(settings)}>
-          <StepCalendar http={http} settings={settings} onSave={onSave} />
-        </Section>
+        <Card
+          id="calendar"
+          glyph={<CalendarGlyph />}
+          title="Calendar"
+          status={describeCalendar(settings)}
+          connected={settings.calendar.execUrl !== '' || settings.calendar.icsUrl !== ''}
+        >
+          <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} />
+        </Card>
 
-        <Section title="Claude" summary={settings.worker.url === '' ? 'Local only' : 'Endpoint configured'}>
+        <Card
+          id="claude"
+          glyph={<SparkGlyph />}
+          title="Claude"
+          status={settings.worker.url === '' ? 'Claude Code only, no endpoint yet' : 'Endpoint deployed'}
+          connected={settings.worker.url !== ''}
+        >
           <StepClaude
             http={http}
             settings={settings}
@@ -113,28 +143,38 @@ export function Settings({
             mcpServerPath={mcpServerPath}
             openUrl={openUrl}
           />
-        </Section>
+        </Card>
 
-        <Section title="Appearance" summary={theme}>
+        {synced ? (
+          <Devices
+            devices={syncStatus?.devices ?? []}
+            thisDevice={settings.deviceId}
+            now={now()}
+            kind={deviceKind}
+          />
+        ) : null}
+
+        <h3 className="micro settings-group">Preferences</h3>
+
+        <Card id="appearance" title="Appearance" status={describeAppearance(theme, settings)}>
           <Appearance theme={theme} settings={settings} onSetTheme={onSetTheme} onSave={onSave} />
-        </Section>
+        </Card>
 
-        <Section title="Tracking" summary={describeTracking(settings)}>
+        <Card id="tracking" title="Tracking" status={describeTracking(settings)}>
           <Tracking settings={settings} onSave={onSave} />
-        </Section>
+        </Card>
 
-        <Section
-          title="Data"
-          summary={storageError === null ? `${eventCount} events` : 'not saving'}
-        >
+        <h3 className="micro settings-group">Data</h3>
+
+        <Card id="data" title="Data" status={storageError === null ? `${eventCount} events on this device` : 'Not saving'}>
           {storageError === null ? null : (
-            <div className="step">
+            <div className="step settings-storage">
               <p className="test-result" role="status" data-status="error">
                 {storageError}
                 <span className="test-hint">
-                  Nothing is being written while this is true, because the file that cannot be
-                  read is the only copy of anything that has not synced. What is on screen is
-                  in memory only, so export it before closing the app.
+                  Nothing is being written while this is true, because the file that cannot be read
+                  is the only copy of anything that has not synced. What is on screen is in memory
+                  only, so export it before closing the app.
                 </span>
               </p>
               {onStartFreshLog === undefined ? null : (
@@ -149,30 +189,43 @@ export function Settings({
               )}
             </div>
           )}
-          <Data
-            settings={settings}
-            eventCount={eventCount}
-            onExport={onExport}
-            onImport={onImport}
-          />
-        </Section>
+          <Data settings={settings} eventCount={eventCount} onExport={onExport} onImport={onImport} />
+        </Card>
+
+        <p className="settings-version micro">ToHoot {VERSION}</p>
       </div>
     </section>
   );
 }
 
+/** "2 minutes ago", for a status line. Whole units, because nobody needs more. */
+export function ago(then: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
 function describeSync(settings: CoreSettings): string {
-  if (settings.github.owner === '' || settings.github.repo === '') return 'Not configured';
+  if (settings.github.owner === '' || settings.github.repo === '') return 'Not connected';
   return `${settings.github.owner}/${settings.github.repo}`;
 }
 
-/** What the collapsed row says, which is where most people will ever read it. */
-function syncSummary(settings: CoreSettings, status: SyncStatus | null): string {
+/** What the collapsed card says, which is where most people will ever read it. */
+function syncSummary(settings: CoreSettings, status: SyncStatus | null, now: number): string {
   const where = describeSync(settings);
   if (status === null || status.phase === 'unconfigured') return where;
-  if (status.phase === 'error') return `${where}, not syncing`;
-  if (status.pending > 0) return `${where}, ${status.pending} to push`;
-  return where;
+  const parts = [where];
+  if (status.phase === 'error') parts.push('not syncing');
+  else if (status.pending > 0) parts.push(`${status.pending} to push`);
+  else if (status.at !== null) parts.push(`synced ${ago(status.at, now)}`);
+  if (status.devices.length > 0) {
+    parts.push(status.devices.length === 1 ? '1 device' : `${status.devices.length} devices`);
+  }
+  return parts.join(', ');
 }
 
 function statusTone(status: SyncStatus): string | undefined {
@@ -182,42 +235,128 @@ function statusTone(status: SyncStatus): string | undefined {
 }
 
 function describeCalendar(settings: CoreSettings): string {
-  if (settings.calendar.execUrl !== '') return 'Two-way bridge';
+  if (settings.calendar.execUrl !== '') return 'Reading and writing back';
   if (settings.calendar.icsUrl !== '') return 'Read-only feed';
-  return 'Not configured';
+  return 'Not connected';
 }
 
-/** Collapsed by default: five open sections is a wall, not a settings screen. */
-function Section({
-  title,
-  summary,
-  children,
-}: {
-  title: string;
-  summary: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="settings-section" data-section={title.toLowerCase()}>
-      <button
-        type="button"
-        className="settings-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(o => !o)}
-      >
-        <span className="settings-title">{title}</span>
-        <span className="settings-summary">{summary}</span>
-      </button>
-      {open ? <div className="settings-content">{children}</div> : null}
-    </div>
-  );
+function describeAppearance(theme: Theme, settings: CoreSettings): string {
+  const name = theme === 'system' ? 'Matches the system' : theme === 'dark' ? 'Dark' : 'Light';
+  return `${name}, workday ${settings.workdayStart} to ${settings.workdayEnd}`;
 }
 
 function describeTracking(settings: CoreSettings): string {
   const hours = settings.dayStartOffsetMs / 3_600_000;
   const idle = Math.round(settings.idleThresholdMs / 60_000);
-  return `${hours === 0 ? 'midnight' : `${hours}h past midnight`}, idle after ${idle}m`;
+  return `${hours === 0 ? 'Day starts at midnight' : `Day starts ${hours}h past midnight`}, idle after ${idle} min`;
+}
+
+/**
+ * One card. Collapsed, it is a row a person reads; open, it is the whole
+ * component. The header is the toggle and carries the status, so the
+ * accessible name of the button is "Sync, someone/to-hoot-data, synced just now".
+ */
+function Card({
+  id,
+  glyph,
+  title,
+  status,
+  connected,
+  children,
+}: {
+  id: string;
+  glyph?: ReactNode;
+  title: string;
+  status: string;
+  /** Shown as a filled dot beside the status on the connection cards. */
+  connected?: boolean | undefined;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="card" data-section={id} data-open={open ? '' : undefined}>
+      <button type="button" className="card-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        {glyph === undefined ? null : (
+          <span className="card-glyph" aria-hidden="true">
+            {glyph}
+          </span>
+        )}
+        <span className="card-text">
+          <span className="card-title">{title}</span>
+          <span className="card-status">
+            {connected === undefined ? null : (
+              <span className="card-dot" data-on={connected ? '' : undefined} aria-hidden="true" />
+            )}
+            {status}
+          </span>
+        </span>
+        <span className="card-action" aria-hidden="true">
+          {open ? 'Close' : connected === false ? 'Set up' : 'Manage'}
+        </span>
+      </button>
+      {open ? <div className="card-body">{children}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Every device that writes to the repository, most recent first.
+ *
+ * The sync engine reads meta.json on every pull, so this is the repository's
+ * own view and not this device's guess. A device that has not written in a
+ * while is still here: nothing is ever removed from the registry.
+ */
+function Devices({
+  devices,
+  thisDevice,
+  now,
+  kind,
+}: {
+  devices: SyncDevice[];
+  thisDevice: string;
+  now: number;
+  kind: PlatformKind | undefined;
+}) {
+  return (
+    <div className="card card-open" data-section="devices">
+      <div className="card-toggle card-static">
+        <span className="card-text">
+          <span className="card-title">Devices</span>
+          <span className="card-status">
+            {devices.length === 0
+              ? 'Every device that syncs to the repository appears here.'
+              : `${devices.length} writing to the repository. Their tasks are all on this list.`}
+          </span>
+        </span>
+      </div>
+      {devices.length === 0 ? null : (
+        <ul className="devices" aria-label="Devices">
+          {devices.map(device => (
+            <li key={device.id} className="device" data-device={device.id}>
+              <span className="device-glyph" aria-hidden="true">
+                {glyphFor(device.id, device.id === thisDevice ? kind : undefined)}
+              </span>
+              <span className="device-name">
+                {device.id}
+                {device.id === thisDevice ? <span className="device-this">this device</span> : null}
+              </span>
+              <span className="device-when">
+                {device.lastSeen === 0 ? 'never' : `synced ${ago(device.lastSeen, now)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** A glyph from the name, since the registry does not record what a device is. */
+function glyphFor(id: string, kind: PlatformKind | undefined): ReactNode {
+  const name = id.toLowerCase();
+  if (kind === 'android' || /phone|mobile|pixel|android/.test(name)) return <PhoneGlyph />;
+  if (kind === 'desktop' || /desktop|laptop|mac|pc|linux|work|home/.test(name)) return <DesktopGlyph />;
+  return <CloudDeviceGlyph />;
 }
 
 /*
@@ -308,12 +447,12 @@ function Appearance({
         <span className="micro" id={`${ids}-theme`}>
           Theme
         </span>
-        <div className="settings-choice" role="group" aria-labelledby={`${ids}-theme`}>
+        <div className="segmented" role="group" aria-labelledby={`${ids}-theme`}>
           {(['light', 'dark', 'system'] as const).map(option => (
             <button
               key={option}
               type="button"
-              className="button"
+              className="segment"
               aria-pressed={theme === option}
               onClick={() => onSetTheme(option)}
             >
@@ -370,7 +509,7 @@ function Data({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `to-hoot-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `ToHoot-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
     setMessage(`Exported ${eventCount} events.`);

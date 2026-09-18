@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { Project, Task } from '@to-hoot/core';
+import type { Project, Tag, Task } from '@to-hoot/core';
 
+import { PlusGlyph } from '../icons/glyphs.js';
 import { TaskRow } from './TaskRow.js';
 import './TaskList.css';
 
@@ -8,6 +9,8 @@ export interface TaskListProps {
   heading?: string;
   tasks: Task[];
   projects: Record<string, Project>;
+  /** Every tag, so a row can draw the ones it carries. Absent draws none. */
+  tags?: Record<string, Tag> | undefined;
   /** Tracked milliseconds for a task, including its subtasks. */
   trackedFor: (taskId: string) => number;
   runningTaskId?: string | null;
@@ -38,6 +41,7 @@ export function TaskList({
   heading,
   tasks,
   projects,
+  tags = {},
   trackedFor,
   runningTaskId = null,
   onToggleDone,
@@ -62,6 +66,7 @@ export function TaskList({
       key={task.id}
       task={task}
       project={projects[task.projectId]}
+      tags={task.tagIds.flatMap(id => (tags[id] === undefined ? [] : [tags[id]!]))}
       tracked={trackedFor(task.id)}
       isRunning={runningTaskId === task.id}
       depth={depth}
@@ -84,7 +89,7 @@ export function TaskList({
         </header>
       )}
 
-      {onAdd === undefined ? null : <Composer onAdd={onAdd} />}
+      {onAdd === undefined ? null : <Composer onAdd={onAdd} where={heading} />}
 
       {notice}
 
@@ -109,8 +114,12 @@ export function TaskList({
   );
 }
 
-/** One field, submitted with Enter. No button: the field is the affordance. */
-function Composer({ onAdd }: { onAdd: (title: string) => void }) {
+/**
+ * One field, submitted with Enter. No button: the field is the affordance, and
+ * the plus in front of it says what the field does. The placeholder names the
+ * list the task lands on, because a task added inside a project belongs to it.
+ */
+function Composer({ onAdd, where }: { onAdd: (title: string) => void; where?: string | undefined }) {
   const [title, setTitle] = useState('');
 
   const submit = (e: FormEvent): void => {
@@ -123,10 +132,13 @@ function Composer({ onAdd }: { onAdd: (title: string) => void }) {
 
   return (
     <form className="composer" onSubmit={submit}>
+      <span className="composer-glyph" aria-hidden="true">
+        <PlusGlyph />
+      </span>
       <input
         className="composer-input"
         aria-label="New task"
-        placeholder="Add a task"
+        placeholder={where === undefined || where === 'Today' ? 'Add a task for today' : `Add a task to ${where}`}
         value={title}
         onChange={e => setTitle(e.target.value)}
       />

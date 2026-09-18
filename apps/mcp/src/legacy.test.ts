@@ -81,7 +81,7 @@ describe('the 2025 stdio handshake Claude still opens with', () => {
     expect(opening?.result?.serverInfo?.name).toBe('to-hoot');
   });
 
-  it('lists all nine tools over that connection', async () => {
+  it('lists all fifteen tools over that connection', async () => {
     const { send, seen } = await connect();
 
     await send({
@@ -101,6 +101,6 @@ describe('the 2025 stdio handshake Claude still opens with', () => {
 
     const listed = seen.find(m => m.id === 2);
     expect(listed?.error, JSON.stringify(listed?.error)).toBeUndefined();
-    expect(listed?.result?.tools).toHaveLength(9);
+    expect(listed?.result?.tools).toHaveLength(15);
   });
 });

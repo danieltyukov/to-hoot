@@ -1,4 +1,5 @@
-import type { Project, Task } from '@to-hoot/core';
+import type { CSSProperties } from 'react';
+import type { Project, Tag, Task } from '@to-hoot/core';
 
 import { CheckGlyph, PlayGlyph, StopGlyph } from '../icons/glyphs.js';
 import { formatClock, formatDuration, isoDuration } from '../format.js';
@@ -8,6 +9,8 @@ export interface TaskRowProps {
   task: Task;
   /** Undefined when the task is in a project that has been deleted. */
   project?: Project | undefined;
+  /** The tags on the task, resolved by the caller. Absent tags are simply not drawn. */
+  tags?: Tag[] | undefined;
   /** Tracked milliseconds including subtasks. Derived by the caller. */
   tracked: number;
   isRunning?: boolean;
@@ -30,6 +33,7 @@ export interface TaskRowProps {
 export function TaskRow({
   task,
   project,
+  tags = [],
   tracked,
   isRunning = false,
   depth = 0,
@@ -65,6 +69,20 @@ export function TaskRow({
         </button>
       ) : (
         <span className="row-title">{task.title}</span>
+      )}
+
+      {tags.length === 0 ? null : (
+        <span className="row-tags" aria-label={`Tags: ${tags.map(t => t.title).join(', ')}`}>
+          {tags.map(tag => (
+            <span
+              key={tag.id}
+              className="row-tag"
+              style={{ '--tag-color': tag.color } as CSSProperties}
+            >
+              {tag.title}
+            </span>
+          ))}
+        </span>
       )}
 
       {project ? (

@@ -1,14 +1,14 @@
-# to-hoot
+# ToHoot
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/desktop-dark.webp">
-  <img src="docs/img/desktop-light.webp" alt="The to-hoot desktop app: a sidebar of projects and tags, today's task list with a running timer, and a day timeline showing tracked and planned time side by side.">
+  <img src="docs/img/desktop-light.webp" alt="The ToHoot desktop app: a sidebar of projects and tags, today's task list with a running timer, and a day timeline showing tracked and planned time side by side.">
 </picture>
 
 A task list that tracks time against the day you actually had. One list on your
 Linux desktop and your Android phone, synced through a private GitHub repository
 you own, with your real calendar beside it and the whole thing reachable from
-Claude.
+Claude. The repository is `to-hoot`; the app calls itself ToHoot.
 
 Project site: <https://danieltyukov.github.io/to-hoot/>
 
@@ -32,10 +32,13 @@ The calendar layer is a Google Apps Script web app you deploy to your own
 account. It reads your calendars and writes tracked time back to a separate
 "to-hoot log" calendar, never to your real ones.
 
-The Claude layer is an MCP server offering nine tools over the same event log:
-`list_tasks`, `search_tasks`, `today`, `add_task`, `update_task`,
-`complete_task`, `start_timer`, `stop_timer` and `log_time`. A change made by
-Claude is indistinguishable from one made in the app.
+The Claude layer is an MCP server offering fifteen tools over the same event
+log: `list_tasks`, `search_tasks`, `today`, `add_task`, `update_task`,
+`complete_task`, `start_timer`, `stop_timer`, `log_time`, `list_projects`,
+`add_project`, `update_project`, `list_tags`, `add_tag` and `update_tag`. Tasks
+take project and tag names as well as ids, and a name nothing matches is
+created on the spot. A change made by Claude is indistinguishable from one made
+in the app.
 
 <img src="docs/img/phone.webp" alt="The same app on a phone: today's task list, a running timer, and the tracked total for the day with a fourteen-day consistency strip." width="300">
 
@@ -76,8 +79,11 @@ If the desktop window opens blank on NVIDIA hardware, the app already sets
 what the app would have chosen.
 
 Everything works with no accounts at all. Sync, calendar and Claude are added
-later from Settings, and each one is optional. `docs/SETUP.md` is the long-form
-version of the in-app wizard.
+later from Settings, and each one is optional. Sync is one button: sign in with
+GitHub on the device itself, and the app finds or creates the data repository,
+names the device, and proves the round trip. The Claude endpoint deploys from
+the same screen against your own Cloudflare account. `docs/SETUP.md` is the
+long-form version.
 
 ## Build from source
 

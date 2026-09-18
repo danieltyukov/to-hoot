@@ -35,6 +35,16 @@ export const META_PATH = 'meta.json';
 export const EVENTS_PREFIX = 'events/';
 /** Events past the snapshot before the next sync folds them in. */
 export const DEFAULT_COMPACT_THRESHOLD = 500;
+/**
+ * Event files in the tree before the next sync folds them in, whatever they
+ * hold. The Worker reads the log tail file by file and gives up past
+ * `MAX_TAIL_FILES` of them (see tools/snapshot.ts), so the file count is what
+ * bounds what Claude on the web can see, and it has to be kept below that cap
+ * with room for the batches that land between two compactions.
+ */
+export const DEFAULT_COMPACT_FILE_THRESHOLD = 30;
+/** The immutable copies earlier compactions left behind: `snapshot-<seq>-<rand>.json`. */
+const SNAPSHOT_COPY = /^snapshot-\d+-[0-9A-Z]+\.json$/;
 /** Ref-update attempts before a push reports a conflict instead of retrying. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
 
@@ -73,6 +83,8 @@ export interface SyncEngineOptions {
   /** Device-local and unique; it is the only path prefix this engine writes. */
   deviceId: string;
   compactThreshold?: number;
+  /** Event files in the tree before a sync compacts, however few events they hold. */
+  compactFileThreshold?: number;
   maxAttempts?: number;
   /** Injectable only for tests. Ids must be ULIDs; replay dedups by id. */
   newId?: () => string;
@@ -111,6 +123,7 @@ export class SyncEngine {
   private readonly client: RepoClient;
   private readonly deviceId: string;
   private readonly compactThreshold: number;
+  private readonly compactFileThreshold: number;
   private readonly maxAttempts: number;
   private readonly newId: () => string;
 
@@ -124,6 +137,12 @@ export class SyncEngine {
   private events: Event[] = [];
   private meta: MetaFile = emptyMeta();
   private snapshotSeq = 0;
+  /**
+   * Every `snapshot-<seq>-<rand>.json` in the tree at `head`. All of them were
+   * written by earlier compactions, and once `snapshot.json` has moved on they
+   * point at nothing, so the next compaction deletes them in its own commit.
+   */
+  private snapshotCopies: string[] = [];
   /** blob sha -> content. A sha names its bytes forever, so this never stales. */
   private blobs = new Map<string, string>();
 
@@ -139,6 +158,7 @@ export class SyncEngine {
     this.client = options.client;
     this.deviceId = options.deviceId;
     this.compactThreshold = options.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
+    this.compactFileThreshold = options.compactFileThreshold ?? DEFAULT_COMPACT_FILE_THRESHOLD;
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     this.newId = options.newId ?? ulid;
   }
@@ -153,6 +173,18 @@ export class SyncEngine {
   async pullState(): Promise<State> {
     const events = await this.pull();
     return replay(events, this.snapshotState);
+  }
+
+  /**
+   * The device registry as of the last read, copied so a caller cannot edit the
+   * engine's own record of it. It is what `meta.json` said at the head, not a
+   * live view: a device whose events are still only in the log and have never
+   * been compacted is not in it yet.
+   */
+  get devices(): Record<string, DeviceRecord> {
+    const out: Record<string, DeviceRecord> = {};
+    for (const [id, record] of Object.entries(this.meta.devices)) out[id] = { ...record };
+    return out;
   }
 
   /**
@@ -204,9 +236,10 @@ export class SyncEngine {
   }
 
   /**
-   * Folds the log into a snapshot if it has grown past the threshold.
+   * Folds the log into a snapshot if it has grown past either threshold: the
+   * events past the snapshot, or the event files in the tree.
    *
-   * `false` means one thing only: there was nothing past the threshold. Losing
+   * `false` means one thing only: there was nothing past a threshold. Losing
    * the ref race every time throws instead, because a caller that cannot tell
    * "nothing to do" from "another device keeps beating me" will schedule the
    * next attempt wrongly.
@@ -215,7 +248,7 @@ export class SyncEngine {
     let attempts = 0;
     for (;;) {
       await this.refresh();
-      if (this.eventsSinceSnapshot < this.compactThreshold) return false;
+      if (!this.compactionDue()) return false;
       const planned = this.head;
       const plan = await this.plan([], '');
       if (plan.files.length === 0) return false;
@@ -229,11 +262,22 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * Whether the next write should also compact. Two thresholds, either one
+   * enough: the event count is what keeps replay on a device cheap, and the
+   * file count is what keeps the tail the Worker reads inside its cap. A phone
+   * that syncs one event at a time can put thirty files in the tree with thirty
+   * events in them, which the first threshold would never notice.
+   */
+  private compactionDue(): boolean {
+    return this.eventsSinceSnapshot >= this.compactThreshold || this.files.length >= this.compactFileThreshold;
+  }
+
   private async plan(pending: Event[], batchPath: string): Promise<Plan> {
     const files: TreeFile[] = [];
     const deletions: string[] = [];
     if (pending.length > 0) files.push({ path: batchPath, content: JSON.stringify(pending) });
-    if (this.eventsSinceSnapshot < this.compactThreshold) {
+    if (!this.compactionDue()) {
       return { message: `sync ${pending.length} from ${this.deviceId}`, files, deletions, compacted: false };
     }
     const snapshot = await this.buildSnapshot(pending);
@@ -295,6 +339,15 @@ export class SyncEngine {
     const covered = new Set(folded.map(e => e.id));
     const deletions = this.files.filter(f => f.events.every(e => covered.has(e.id))).map(f => f.path);
 
+    // Every earlier immutable copy goes too. `snapshot.json` is the file every
+    // reader opens; the copy exists so that two devices compacting at once
+    // write different names and only one wins the ref. Once the ref has moved,
+    // the copies it does not name are unreachable, and left alone they pile up
+    // one per compaction forever. The copy being written here has a fresh name,
+    // so it is never in this list, and the list comes from the same tree read
+    // as the event files above, so it can only name paths the parent has.
+    deletions.push(...this.snapshotCopies);
+
     return {
       files: [
         { path: file, content },
@@ -321,7 +374,7 @@ export class SyncEngine {
       // creates the branch.
       if (!isEmptyRepository(err)) throw err;
       this.head = null;
-      this.adopt(undefined, [], emptyMeta());
+      this.adopt(undefined, [], emptyMeta(), []);
       return;
     }
     if (latest === 'not-modified') return;
@@ -330,6 +383,7 @@ export class SyncEngine {
     let snapshot: SnapshotFile | undefined;
     let meta = emptyMeta();
     const files: EventFile[] = [];
+    const copies: string[] = [];
     const live = new Set<string>();
 
     for (const entry of entries) {
@@ -343,8 +397,14 @@ export class SyncEngine {
         meta = parseMeta(await this.read(entry.sha));
         continue;
       }
+      if (SNAPSHOT_COPY.test(entry.path)) {
+        // Recorded by path only: the copy is never read, it is what the next
+        // compaction deletes.
+        copies.push(entry.path);
+        continue;
+      }
       const deviceId = deviceOfEventPath(entry.path);
-      if (deviceId === undefined) continue; // historical snapshots and anything else
+      if (deviceId === undefined) continue; // anything else in the repository
       live.add(entry.sha);
       files.push({ path: entry.path, deviceId, events: parseEvents(await this.read(entry.sha)) });
     }
@@ -353,17 +413,18 @@ export class SyncEngine {
       if (!live.has(sha)) this.blobs.delete(sha);
     }
 
-    this.adopt(snapshot, files, meta);
+    this.adopt(snapshot, files, meta, copies);
     this.head = latest.sha;
     // Last, so a failure part way through re-reads next time instead of
     // believing it is up to date.
     this.etag = latest.etag;
   }
 
-  private adopt(snapshot: SnapshotFile | undefined, files: EventFile[], meta: MetaFile): void {
+  private adopt(snapshot: SnapshotFile | undefined, files: EventFile[], meta: MetaFile, copies: string[]): void {
     this.snapshotState = snapshot?.state;
     this.snapshotSeq = snapshot?.seq ?? 0;
     this.files = files;
+    this.snapshotCopies = copies;
     this.events = files.flatMap(f => f.events);
     this.meta = meta;
     const covers = this.snapshotState?.coversThrough;
@@ -419,8 +480,11 @@ function greatestId(events: Event[]): string | undefined {
   return greatest;
 }
 
-/** `events/<deviceId>/<ulid>.json` and nothing else. */
-function deviceOfEventPath(path: string): string | undefined {
+/**
+ * `events/<deviceId>/<ulid>.json` and nothing else. Shared with the Worker's
+ * snapshot backend, so the two readers agree on what counts as an event file.
+ */
+export function deviceOfEventPath(path: string): string | undefined {
   if (!path.startsWith(EVENTS_PREFIX) || !path.endsWith('.json')) return undefined;
   const parts = path.split('/');
   if (parts.length !== 3 || parts[1] === '') return undefined;
@@ -439,9 +503,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * A batch file. Entries without an id are dropped rather than thrown on: they
  * were written by another device running another build, and one unreadable
  * entry must never stop a device from loading its own data. A file that is not
- * an array at all is skipped for the same reason.
+ * an array at all is skipped for the same reason. Shared with the Worker's
+ * snapshot backend for the same reason `deviceOfEventPath` is.
  */
-function parseEvents(text: string): Event[] {
+export function parseEvents(text: string): Event[] {
   let raw: unknown;
   try {
     raw = JSON.parse(text);

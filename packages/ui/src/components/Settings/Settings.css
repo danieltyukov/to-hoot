@@ -1,8 +1,17 @@
+/*
+ * Settings: one scrolling column of cards on the paper.
+ *
+ * The cards are the first panels in the app, which is what brought --r-panel
+ * into the token sheet. Hairlines, no shadows: a lifted card in a dense tool
+ * reads as a component pasted in from somewhere else.
+ */
+
 .settings {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  background: var(--bg);
 }
 
 .settings-head {
@@ -11,46 +20,144 @@
   gap: 8px;
   padding: 10px;
   border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .settings-body {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 680px;
+  margin-inline: auto;
+  padding: 14px 16px 28px;
 }
 
-.settings-section {
-  border-bottom: 1px solid var(--border);
+.settings-group {
+  padding: 12px 4px 2px;
 }
 
-.settings-toggle {
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.card-toggle {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 42px;
-  padding-inline: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
   text-align: start;
   transition: background-color var(--dur-quick) var(--ease);
 }
 
-.settings-toggle:hover {
+.card-toggle:hover {
   background-color: var(--hover);
 }
 
-.settings-title {
+.card-static {
+  cursor: default;
+}
+
+.card-static:hover {
+  background-color: transparent;
+}
+
+.card-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-control);
+  background: var(--accent-tint);
+  color: var(--accent-hover);
+}
+
+.card-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.card-title {
   font-size: var(--fs-base);
+  font-weight: 500;
   color: var(--text);
 }
 
-.settings-summary {
+.card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-mini);
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-content {
+/* Connected or not, at a glance, before a word is read. */
+.card-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.card-dot[data-on] {
+  background: var(--success);
+}
+
+.card-action {
+  flex: 0 0 auto;
+  font-size: var(--fs-mini);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.card-body {
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  animation: card-in var(--dur-base) var(--ease);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The step components carry their own padding and cap their own width, and
+   inside a card that cap is the card. */
+.card-body .step {
+  max-width: none;
+  padding: 16px 14px 20px;
+}
+
+.settings-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px 0;
+}
+
+.settings-status .test-result {
+  flex: 1 1 200px;
+}
+
+.settings-storage {
+  padding-bottom: 0;
 }
 
 .settings-choice {
@@ -59,12 +166,92 @@
   gap: 6px;
 }
 
-.settings-choice .button[aria-pressed='true'] {
-  color: var(--accent-hover);
-  border-color: var(--accent);
+/* Three options as one control. The pressed segment is tinted, the rest are
+   plain, and the group carries the single hairline. */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  overflow: hidden;
 }
 
-.settings-sync {
+.segment {
+  min-height: 30px;
+  padding-inline: 12px;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition:
+    color var(--dur-quick) var(--ease),
+    background-color var(--dur-quick) var(--ease);
+}
+
+.segment + .segment {
+  border-inline-start: 1px solid var(--border-strong);
+}
+
+.segment:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.segment[aria-pressed='true'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.devices {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 14px;
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.device + .device {
+  border-top: 1px solid var(--border);
+}
+
+.device-glyph {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.device-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
   gap: 8px;
-  padding-bottom: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-this {
+  font-size: var(--fs-micro);
+  letter-spacing: var(--ls-micro);
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.device-when {
+  flex: 0 0 auto;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.settings-version {
+  padding: 16px 4px 0;
+  text-align: center;
+  color: var(--faint);
 }

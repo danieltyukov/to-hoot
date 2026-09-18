@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { CheckGlyph, ChevronGlyph } from '../icons/glyphs.js';
 import type { Check } from '../setup.js';
 import './fields.css';
 
@@ -279,4 +280,87 @@ export function useCheck(): [CheckState, (run: () => Promise<Check<unknown>>) =>
   };
 
   return [state, run, () => setState({ phase: 'idle' })];
+}
+
+/**
+ * A secondary path folded away under one line of text.
+ *
+ * A button rather than a `<details>` element, so the state is React's and the
+ * toggle is a control every test harness and every screen reader already knows
+ * how to press. Used for the routes that stay available but are no longer the
+ * way most people go: a token instead of sign-in, wrangler instead of the
+ * deploy button, another repository name.
+ */
+export function Reveal({
+  label,
+  children,
+  defaultOpen = false,
+}: {
+  label: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="reveal" data-open={open ? '' : undefined}>
+      <button type="button" className="reveal-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <ChevronGlyph className="reveal-chevron" />
+        <span>{label}</span>
+      </button>
+      {open ? <div className="reveal-body">{children}</div> : null}
+    </div>
+  );
+}
+
+export type FlowStatus = 'idle' | 'running' | 'ok' | 'error';
+
+/**
+ * One line of a flow that runs itself: what it is, how it went, and whatever
+ * it needs from the person under that.
+ *
+ * The connection flows used to be three buttons each with a result beside it,
+ * and a person had to press them in order. This is the same information laid
+ * out as the order it happens in, so watching it complete is the whole
+ * interaction and a button only appears where a decision is genuinely theirs.
+ */
+export function FlowStep({
+  status,
+  title,
+  detail,
+  hint,
+  children,
+}: {
+  status: FlowStatus;
+  title: string;
+  /** The result, when there is one: "Signed in as someone." */
+  detail?: string | undefined;
+  /** What to do about an error, on its own line. */
+  hint?: string | undefined;
+  children?: ReactNode;
+}) {
+  return (
+    <li className="flow-step" data-status={status}>
+      <span className="flow-mark" aria-hidden="true">
+        {status === 'ok' ? <CheckGlyph /> : null}
+      </span>
+      <div className="flow-main">
+        <p className="flow-title">{title}</p>
+        {detail === undefined ? null : (
+          <p className="flow-detail" role="status" data-status={status === 'idle' ? undefined : status}>
+            {detail}
+            {hint === undefined ? null : <span className="test-hint">{hint}</span>}
+          </p>
+        )}
+        {children === undefined || children === null ? null : <div className="flow-body">{children}</div>}
+      </div>
+    </li>
+  );
+}
+
+export function Flow({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <ol className="flow" aria-label={label}>
+      {children}
+    </ol>
+  );
 }

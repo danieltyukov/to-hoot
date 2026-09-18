@@ -1,12 +1,12 @@
-// The remote MCP endpoint: the same nine tools Claude gets locally, reachable
-// from claude.ai.
+// The remote MCP endpoint: the same fifteen tools Claude gets locally,
+// reachable from claude.ai.
 //
 // Two budgets shape everything here. The free tier allows 10ms of CPU and 50
 // subrequests per request; awaiting a fetch costs no CPU, but parsing and
 // folding a long event log costs real CPU. So this reads the prebuilt snapshot
-// and never replays the log, which is `SnapshotBackend`'s whole reason to
-// exist, and it never compacts: compaction reads everything, and the user's own
-// devices already do it.
+// plus a short tail of the log, and never the whole log, which is
+// `SnapshotBackend`'s whole reason to exist, and it never compacts: compaction
+// reads everything, and the user's own devices already do it.
 //
 // The instance is per request by construction. `createMcpHandler` calls the
 // factory once per HTTP request, so anything worth keeping lives at module
@@ -19,7 +19,7 @@ import {
   McpServer,
   type McpHttpHandler,
 } from '@modelcontextprotocol/server';
-import { GitHubClient } from '@to-hoot/core';
+import { GitHubClient, VERSION } from '@to-hoot/core';
 import {
   fetchHttp,
   memoryTimerStore,
@@ -45,7 +45,9 @@ export interface Env {
   ALLOWED_HOSTNAMES?: string;
 }
 
-export const SERVER_INFO = { name: 'to-hoot', version: '0.1.0' } as const;
+// The version is the package's, so what a client sees in `initialize` is the
+// release it is talking to and not a literal nobody remembers to bump.
+export const SERVER_INFO = { name: 'to-hoot', version: VERSION } as const;
 
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 

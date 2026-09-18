@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "to-hoot",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "identifier": "com.tohoot.app",
   "mainBinaryName": "to-hoot",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "to-hoot",
+        "title": "ToHoot",
         "width": 1180,
         "height": 800,
         "minWidth": 760,
@@ -34,7 +34,7 @@
     "targets": ["deb", "appimage"],
     "category": "Utility",
     "shortDescription": "Time tracking that answers to the day you actually had",
-    "longDescription": "to-hoot tracks tasks and the time spent on them, keeps its own event log, and syncs it through a git repository you own.",
+    "longDescription": "ToHoot tracks tasks and the time spent on them, keeps its own event log, and syncs it through a git repository you own.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

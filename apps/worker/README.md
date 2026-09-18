@@ -1,7 +1,9 @@
 # to-hoot MCP endpoint (Cloudflare Worker)
 
-The same nine tools the stdio server offers, reachable from claude.ai. Deploy it
-yourself; nothing here is tied to one account.
+The same fifteen tools the stdio server offers, reachable from claude.ai. The
+list, and how projects and tags can be named by title, is in
+[`apps/mcp/README.md`](../mcp/README.md). Deploy it yourself; nothing here is
+tied to one account.
 
 ## Configuration
 
@@ -40,31 +42,41 @@ of it. With no `ALLOWED_HOSTNAMES` set the Host check is a no-op, since
 Cloudflare only routes a hostname to a Worker configured for it, but the Origin
 check still refuses a page on another origin.
 
-What a tool call costs, against the 50 subrequests the free tier allows:
+What a tool call costs, against the 50 subrequests the free tier allows, where
+`t` is the number of event files in the repository, at most 32:
 
 | | configured branch | unset branch |
 | --- | --- | --- |
 | read, warm isolate | 1 | 1 |
-| read, cold isolate | 3 | 4 |
-| write | 8 | 9 |
+| read, cold isolate | 3 + t | 4 + t |
+| write, warm isolate | 5 | 5 |
+| write, cold isolate | 8 + t | 9 + t |
 
 A warm read is a single conditional GET that answers 304. A cold one adds the
-tree and the snapshot blob; a write adds four more for the commit, which is
-four however many files it carries. Leaving `GITHUB_BRANCH` unset costs one
-extra request to read the repository's default branch, and only once per
-isolate, because the answer is cached on the client.
+tree, the snapshot blob and one blob per event file; a write adds a conditional
+GET and four more for the commit, which is four however many files it carries.
+Leaving `GITHUB_BRANCH` unset costs one extra request to read the repository's
+default branch, and only once per isolate, because the answer is cached on the
+client. With one event file in the tree, which is the ordinary shape between
+two compactions, a cold write is 9 or 10.
 
-The Worker reads the prebuilt snapshot and never replays the event log: the free
-tier allows 10ms of CPU per request, and awaiting a fetch costs none of it while
-folding hundreds of events costs real CPU. It never compacts either, because
-compaction reads everything and the devices already do it on their own
-schedule.
+The Worker reads the prebuilt snapshot and then the tail of the event log, up
+to 32 files, and never the whole log: the free tier allows 10ms of CPU per
+request, and awaiting a fetch costs none of it while folding hundreds of events
+costs real CPU. Each event blob is cached by its SHA, so a file is fetched once
+per isolate however many reads follow. When the tree holds more than 32 event
+files it reads none of them, rather than some, and answers from the snapshot
+alone. The devices compact at 30 files, so that only happens when a device has
+stopped syncing for a long time. It never compacts itself, because compaction
+reads everything and the devices already do it on their own schedule.
 
 Two consequences worth knowing:
 
-- Events other devices wrote since the last compaction are not visible here.
-  Events this Worker wrote are: they are held and replayed onto the snapshot
-  until a compaction absorbs them.
+- Events other devices wrote since the last compaction are visible here while
+  the tree holds at most 32 event files. Past that the Worker falls back to the
+  snapshot until the next compaction. Events this Worker wrote are visible
+  either way: they are held and replayed onto the snapshot until a compaction
+  absorbs them.
 - The running timer lives in the isolate, which can be recycled between two
   requests. `stop_timer` refuses rather than guessing when the start is gone,
   and says to use `log_time` instead.

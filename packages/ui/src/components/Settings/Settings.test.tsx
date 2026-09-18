@@ -41,7 +41,23 @@ describe('Settings', () => {
     const sections = [...container.querySelectorAll('[data-section]')].map(el =>
       el.getAttribute('data-section'),
     );
+    // No Devices card until sync is configured: there is nothing to list.
     expect(sections).toEqual(['sync', 'calendar', 'claude', 'appearance', 'tracking', 'data']);
+  });
+
+  it('lists every device writing to the repository once sync is configured', async () => {
+    // The answer to "will the phone's tasks show up here": the phone is in the
+    // list, with the last moment it wrote.
+    const { user, store } = setup();
+    store.saveSettings({
+      github: { owner: 'someone', repo: 'to-hoot-data', branch: 'main', token: 'tok' },
+      deviceId: 'desktop',
+      deviceName: 'desktop',
+    });
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    const devices = document.querySelector<HTMLElement>('[data-section="devices"]');
+    expect(devices).not.toBeNull();
+    expect(within(devices!).getByText(/Every device that syncs/)).toBeInTheDocument();
   });
 
   it('exposes the two settings that decide what a tracked second means', async () => {
@@ -63,13 +79,13 @@ describe('Settings', () => {
   it('says what the tracking settings are without opening the section', async () => {
     const { user } = setup();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(screen.getByText('midnight, idle after 10m')).toBeInTheDocument();
+    expect(screen.getByText('Day starts at midnight, idle after 10 min')).toBeInTheDocument();
   });
 
   it('says at a glance what is configured without opening anything', async () => {
     const { user } = setup();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(screen.getAllByText('Not configured')).toHaveLength(2);
+    expect(screen.getAllByText('Not connected')).toHaveLength(2);
   });
 
   it('offers the same live checks the wizard did, not a second copy of them', async () => {
@@ -77,6 +93,8 @@ describe('Settings', () => {
     // setup and settings would disagree about what a working connection is.
     const { user } = setup();
     const sync = await open(user, 'Sync');
+    expect(within(sync).getByRole('button', { name: 'Sign in with GitHub' })).toBeInTheDocument();
+    await user.click(within(sync).getByRole('button', { name: 'Use a token instead' }));
     expect(within(sync).getByLabelText('GitHub token')).toBeInTheDocument();
     expect(within(sync).getByRole('button', { name: 'Verify token' })).toBeInTheDocument();
   });
@@ -84,6 +102,7 @@ describe('Settings', () => {
   it('keeps a token masked until it is asked for', async () => {
     const { user } = setup();
     const sync = await open(user, 'Sync');
+    await user.click(within(sync).getByRole('button', { name: 'Use a token instead' }));
     const token = within(sync).getByLabelText('GitHub token');
     expect(token).toHaveAttribute('type', 'password');
 
@@ -351,7 +370,7 @@ describe('when the log on disk cannot be read', () => {
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     // Visible without opening anything, because it changes what the app is doing.
-    expect(screen.getByText('not saving')).toBeInTheDocument();
+    expect(screen.getByText('Not saving')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^Data/ }));
     const data = document.querySelector<HTMLElement>('[data-section="data"]')!;

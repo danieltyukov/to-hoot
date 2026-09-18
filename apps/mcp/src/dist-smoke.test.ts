@@ -119,9 +119,9 @@ describe('the built dist/index.js', () => {
     expect(exchange.stderr).toContain('to-hoot mcp:');
   });
 
-  it('serves all nine tools', () => {
+  it('serves all fifteen tools', () => {
     const listed = exchange.messages.find(m => m.id === 2);
     expect(listed?.error).toBeUndefined();
-    expect(listed?.result?.tools).toHaveLength(9);
+    expect(listed?.result?.tools).toHaveLength(15);
   });
 });

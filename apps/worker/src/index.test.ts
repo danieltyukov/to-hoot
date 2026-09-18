@@ -73,7 +73,7 @@ describe('path secret routing', () => {
     expect(res.status).toBe(200);
     const body = await readJsonRpc(res);
     expect(body.result?.tools?.map(t => t.name)).toContain('add_task');
-    expect(body.result?.tools).toHaveLength(9);
+    expect(body.result?.tools).toHaveLength(15);
   });
 });
 

@@ -22,7 +22,8 @@ shared account, no server holding anything on your behalf, and no telemetry.
 
 | Secret | Stored in | Scope |
 |---|---|---|
-| GitHub fine-grained token | Platform store: `tauri-plugin-store` on desktop, `@capacitor/preferences` on Android | Contents read and write, on the data repository alone |
+| GitHub token, from Sign in with GitHub or pasted | Platform store: `tauri-plugin-store` on desktop, `@capacitor/preferences` on Android | `repo` from sign-in; Contents read and write on the data repository alone from a fine-grained token |
+| Cloudflare API token | Nowhere. Used for one deploy from Settings and dropped | Workers Scripts: Edit and Account Settings: Read on your account |
 | Apps Script shared secret | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
 | Apps Script `/exec` URL | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
@@ -39,10 +40,26 @@ is the value you set `TO_HOOT_SECRET` to in your own project.
 
 ## The GitHub token
 
-Ask for a fine-grained personal access token, not a classic one, with
-**Contents: read and write** on the single data repository and nothing else. A
-classic token carries `repo` across every repository you can reach, which is a
-much larger blast radius for the same functionality.
+There are two ways a token reaches the app, and they carry different scopes.
+
+**Sign in with GitHub** runs GitHub's OAuth device flow against the ToHoot OAuth
+App (client id `Ov23liL8JUqlMBxGIk3l`, a public identifier; a fork registers its
+own and sets `VITE_GITHUB_CLIENT_ID`). The token it hands over carries the
+`repo` scope, because OAuth Apps have no narrower scope that reaches a private
+repository. That is broad. What makes it acceptable is that the token is minted
+on the device, stored in the platform store, never shown, and never typed
+anywhere, and that you can revoke it in one place: github.com, Settings,
+Applications, Authorized OAuth Apps, ToHoot. The app never receives a client
+secret, because the device flow does not use one.
+
+**Use a token instead** takes a fine-grained personal access token with
+**Contents: read and write** on the single data repository and nothing else,
+plus **Administration: write** only if you want the app to create the
+repository. That is the narrower credential and the right one if the `repo`
+scope is more than you are willing to hold on a phone.
+
+Whichever way it arrived, the token stays on the device it arrived on and never
+enters the event log. A second device signs in for itself.
 
 The data repository should be private and should hold data only: no code, no
 Actions, no workflows. Nothing in this project ever executes anything it reads
@@ -77,8 +94,15 @@ Generate it with at least 32 random characters:
 openssl rand -base64 32 | tr -d '/+=' | cut -c1-32
 ```
 
-To revoke, run `wrangler secret put MCP_PATH_SECRET` with a new value and update
-the connector in Claude. The old URL 404s from the next request onward.
+To revoke, generate a new path secret in Settings, Claude and press Deploy
+again, or run `wrangler secret put MCP_PATH_SECRET` with a new value, then
+update the connector in Claude. The old URL 404s from the next request onward.
+
+The deploy from Settings uses a Cloudflare API token you create on the
+dashboard. It can rewrite every Worker on the account, so the app uses it for
+the one upload and forgets it: it is not written to the platform store, the log,
+or anywhere else, and a redeploy asks for it again. Delete it on the dashboard
+afterwards if you want; the deployed Worker does not need it.
 
 If you do not want a capability URL at all, skip the Worker. The stdio MCP
 server for Claude Code is a local process with no network listener, and

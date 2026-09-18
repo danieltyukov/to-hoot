@@ -34,7 +34,21 @@
 }
 
 .nav-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
+}
+
+.nav-head-glyph {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.nav-head-glyph svg {
+  width: 13px;
+  height: 13px;
 }
 
 .nav-add {
@@ -118,6 +132,21 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
+}
+
+/* Today's glyph takes the dot's place, and the accent when Today is current. */
+.nav-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--faint);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.nav-item:hover .nav-glyph,
+.nav-item[aria-current='page'] .nav-glyph {
+  color: inherit;
 }
 
 .nav-label {

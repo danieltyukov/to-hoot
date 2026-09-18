@@ -78,6 +78,25 @@ const go = async (user: ReturnType<typeof userEvent.setup>, step: string): Promi
 };
 
 /**
+ * The token path, which the tests drive because a device flow needs a browser
+ * and a person. Folded away under "Use a token instead"; everything after the
+ * token is the same flow sign-in takes.
+ */
+const pasteToken = async (user: ReturnType<typeof userEvent.setup>): Promise<void> => {
+  await go(user, 'sync');
+  await user.click(screen.getByRole('button', { name: 'Use a token instead' }));
+  await user.type(screen.getByLabelText('GitHub token'), 'github_pat_x');
+  await user.click(screen.getByRole('button', { name: 'Verify token' }));
+  await screen.findByText(/Signed in as someone/);
+};
+
+/** GitHub's listing of the account's repositories, as the flow reads it. */
+const repoList = (repos: Array<[full: string, branch: string]>): Route => [
+  /\/user\/repos\?/,
+  { body: repos.map(([full_name, default_branch]) => ({ full_name, default_branch })) },
+];
+
+/**
  * The text of a check's result, once it has one.
  *
  * Scoped to the result element rather than searched for across the step: the
@@ -146,21 +165,21 @@ describe('Wizard', () => {
     }
   });
 
-  it('offers to create the private data repo through the API', async () => {
+  it('creates the private data repo through the API when there is none, unasked', async () => {
+    // Nobody types a repository name. The flow looks for the one it would
+    // have made and makes it when it is not there.
     const { user, seen } = setup([
       [/\/user$/, { body: { login: 'someone' } }],
+      repoList([]),
       [/\/user\/repos$/, { status: 201, body: { full_name: 'someone/to-hoot-data', default_branch: 'main' } }],
     ]);
-    await go(user, 'sync');
-    await user.type(screen.getByLabelText('GitHub token'), 'github_pat_x');
-    await user.click(screen.getByRole('button', { name: 'Verify token' }));
-    await screen.findByText('Signed in as someone.');
-
-    await user.click(screen.getByRole('button', { name: 'Create it for me' }));
+    await pasteToken(user);
     await screen.findByText(/Created someone\/to-hoot-data/);
 
-    const create = seen.find(r => r.url.endsWith('/user/repos'))!;
+    const create = seen.find(r => r.url.endsWith('/user/repos') && r.body !== undefined)!;
     expect(JSON.parse(create.body!)).toMatchObject({ private: true, auto_init: false });
+    // And this device got a name without anyone typing one.
+    expect(screen.getByLabelText('Device name')).toHaveValue('browser');
   });
 
   it('reports the real error when a token lacks the needed scope', async () => {
@@ -168,56 +187,51 @@ describe('Wizard', () => {
     // that is the only thing the reader can act on.
     const { user } = setup([
       [/\/user$/, { body: { login: 'someone' } }],
+      repoList([]),
       [/\/user\/repos$/, { status: 403, body: { message: 'Resource not accessible by personal access token' } }],
     ]);
-    await go(user, 'sync');
-    await user.type(screen.getByLabelText('GitHub token'), 'github_pat_x');
-    await user.click(screen.getByRole('button', { name: 'Verify token' }));
-    await screen.findByText('Signed in as someone.');
-
-    await user.click(screen.getByRole('button', { name: 'Create it for me' }));
+    await pasteToken(user);
     expect(await resultText()).toContain('Administration: write');
   });
 
   it('stores the repository real default branch rather than assuming main', async () => {
     const { user, saved } = setup([
       [/\/user$/, { body: { login: 'someone' } }],
-      [/\/repos\/someone\//, { body: { default_branch: 'master', private: true } }],
+      repoList([['someone/to-hoot-data', 'master']]),
+      [/\/repos\/someone\/to-hoot-data$/, { body: { default_branch: 'master', private: true } }],
+      [/\/commits\?/, { status: 409, body: { message: 'Git Repository is empty.' } }],
     ]);
-    await go(user, 'sync');
-    await user.type(screen.getByLabelText('GitHub token'), 'github_pat_x');
-    await user.click(screen.getByRole('button', { name: 'Verify token' }));
-    await screen.findByText('Signed in as someone.');
-
-    await user.click(screen.getByRole('button', { name: 'Use an existing one' }));
+    await pasteToken(user);
     expect(await screen.findByText(/default branch master/)).toBeInTheDocument();
-    // And the connection test aims at that branch, not at main.
-    expect(screen.getByText(/on master/)).toBeInTheDocument();
-    expect(saved.at(-1)).toMatchObject({ github: { owner: 'someone' } });
+    // What was saved is the branch the API reported, and the round trip that
+    // follows aims at it rather than at main.
+    await waitFor(() =>
+      expect(saved.some(p => p.github?.owner === 'someone' && p.github.branch === 'master')).toBe(true),
+    );
+    expect(saved.some(p => p.github?.branch === 'main')).toBe(false);
   });
 
   it('refuses a device name that would write events where no reader looks', async () => {
     const { user } = setup([
       [/\/user$/, { body: { login: 'someone' } }],
-      [/\/repos\/someone\//, { body: { default_branch: 'main', private: true } }],
+      repoList([['someone/to-hoot-data', 'main']]),
+      [/\/repos\/someone\/to-hoot-data$/, { body: { default_branch: 'main', private: true } }],
+      [/\/commits\?/, { status: 409, body: { message: 'Git Repository is empty.' } }],
     ]);
-    await go(user, 'sync');
-    await user.type(screen.getByLabelText('GitHub token'), 'github_pat_x');
-    await user.click(screen.getByRole('button', { name: 'Verify token' }));
-    await screen.findByText('Signed in as someone.');
-    await user.click(screen.getByRole('button', { name: 'Use an existing one' }));
+    await pasteToken(user);
     await screen.findByText(/default branch main/);
 
     const name = await screen.findByLabelText('Device name');
+    await user.clear(name);
     await user.type(name, 'my laptop');
     expect(name).toHaveAttribute('aria-invalid', 'true');
-    // The check cannot be run at all until the name is usable.
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
+    // The rename cannot be committed at all until the name is usable.
+    expect(screen.getByRole('button', { name: 'Rename this device' })).toBeDisabled();
 
     await user.clear(name);
     await user.type(name, 'my-laptop');
-    expect(screen.getByText('Events will be written under events/my-laptop/.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Rename this device' }));
+    expect(screen.getByText('Events are written under events/my-laptop/.')).toBeInTheDocument();
   });
 
   it('renders the Apps Script source with no secret in it, and the secret separately', async () => {
@@ -230,6 +244,7 @@ describe('Wizard', () => {
      */
     const { user, container } = setup();
     await go(user, 'calendar');
+    await user.click(screen.getByRole('button', { name: 'Show the script' }));
 
     // Byte for byte what the module supplied, rather than longer than some
     // number. It is the stronger claim as well as the one that survives a clean
@@ -253,6 +268,7 @@ describe('Wizard', () => {
   it.runIf(HAS_BRIDGE_BUNDLE)('shows the built bridge, entry points and all', async () => {
     const { user, container } = setup();
     await go(user, 'calendar');
+    await user.click(screen.getByRole('button', { name: 'Show the script' }));
 
     const source = container.querySelector('.copyable-text')!.textContent!;
     expect(source.length).toBeGreaterThan(200);
@@ -331,6 +347,7 @@ describe('Wizard', () => {
     const feed = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR';
     const { user } = setup([[/basic\.ics/, { text: feed }]]);
     await go(user, 'calendar');
+    await user.click(screen.getByRole('button', { name: 'Only show my events, without the script' }));
     await user.type(
       screen.getByLabelText('Secret iCal address'),
       'https://calendar.google.com/x/basic.ics',
@@ -353,6 +370,7 @@ describe('Wizard', () => {
       [/workers\.dev/, { body: { result: { tools: [{ name: 'list_tasks' }] } } }],
     ]);
     await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     await user.type(
       screen.getByLabelText('Worker URL'),
       'https://to-hoot-mcp.someone.workers.dev/mcp/abc',
@@ -373,6 +391,7 @@ describe('Wizard', () => {
     await go(user, 'claude');
     const secret = (screen.getByLabelText('Path secret') as HTMLInputElement).value;
     expect(secret).not.toBe('');
+    await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     await user.type(
       screen.getByLabelText('Worker URL'),
       'https://to-hoot-mcp.someone.workers.dev',
@@ -383,10 +402,13 @@ describe('Wizard', () => {
     expect(seen.at(-1)!.url).toBe(`https://to-hoot-mcp.someone.workers.dev/mcp/${secret}`);
   });
 
-  it('links out to the two places the steps send you', async () => {
+  it('links out to the places the steps send you', async () => {
     const { user, container } = setup();
     await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     const links = [...container.querySelectorAll('a.link-button')].map(a => a.getAttribute('href'));
+    // The token page, with the permission set in the URL.
+    expect(links.some(href => href?.startsWith('https://dash.cloudflare.com/profile/api-tokens?'))).toBe(true);
     expect(links).toContain('https://dash.cloudflare.com');
     expect(links).toContain('https://claude.ai/customize/connectors');
     // Every one opens away from the app, which is the only thing that makes
@@ -420,6 +442,7 @@ describe('joining a repository that already has a log', () => {
   /** A repository with one device already in it. */
   const withLog: Route[] = [
     [/\/user$/, { body: { login: 'someone' } }],
+    repoList([['someone/to-hoot-data', 'main']]),
     [/\/repos\/someone\/[^/]+$/, { body: { default_branch: 'main', private: true } }],
     [/\/commits\?/, { body: [{ sha: 'c' }] }],
     [
@@ -446,12 +469,16 @@ describe('joining a repository that already has a log', () => {
   ];
 
   async function reachTheDeviceStep(user: ReturnType<typeof userEvent.setup>) {
-    await go(user, 'sync');
-    await user.type(screen.getByLabelText('GitHub token', { exact: true }), 'github_pat_x');
-    await user.click(screen.getByRole('button', { name: 'Verify token' }));
-    await screen.findByText('Signed in as someone.');
-    await user.click(screen.getByRole('button', { name: 'Use an existing one' }));
+    await pasteToken(user);
     await screen.findByLabelText('Device name');
+  }
+
+  /** Types a name and commits it, the way a person renames the device. */
+  async function rename(user: ReturnType<typeof userEvent.setup>, name: string) {
+    const field = screen.getByLabelText('Device name');
+    await user.clear(field);
+    await user.type(field, name);
+    await user.click(screen.getByRole('button', { name: 'Rename this device' }));
   }
 
   it('says it will join rather than set up, so nothing looks like it is starting over', async () => {
@@ -459,9 +486,7 @@ describe('joining a repository that already has a log', () => {
     // that their first device's history is about to be replaced.
     const { user } = setup(withLog);
     await reachTheDeviceStep(user);
-    expect(
-      screen.getByText(/already holds a log from one device \(laptop\)/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/already holds a log from one device: laptop/i)).toBeInTheDocument();
     expect(screen.getByText(/nothing already there is replaced/i)).toBeInTheDocument();
   });
 
@@ -475,17 +500,20 @@ describe('joining a repository that already has a log', () => {
     const { user } = setup(withLog);
     await reachTheDeviceStep(user);
 
-    await user.type(screen.getByLabelText('Device name'), 'laptop');
-    expect(screen.getByLabelText('Device name')).toHaveAttribute('aria-invalid', 'true');
+    await rename(user, 'laptop');
     expect(screen.getByText(/Another device is already called "laptop"/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
+    // The question, with its two answers, and no round trip until it is answered.
+    expect(screen.getByRole('button', { name: 'Yes, this is it' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'No, it is another one' })).toBeInTheDocument();
+    expect(screen.queryByText(/Writing a commit/)).toBeNull();
   });
 
   it('accepts a name nobody is using', async () => {
     const { user } = setup(withLog);
     await reachTheDeviceStep(user);
-    await user.type(screen.getByLabelText('Device name'), 'phone');
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+    await rename(user, 'phone');
+    expect(screen.getByText('Events are written under events/phone/.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Yes, this is it' })).toBeNull();
   });
 
   it('allows the name to be reused, but only as a deliberate choice', async () => {
@@ -493,22 +521,35 @@ describe('joining a repository that already has a log', () => {
     // explicit answer rather than as a silent merge.
     const { user } = setup(withLog);
     await reachTheDeviceStep(user);
-    await user.type(screen.getByLabelText('Device name'), 'laptop');
+    await rename(user, 'laptop');
 
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: 'I am replacing that machine' }));
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Yes, this is it' }));
+    expect(screen.queryByText(/Another device is already called/)).toBeNull();
+    expect(screen.getByText('Events are written under events/laptop/.')).toBeInTheDocument();
+  });
+
+  it('offers the next free name when it is another device', async () => {
+    const { user } = setup(withLog);
+    await reachTheDeviceStep(user);
+    await rename(user, 'laptop');
+
+    await user.click(screen.getByRole('button', { name: 'No, it is another one' }));
+    expect(screen.getByLabelText('Device name')).toHaveValue('browser');
+    expect(screen.getByText('Events are written under events/browser/.')).toBeInTheDocument();
   });
 
   it('says nothing about joining when the repository is empty', async () => {
     const { user } = setup([
       [/\/user$/, { body: { login: 'someone' } }],
+      repoList([['someone/to-hoot-data', 'main']]),
       [/\/repos\/someone\/[^/]+$/, { body: { default_branch: 'main', private: true } }],
       [/\/commits\?/, { status: 409, body: { message: 'Git Repository is empty.' } }],
     ]);
     await reachTheDeviceStep(user);
     expect(screen.queryByText(/already holds a log/i)).toBeNull();
-    await user.type(screen.getByLabelText('Device name'), 'laptop');
-    expect(screen.getByRole('button', { name: 'Test sync' })).toBeEnabled();
+    // Nothing is taken, so any name goes straight through to the round trip.
+    await rename(user, 'laptop');
+    expect(screen.getByText('Events are written under events/laptop/.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Yes, this is it' })).toBeNull();
   });
 });

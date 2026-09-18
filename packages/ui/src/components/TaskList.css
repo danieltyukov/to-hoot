@@ -21,13 +21,35 @@
 }
 
 .composer {
+  display: flex;
+  align-items: center;
   border-bottom: 1px solid var(--border);
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.composer:focus-within {
+  background-color: var(--hover);
+}
+
+.composer-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  margin-inline-start: 10px;
+  color: var(--faint);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.composer:focus-within .composer-glyph {
+  color: var(--accent);
 }
 
 .composer-input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: var(--row-h);
-  padding-inline: 10px;
+  padding-inline: 8px 10px;
   border: 0;
   background: none;
   font-size: var(--fs-base);
@@ -38,9 +60,9 @@
   color: var(--faint);
 }
 
-/* The field is the only thing in the composer, so its own focus ring would sit
-   inside a bar that is already the target. Underline the bar instead. */
+/* The bar is the target, so the field's own ring would sit inside a highlight
+   the bar already has. The bar tints, the plus takes the accent, and that is
+   the focus state. */
 .composer-input:focus {
   outline: none;
-  box-shadow: inset 0 -1px 0 0 var(--accent);
 }

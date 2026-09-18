@@ -11,7 +11,7 @@ export function StepLocal() {
     <div className="step">
       <h2>Nothing to set up</h2>
       <p className="prose step-lead">
-        to-hoot already works. Tasks, subtasks, estimates and the timer all run on this device
+        ToHoot already works. Tasks, subtasks, estimates and the timer all run on this device
         and are stored on it. No account is needed and nothing is sent anywhere.
       </p>
 

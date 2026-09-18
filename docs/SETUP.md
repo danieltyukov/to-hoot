@@ -8,13 +8,13 @@ Four steps. Only the first is required, and each of the others can be added or
 removed later from Settings without disturbing the ones you already did.
 
 1. [Local only](#1-local-only), no accounts.
-2. [Sync](#2-sync), a private GitHub repository you own.
+2. [Sync](#2-sync), a private GitHub repository you own, one button.
 3. [Calendar](#3-calendar), an Apps Script bridge in your own Google account.
-4. [Claude](#4-claude), MCP over stdio, and optionally over the web.
+4. [Claude](#4-claude), MCP over stdio, and an endpoint that deploys from the app.
 
-Every step in the app ends with a **Test connection** button that makes a real
-call and reports the actual error. A setup flow that only checks that a URL looks
-like a URL is a setup flow that fails later, somewhere less obvious.
+Every connection in the app does the real operation and shows it happening,
+line by line, rather than checking that a URL looks like a URL. A setup flow that
+only validates syntax is a setup flow that fails later, somewhere less obvious.
 
 ## 1. Local only
 
@@ -26,8 +26,9 @@ Nothing later in this document is required. If a local task tracker with time
 tracking is what you wanted, you are done, and the app will not nag you about the
 rest.
 
-Settings has six sections: Sync, Calendar, Claude, Appearance, Tracking and Data.
-Three of them are worth a look before you connect anything. **Appearance**
+Settings is one page of cards: the three connections, a list of every device
+that writes to your repository, and then Appearance, Tracking and Data. Three of
+them are worth a look before you connect anything. **Appearance**
 carries the theme and the hours your workday runs between, which is the span the
 day timeline opens on. **Data** is export to JSON and import. **Tracking**
 carries the two below, and both change what the totals mean rather than how they
@@ -49,78 +50,64 @@ Sync uses a private GitHub repository as the datastore. There is no server in
 between and no account with anyone. If you delete the repository, the data is
 gone, and the app says so in those words in Settings.
 
-### The token
+### One button
 
-Create a **fine-grained** personal access token, not a classic one:
+Press **Sign in with GitHub**. The app asks GitHub for an eight-character code,
+puts it on your clipboard, and opens `github.com/login/device` in your browser,
+where you paste the code and approve ToHoot. That is GitHub's device flow, and
+it is the one sign-in that works from a phone with no server anywhere: nothing
+is typed into the app and no client secret exists.
 
-1. github.com, Settings, Developer settings, Personal access tokens,
-   Fine-grained tokens, Generate new token.
-2. **Repository access**: Only select repositories. Pick the data repository, or
-   choose "All repositories" for now if you are about to let the app create it,
-   then narrow it afterwards.
-3. **Permissions**: Repository permissions, **Contents: Read and write**. Nothing
-   else. Not Actions, not Workflows, not Administration.
-4. Set an expiry you will actually notice. The app reports a 401 clearly when the
-   token dies, but it cannot renew it for you.
+From there the app does the rest and shows each line as it happens:
 
-A classic token would work and should not be used: `repo` on a classic token
-covers every repository you can reach, which is a much larger blast radius for
-the same feature.
+1. **Finds or creates the data repository.** It looks in your own account for
+   `to-hoot-data`, joins it if it is there, and creates it, private, if it is
+   not. Another name is one tap away under "Use another repository".
+2. **Names this device.** A phone is called `phone`, a desktop `desktop`. If
+   that name is already writing to the repository the app asks one question:
+   is that this device, set up again (keep the name), or another one (which
+   takes `phone-2`). The name is editable underneath.
+3. **Checks the connection.** It writes a commit and reads it back, then says
+   "Connected. Tasks from every device appear here."
 
-### The repository
+The token GitHub hands over has the `repo` scope, because OAuth Apps have no
+narrower scope that reaches a private repository. It never leaves the device
+and is never shown. `SECURITY.md` has the trade-off.
 
-Paste the token into the app. It verifies the token, shows you which account it
-belongs to, and then offers two paths:
+### Or a token
 
-- **Create the data repository.** One API call, private, and the most
-  error-prone manual step disappears. `to-hoot-data` is the suggested name.
-- **Select an existing one.** The wizard reads it before writing anything and
-  tells you what it found, by name: "Already holds a log from one device:
-  laptop." It says in as many words that nothing already there is replaced. That
-  matters most on the second device, when the repository you are pointing at
-  holds the only copy of the first one's history.
+Under **Use a token instead**, paste a **fine-grained** personal access token
+(github.com, Settings, Developer settings, Personal access tokens, Fine-grained
+tokens) with **Contents: Read and write** on the data repository, plus
+**Administration: write** if you want the app to create the repository for you.
+Everything after the token is the same flow as above.
 
-It then writes an initial commit and reads it back before declaring success, so
-the whole round trip is proven rather than assumed. Against a repository that
-already holds a log it reports joining it instead of setting it up.
+### What the repository holds
 
-A repository created empty has no commits at all, and the Git Data API cannot
-write into one: there is no parent commit to build a tree against. The app gives
-it a first commit through the Contents API before the first sync, so "create it
-for me" and "here is one I made earlier" end up in the same state.
-
-Finally, **name the device**. The name becomes the event log prefix, so "laptop"
-and "phone" make a log you can read by eye later. Two devices must never share
-one, and the wizard reads the repository to check: a name another device already
-claims is refused, and the message says which, rather than hinting that
-something is wrong.
-
-Re-using a name is possible and is never silent. It is a separate button, "I am
-replacing that machine", and it is only safe if the old machine will never sync
-again. Two live devices under one name write to the same paths, and the whole
-merge model rests on that never happening.
+Data only. No code, no Actions, no workflows. Nothing in this project ever
+executes anything it reads from there. Each device writes only under its own
+`events/<device>/` prefix, which is what lets two devices sync with no locking
+and why two devices must never share a name.
 
 The names come from `meta.json` first and from the event paths only as a
 fallback. A device whose events have all been folded into the snapshot has no
 `events/<id>/` folder left, and it still holds its name.
 
-The data repository holds data only. No code, no Actions, no workflows. Nothing
-in this project ever executes anything it reads from there.
-
 ### Adding a second device
 
-Paste the same token, pick the same repository, give it a different device name.
-The wizard names the devices already writing there and joins their log. Both
-devices then write only under their own prefix, so they cannot collide, and time
-tracked on both at once adds up instead of one overwriting the other.
+Sign in on it. The app finds the same repository, sees the first device's name,
+suggests one for this device, and joins the log. Both devices then write only
+under their own prefix, so they cannot collide, and time tracked on both at once
+adds up instead of one overwriting the other. Settings lists every device that
+writes to the repository and when it last did.
 
 ### When it syncs
 
-On its own, and opportunistically: once the log has loaded, on a timer, when the
-app comes back to the foreground, and shortly after anything changes. You never
-have to press anything. There is a **Sync now** button in Settings, Sync, beside
-the status line, and it is there for reassurance rather than because sync needs
-it.
+On its own, and opportunistically: once the log has loaded, once a minute, when
+the app comes back to the foreground, and shortly after anything changes. You
+never have to press anything. There is a **Sync now** button in Settings, Sync,
+beside the status line, and it is there for reassurance rather than because sync
+needs it.
 
 Nothing fights the platform for background execution, because it does not have
 to. Every event carries its own timestamp and device, and tracked time carries an
@@ -134,8 +121,9 @@ tracked time written back to a separate calendar so a week of work is visible
 where the rest of your commitments are.
 
 Google requires a human to create and authorize a script, so this step cannot be
-fully automated. It is mechanical, though, and the app generates everything you
-have to paste.
+a single button. It is three numbered stages with a button for each thing that
+can be a button, and one paste: the deployment URL. The check runs the moment
+that URL lands in the field.
 
 ### The read-only shortcut
 
@@ -224,10 +212,13 @@ for the rest, and a re-sync updates by that key rather than inserting.
 Optional, and additive: skipping it changes nothing else. Two paths, and you can
 take either, both, or neither.
 
-Both expose the same nine tools over the same event log: `list_tasks`,
+Both expose the same fifteen tools over the same event log: `list_tasks`,
 `search_tasks`, `today`, `add_task`, `update_task`, `complete_task`,
-`start_timer`, `stop_timer` and `log_time`. A change Claude makes is one event
-appended to the log, indistinguishable from one you made in the app.
+`start_timer`, `stop_timer`, `log_time`, `list_projects`, `add_project`,
+`update_project`, `list_tags`, `add_tag` and `update_tag`. Tasks take project
+and tag names as well as ids, and a name nothing matches is created in the same
+batch as the task. A change Claude makes is one event appended to the log,
+indistinguishable from one you made in the app.
 
 ### Claude Code, over stdio
 
@@ -247,7 +238,7 @@ the repository:
 |---|---|---|
 | `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository |
 | `TO_HOOT_GITHUB_REPO` | yes | The data repository |
-| `TO_HOOT_GITHUB_TOKEN` | yes | The same fine-grained token, or a second one |
+| `TO_HOOT_GITHUB_TOKEN` | yes | A token that can read and write it |
 | `TO_HOOT_GITHUB_BRANCH` | no | The branch to use. Unset means the repository's own default |
 | `TO_HOOT_DEVICE_ID` | no | One path segment, unique per device. Defaults to `mcp-<hostname>` |
 | `TO_HOOT_STATE_DIR` | no | Where a running timer is kept. Defaults to `~/.to-hoot` |
@@ -255,55 +246,51 @@ the repository:
 A blank value counts as unset, so an empty token fails by name instead of as a
 401 from GitHub.
 
-### Claude on the web, on your phone, and Cowork, over a Worker
+### Claude on the web and on your phone, over a Worker
 
-None of them can reach a program on your machine, so they need a public URL,
-which means a free Cloudflare account with no payment method on it. The Worker
-is stateless and holds nothing but the secrets you set on it.
+Neither can reach a program on your machine, so they need a public URL, which
+means a free Cloudflare account with no payment method on it. The Worker is
+stateless and holds nothing but the secrets you set on it.
 
-The app has all of this in **Settings, Claude**, in three numbered stages, with
-the path secret already generated and the commands already filled in. What
-follows is the same thing written out.
+The endpoint deploys from **Settings, Claude**, in three stages:
 
-**1. Deploy it**, on a computer with this repository checked out. Each command
-prompts for its value, so nothing lands in your shell history.
+1. **Create a Cloudflare token.** The button opens the dashboard's token page
+   with the two permissions the deploy needs prefilled (Workers Scripts: Edit,
+   Account Settings: Read). If the form did not fill itself in, pick the "Edit
+   Cloudflare Workers" template. Press Create Token, copy it, paste it into the
+   app. The app uses it for the deploy and then forgets it.
+2. **Deploy the endpoint.** One button. The app downloads the Worker built for
+   its own version from the release, uploads it to your account with the four
+   secrets (your GitHub token, the repository owner and name, and a generated
+   path secret), switches on its `workers.dev` address, and asks the new
+   endpoint for its tools.
+3. **Add it to Claude.** Copy the endpoint and open Customize, Connectors, Add
+   custom connector. Paste the URL and leave the second step empty: this
+   endpoint has no authentication to configure. The same connector then works
+   in Claude on the web and in the Claude app on your phone.
+
+**That URL is a credential.** Anyone holding it can read and write your task
+list. Treat it the way you would treat the token itself; `SECURITY.md` explains
+why the design is shaped this way and how to revoke it.
+
+Wrangler still works, under **Deploy with wrangler instead**, on a computer with
+this repository checked out:
 
 ```
 cd apps/worker
-npx wrangler secret put MCP_PATH_SECRET     # openssl rand -base64 32 | tr -d '/+=' | cut -c1-32
+npx wrangler secret put MCP_PATH_SECRET     # the path secret the app shows
 npx wrangler secret put GITHUB_OWNER
 npx wrangler secret put GITHUB_REPO
 npx wrangler secret put GITHUB_TOKEN
 npx wrangler deploy
 ```
 
-Cloudflare's one-click "Deploy to Cloudflare" button is deliberately not offered
-for this. It treats the linked subdirectory as the root of a new repository and
-requires the application to be self-contained inside it, and `apps/worker`
-depends on `@to-hoot/core` through the workspace, so the button would produce a
-repository that cannot build.
-
-**2. Tell the app where it landed.** Paste the `workers.dev` URL that
-`wrangler deploy` printed into the Worker URL field. The app adds `/mcp/` and
-the path secret for you, which is the step that is easy to get wrong by hand and
-fails as a 404 indistinguishable from a Worker that is down. Press **Test
-endpoint**, which performs a real `tools/list` against it.
-
-**3. Add it to Claude.** In Claude, open Customize, then Connectors, then Add
-custom connector. Paste the endpoint URL, and leave the second step empty:
-this endpoint has no authentication to configure. Press Connect, and Claude
-lists the nine tools. The same connector then works in Claude on the web and in
-the Claude app on your phone.
-
-**That URL is a credential.** Anyone holding it can read and write your task
-list. Treat it the way you would treat the token itself; `SECURITY.md` explains
-why the design is shaped this way and how to revoke it.
-
 Two behaviours are worth knowing before you rely on it:
 
-- The Worker reads the prebuilt snapshot and never replays the log, because the
-  free tier allows 10ms of CPU per request. Events other devices wrote since the
-  last compaction are not visible to it. Events it wrote itself are.
+- The Worker reads the prebuilt snapshot plus the event files written since the
+  last compaction, up to 32 of them, so what the desktop wrote a minute ago is
+  visible to Claude on the web. The devices compact the log once it reaches 30
+  files or 500 events, which is what keeps that tail short.
 - The running timer lives in the isolate, which Cloudflare can recycle between
   two requests. `stop_timer` refuses rather than guessing when the start is gone,
   and tells Claude to use `log_time` instead.

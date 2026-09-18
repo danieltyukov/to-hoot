@@ -1,11 +1,12 @@
 {
   "name": "@to-hoot/worker",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "bundle": "wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc -b"
   },
   "dependencies": {

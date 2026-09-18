@@ -28,7 +28,7 @@ fn focus_main(app: &AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
 
-    let show = MenuItem::with_id(app, "show", "Show to-hoot", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show ToHoot", true, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -50,7 +50,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("tray")
         .icon(app.default_window_icon().cloned().expect("bundled icon"))
-        .tooltip("to-hoot")
+        .tooltip("ToHoot")
         .menu(&menu)
         // Deliberately no `on_tray_icon_event`. Linux delivers no click events
         // for a tray icon, so a click handler would be a feature that exists on
@@ -139,7 +139,7 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to start the to-hoot desktop shell");
+        .expect("failed to start the ToHoot desktop shell");
 }
 
 #[cfg(test)]
