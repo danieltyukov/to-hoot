@@ -30,6 +30,10 @@ env:
   APK_NAME: to-hoot.apk
   DEB_NAME: to-hoot_amd64.deb
   APPIMAGE_NAME: to-hoot_x86_64.AppImage
+  # The Worker, bundled. The app's Claude step downloads this for its own
+  # version and uploads it to the person's Cloudflare account, so the endpoint
+  # always runs the Worker the app was tested against.
+  WORKER_NAME: to-hoot-worker.mjs
 
 jobs:
   desktop:
@@ -230,9 +234,42 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  worker:
+    name: Worker bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # wrangler's dry run bundles the Worker exactly as a deploy would, needs
+      # no account, and writes the module to --outdir. That is the file the app
+      # PUTs to the Workers API; the compatibility settings travel in the
+      # upload's metadata, mirrored from wrangler.jsonc by setup.ts.
+      - name: Bundle the Worker
+        working-directory: apps/worker
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --outdir dist
+          mkdir -p ../../out
+          cp dist/index.js "../../out/$WORKER_NAME"
+          ls -la ../../out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: worker
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
   release:
     name: Publish
-    needs: [desktop, android]
+    needs: [desktop, android, worker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -264,6 +301,8 @@ jobs:
           - `to-hoot_x86_64.AppImage`, Linux. `chmod +x` and run it.
           - `to-hoot_amd64.deb`, Debian and Ubuntu:
             `sudo apt install ./to-hoot_amd64.deb`
+          - `to-hoot-worker.mjs`, the Claude endpoint. The app downloads this
+            one itself when you press Deploy in Settings; nothing to do by hand.
 
           The desktop builds are made on Ubuntu 22.04, so they run on older
           systems as well as newer ones.
@@ -276,4 +315,5 @@ jobs:
             --verify-tag \
             "assets/$APK_NAME" \
             "assets/$DEB_NAME" \
-            "assets/$APPIMAGE_NAME"
+            "assets/$APPIMAGE_NAME" \
+            "assets/$WORKER_NAME"
