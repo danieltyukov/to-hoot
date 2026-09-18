@@ -247,6 +247,11 @@ jobs:
 
       - run: npm ci
 
+      # The Worker imports @to-hoot/core through its export map, which points
+      # at dist. Vitest aliases that to source, so the tests never notice a
+      # missing build; wrangler resolves it for real and fails without one.
+      - run: npm run build -w @to-hoot/core
+
       # wrangler's dry run bundles the Worker exactly as a deploy would, needs
       # no account, and writes the module to --outdir. That is the file the app
       # PUTs to the Workers API; the compatibility settings travel in the
