@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- The paper the app opens on, so the splash and the first frame of the
-         WebView are the same colour. tokens.css --bg, light. -->
+         WebView are the same colour. The light bg token in tokens.css. -->
     <color name="splash_background">#FAF8F5</color>
 </resources>
