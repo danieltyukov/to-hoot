@@ -68,12 +68,20 @@
   --pressed: rgba(28, 27, 25, 0.08);
 
   /*
-   * The rule is two radii: 6px for controls, 10px for panels. Only the control
-   * radius is a token, because nothing is a panel yet: the shell is full-bleed
-   * panes separated by hairlines, with no floating surface to round. The panel
-   * radius returns as --r-panel with the first thing that needs it, at 10px.
+   * The rule is two radii: 6px for controls, 10px for panels. The panel radius
+   * arrived with the first panels, the connection cards in Settings and the
+   * setup card, and nothing else rounds to anything but these two.
    */
   --r-control: 6px;
+  --r-panel: 10px;
+
+  /*
+   * Text on a filled accent control. White reads on the darker light-theme
+   * clay; on the lighter dark-theme clay it does not, so the dark palette
+   * swaps it for the ink. tokens.test.ts holds both at 4.5:1 against
+   * --accent-hover, which is the fill.
+   */
+  --on-accent: #ffffff;
 
   --dur-quick: 100ms;
   --dur-base: 200ms;
@@ -127,6 +135,7 @@
     --danger: #d9736a;
     --hover: rgba(236, 232, 226, 0.06);
     --pressed: rgba(236, 232, 226, 0.1);
+    --on-accent: #12110f;
     color-scheme: dark;
   }
 }
@@ -146,6 +155,7 @@
   --danger: #d9736a;
   --hover: rgba(236, 232, 226, 0.06);
   --pressed: rgba(236, 232, 226, 0.1);
+  --on-accent: #12110f;
   color-scheme: dark;
 }
 

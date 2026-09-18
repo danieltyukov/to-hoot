@@ -190,13 +190,22 @@ describe('tokens.css', () => {
   });
 
   it('exposes a radius token for every radius the design uses', () => {
-    // One, not two: the panel radius has nothing to round yet, and a token
-    // nothing consumes is a value no test can be wrong about. It comes back at
-    // 10px with the first real panel; see the comment in tokens.css.
+    // Two, and exactly two: 6px for controls and 10px for panels. A third
+    // radius is the first sign of a component pasted in from somewhere else.
     expect(LIGHT['--r-control']).toBe('6px');
+    expect(LIGHT['--r-panel']).toBe('10px');
     const radiusTokens = Object.keys(LIGHT).filter(k => k.startsWith('--r-'));
-    expect(radiusTokens).toEqual(['--r-control']);
+    expect(radiusTokens).toEqual(['--r-control', '--r-panel']);
   });
+
+  for (const [name, palette] of THEMES) {
+    it(`${name}: text on a filled accent control clears 4.5:1`, () => {
+      // The primary button fills with accent-hover and sets its label in
+      // on-accent. White does that on the light clay and not on the dark one,
+      // which is why the dark palette swaps it for the ink.
+      expect(contrast(palette['--on-accent']!, palette['--accent-hover']!)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
 
   it('carries the three motion durations and the one easing curve', () => {
     expect(LIGHT['--dur-quick']).toBe('100ms');

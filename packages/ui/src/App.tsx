@@ -23,6 +23,7 @@ import { Timeline } from './components/Timeline.js';
 import { ThemeToggle } from './components/ThemeToggle.js';
 import { TitleBar } from './components/TitleBar.js';
 import { windowGrab } from './components/WindowControls.js';
+import { DayGlyph, GearGlyph, ListsGlyph, TasksGlyph } from './icons/glyphs.js';
 import { Settings } from './components/Settings/Settings.js';
 import { Wizard } from './components/Wizard/Wizard.js';
 import { browserHttp, browserStore } from './platform/browser.js';
@@ -62,7 +63,7 @@ export interface AppProps {
    * title bar for, and for opening a link somewhere that is not this window.
    * Absent in tests and in SSR.
    */
-  platform?: Pick<Platform, 'onResume' | 'window' | 'openUrl'> | undefined;
+  platform?: Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind'> | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -340,6 +341,7 @@ export default function App({
             onDone={() => store.finishSetup()}
             mcpServerPath={mcpServerPath}
             openUrl={platform?.openUrl}
+            deviceKind={platform?.kind}
           />
         </div>
       </div>
@@ -376,7 +378,8 @@ export default function App({
                     setPane('tasks');
                   }}
                 >
-                  Settings
+                  <GearGlyph className="tool-glyph" />
+                  <span>Settings</span>
                 </button>
               </div>
             }
@@ -404,12 +407,14 @@ export default function App({
               onClose={() => setShowSettings(false)}
               mcpServerPath={mcpServerPath}
               openUrl={platform?.openUrl}
+              deviceKind={platform?.kind}
             />
           ) : selected === undefined ? (
             <TaskList
               heading={heading}
               tasks={visible}
               projects={state.projects}
+              tags={state.tags}
               trackedFor={store.trackedFor}
               runningTaskId={snapshot.runningTaskId}
               onToggleDone={(id, isDone) => store.toggleDone(id, isDone)}
@@ -496,14 +501,16 @@ export default function App({
           </div>
         </footer>
 
+        {/* Glyph over label, which is how every phone draws a tab bar and what
+            lets the three read at a glance rather than as three words. */}
         <nav className="tabs" aria-label="Panes">
           {(
             [
-              ['lists', 'Lists'],
-              ['tasks', 'Tasks'],
-              ['day', 'Day'],
+              ['lists', 'Lists', <ListsGlyph key="lists" />],
+              ['tasks', 'Tasks', <TasksGlyph key="tasks" />],
+              ['day', 'Day', <DayGlyph key="day" />],
             ] as const
-          ).map(([id, label]) => (
+          ).map(([id, label, glyph]) => (
             <button
               key={id}
               type="button"
@@ -512,7 +519,10 @@ export default function App({
               aria-current={pane === id ? 'page' : undefined}
               onClick={() => setPane(id)}
             >
-              {label}
+              <span className="tab-glyph" aria-hidden="true">
+                {glyph}
+              </span>
+              <span>{label}</span>
             </button>
           ))}
         </nav>

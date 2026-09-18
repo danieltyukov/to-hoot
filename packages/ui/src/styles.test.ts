@@ -48,11 +48,14 @@ describe.each(FILES)('$name', ({ name, css }) => {
   const decls = declarations(css);
   const isTokens = name === TOKENS;
 
-  it('uses only the radius token, plus a full round for pills and dots', () => {
-    // 50% is a dot and 999px is a pill; everything with corners takes the
-    // token. A literal 6px is rejected even though it is the same number today,
-    // because a literal is a value nobody has to keep in step with the token.
-    const allowed = new Set(['var(--r-control)', '50%', '999px']);
+  it('uses only the two radius tokens, plus a full round for pills and dots', () => {
+    // 50% is a dot and 999px is a pill; everything with corners takes one of
+    // the two tokens. A literal 6px is rejected even though it is the same
+    // number today, because a literal is a value nobody has to keep in step
+    // with the token.
+    // Zero is the absence of a radius rather than a third one: the setup card
+    // squares off when it becomes the whole screen on a phone.
+    const allowed = new Set(['var(--r-control)', 'var(--r-panel)', '50%', '999px', '0']);
     // One exception, and it is scoped to the single file that earns it: the
     // consistency cell is 11px, and 6px on an 11px square is a dot.
     if (name.endsWith('ConsistencyGrid.css')) allowed.add('2px');

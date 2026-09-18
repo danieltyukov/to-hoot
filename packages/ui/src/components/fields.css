@@ -141,3 +141,195 @@
   margin-top: 3px;
   color: var(--muted);
 }
+
+/*
+ * The one filled button on a screen: Sign in, Deploy, Next. Filled with the
+ * darker clay and lettered in --on-accent, which the token sheet holds at
+ * 4.5:1 in both themes. Everything else stays a hairline button, which is what
+ * makes this one read as the thing to press.
+ */
+.button-primary {
+  border-color: var(--accent-hover);
+  background-color: var(--accent-hover);
+  color: var(--on-accent);
+  font-weight: 500;
+}
+
+.button-primary:hover {
+  border-color: var(--accent);
+  background-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.button-primary:disabled {
+  border-color: var(--border);
+  background-color: var(--border);
+  color: var(--faint);
+}
+
+/* A folded-away secondary path: one line, a chevron that turns when open. */
+.reveal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reveal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  min-height: 26px;
+  padding-inline: 4px 8px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition:
+    color var(--dur-quick) var(--ease),
+    background-color var(--dur-quick) var(--ease);
+}
+
+.reveal-toggle:hover {
+  color: var(--text);
+  background-color: var(--hover);
+}
+
+.reveal-chevron {
+  transition: transform var(--dur-quick) var(--ease);
+}
+
+.reveal[data-open] .reveal-chevron {
+  transform: rotate(90deg);
+}
+
+.reveal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-inline-start: 12px;
+  border-inline-start: 2px solid var(--border);
+}
+
+/*
+ * A flow that runs itself, drawn as the list of things it does. Each step has
+ * a mark at the left that fills when the step is done, a title, and the result
+ * under it in the words the check gave back.
+ */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.flow-step {
+  display: flex;
+  gap: 10px;
+}
+
+.flow-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--surface);
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    border-color var(--dur-quick) var(--ease);
+}
+
+.flow-step[data-status='running'] .flow-mark {
+  border-color: var(--accent);
+}
+
+.flow-step[data-status='ok'] .flow-mark {
+  border-color: var(--success);
+  background-color: var(--success);
+}
+
+.flow-step[data-status='error'] .flow-mark {
+  border-color: var(--danger);
+}
+
+.flow-mark .check-ring {
+  display: none;
+}
+
+.flow-mark .check-tick {
+  stroke: var(--surface);
+  stroke-dashoffset: 0;
+  stroke-width: 2.4;
+}
+
+.flow-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flow-title {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.flow-step[data-status='idle'] .flow-title {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.flow-detail {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.flow-detail[data-status='ok'] {
+  color: var(--success);
+}
+
+.flow-detail[data-status='error'] {
+  color: var(--danger);
+}
+
+.flow-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+/*
+ * The code a person types into GitHub. Large, spaced, and in the mono, because
+ * it is the one thing on the screen they have to carry to another one.
+ */
+.device-code {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--bg);
+}
+
+.device-code-value {
+  font-size: var(--fs-h1);
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+
+/* A form row of one labelled field and its button: the button lines up with
+   the input, under the label's height, rather than with the label. */
+.field-row > .field {
+  flex: 1 1 auto;
+}
+
+.field-button-tall {
+  align-self: flex-end;
+  margin-bottom: 21px;
+}

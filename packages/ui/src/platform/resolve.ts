@@ -101,6 +101,7 @@ async function browserOpenUrl(url: string): Promise<void> {
 }
 
 export const browserPlatform: Platform = {
+  kind: 'browser',
   http: browserHttp,
   store: browserStore(),
   files: browserFiles(),

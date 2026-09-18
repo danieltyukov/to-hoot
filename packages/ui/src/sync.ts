@@ -3,6 +3,7 @@ import {
   SyncConflictError,
   SyncEngine,
   isEmptyRepository,
+  type DeviceRecord,
   type Http,
   type PushResult,
   type Settings,
@@ -27,13 +28,26 @@ import type { Store } from './store.js';
  * opened produces the same state as one that synced on the minute.
  */
 
-/** How often to sync while the app is open. */
-export const SYNC_EVERY_MS = 5 * 60_000;
+/**
+ * How often to sync while the app is open.
+ *
+ * A minute, not five. The poll is a conditional GET that answers 304 when
+ * nothing moved, and a 304 costs nothing against GitHub's primary rate limit,
+ * so the only price of polling often is that a phone's tracked time reaches the
+ * laptop within a minute rather than within five.
+ */
+export const SYNC_EVERY_MS = 60_000;
 
 /** How long to wait after a change before pushing it. */
 export const SYNC_AFTER_CHANGE_MS = 10_000;
 
 export type SyncPhase = 'unconfigured' | 'idle' | 'syncing' | 'ok' | 'error';
+
+/** One device that has written to the repository, and when it last did. */
+export interface SyncDevice {
+  id: string;
+  lastSeen: number;
+}
 
 export interface SyncStatus {
   phase: SyncPhase;
@@ -41,6 +55,12 @@ export interface SyncStatus {
   detail: string;
   at: number | null;
   pending: number;
+  /**
+   * Every device the repository has seen, from its own registry. This is what
+   * answers "will the phone's tasks show up here": the phone is in the list,
+   * and so is the last moment it wrote.
+   */
+  devices: SyncDevice[];
 }
 
 export interface SyncControllerOptions {
@@ -69,7 +89,7 @@ export class SyncController {
   private after: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
 
-  status: SyncStatus = { phase: 'unconfigured', detail: 'Not configured.', at: null, pending: 0 };
+  status: SyncStatus = { phase: 'unconfigured', detail: 'Not configured.', at: null, pending: 0, devices: [] };
 
   constructor(options: SyncControllerOptions) {
     this.store = options.store;
@@ -175,8 +195,13 @@ export class SyncController {
     }
   }
 
-  private set(phase: SyncPhase, detail: string, at: number | null = this.status.at): SyncStatus {
-    this.status = { phase, detail, at, pending: this.store.pending().length };
+  private set(
+    phase: SyncPhase,
+    detail: string,
+    at: number | null = this.status.at,
+    devices: SyncDevice[] = this.status.devices,
+  ): SyncStatus {
+    this.status = { phase, detail, at, pending: this.store.pending().length, devices };
     this.onStatus?.(this.status);
     return this.status;
   }
@@ -219,6 +244,7 @@ export class SyncController {
         'ok',
         count === 0 ? 'Everything is synced.' : `${count} events still to push.`,
         this.nowFn(),
+        devicesOf(engine.devices),
       );
     } catch (err) {
       if (err instanceof SyncConflictError) {
@@ -229,6 +255,13 @@ export class SyncController {
       return this.set('error', messageOf(err), this.status.at);
     }
   }
+}
+
+/** The registry as a list, most recently active first. */
+function devicesOf(devices: Record<string, DeviceRecord>): SyncDevice[] {
+  return Object.entries(devices)
+    .map(([id, record]) => ({ id, lastSeen: record.lastSeen }))
+    .sort((a, b) => b.lastSeen - a.lastSeen || (a.id < b.id ? -1 : 1));
 }
 
 function messageOf(err: unknown): string {

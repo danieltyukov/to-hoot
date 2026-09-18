@@ -267,6 +267,7 @@ async function openUrl(url: string): Promise<void> {
 }
 
 export const platform: Platform = {
+  kind: 'desktop',
   http,
   store,
   files,

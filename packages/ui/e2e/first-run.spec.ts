@@ -37,6 +37,7 @@ test('opens on the wizard and asks for nothing to begin with', async ({ page }) 
 
 test('generates a calendar secret nobody is asked to choose', async ({ page }) => {
   await page.locator('[data-step="calendar"]').click();
+  await page.getByRole('button', { name: 'Show the script' }).click();
 
   const secret = page.getByLabel('Shared secret', { exact: true });
   await expect(secret).toHaveAttribute('readonly', '');
@@ -57,6 +58,7 @@ test('shows the built bridge source, with the secret still outside it', async ({
   test.skip(!existsSync(BRIDGE_BUNDLE), 'run npm run build -w @to-hoot/apps-script first');
 
   await page.locator('[data-step="calendar"]').click();
+  await page.getByRole('button', { name: 'Show the script' }).click();
   const value = await page.getByLabel('Shared secret', { exact: true }).inputValue();
 
   const source = await page.locator('.copyable-text').first().textContent();
@@ -74,10 +76,15 @@ test('names the account a real token belongs to, and the real error when it fail
     route.fulfill({ status: 401, body: JSON.stringify({ message: 'Bad credentials' }) }),
   );
   await page.locator('[data-step="sync"]').click();
+  // Sign in with GitHub is the button; the token is the path folded under it.
+  await expect(page.getByRole('button', { name: 'Sign in with GitHub' })).toBeVisible();
+  await page.getByRole('button', { name: 'Use a token instead' }).click();
   await page.getByLabel('GitHub token', { exact: true }).fill('github_pat_wrong');
   await page.getByRole('button', { name: 'Verify token' }).click();
 
-  await expect(page.locator('[data-status="error"]')).toContainText('GitHub rejected the token.');
+  await expect(page.locator('[role="status"][data-status="error"]')).toContainText(
+    'GitHub rejected the token.',
+  );
 });
 
 test('skipping every step leaves a working app, and stays skipped', async ({ page }) => {
@@ -132,6 +139,11 @@ test('a master repository round-trips without ever creating a main ref', async (
     });
 
     if (url.endsWith('/user')) return route.fulfill(body({ login: 'someone' }));
+    // The flow finds the repository in the account's own listing rather than
+    // asking anyone to type its name.
+    if (url.includes('/user/repos?')) {
+      return route.fulfill(body([{ full_name: 'someone/to-hoot-data', default_branch: 'master' }]));
+    }
     if (/\/repos\/someone\/to-hoot-data$/.test(url)) {
       return route.fulfill(body({ default_branch: 'master', private: true }));
     }
@@ -167,20 +179,17 @@ test('a master repository round-trips without ever creating a main ref', async (
   });
 
   await page.locator('[data-step="sync"]').click();
+  await page.getByRole('button', { name: 'Use a token instead' }).click();
   await page.getByLabel('GitHub token', { exact: true }).fill('github_pat_x');
   await page.getByRole('button', { name: 'Verify token' }).click();
-  await expect(page.locator('[data-status="ok"]')).toContainText('Signed in as someone.');
+  await expect(page.getByText(/Signed in as someone/)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Use an existing one' }).click();
-  await expect(page.locator('[data-status="ok"]').last()).toContainText('default branch master');
-
-  await page.getByLabel('Device name').fill('laptop');
-  await page.getByRole('button', { name: 'Test sync' }).click();
-  // Wait for the outcome itself, not for any result line to be non-empty: the
-  // step has several, and the earlier ones are already filled in by this point.
-  await expect(page.locator('[data-status="ok"]').last()).toContainText(
-    /Wrote and read back|Joined the log/,
-  );
+  // The repository was found in the listing, its branch read from the API,
+  // this device named after what it is, and the round trip run, with nobody
+  // pressing anything else.
+  await expect(page.getByText(/default branch master/)).toBeVisible();
+  await expect(page.getByLabel('Device name')).toHaveValue('browser');
+  await expect(page.getByText('Connected. Tasks from every device appear here.')).toBeVisible();
 
   // The point of the whole exercise: nothing was aimed at main, and no ref was
   // created. The commit went onto the branch that was already there.
@@ -189,8 +198,10 @@ test('a master repository round-trips without ever creating a main ref', async (
   expect(seen.some(s => s === 'GET /repos/someone/to-hoot-data')).toBe(true);
   expect(seen.some(s => s.includes('heads/master'))).toBe(true);
 
-  // And the branch it found is what the Claude step then hands to wrangler.
+  // And the branch it found is what the Claude step then hands to wrangler,
+  // under the folded-away wrangler path.
   await page.locator('[data-step="claude"]').click();
+  await page.getByRole('button', { name: 'Deploy with wrangler instead' }).click();
   await expect(page.locator('.copyable-text').last()).toContainText('GITHUB_BRANCH      # master');
 });
 

@@ -2,25 +2,49 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BRIDGE_VERSION, type Http, type HttpRequest, type HttpResponse } from '@to-hoot/core';
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import {
+  CLOUDFLARE_TOKEN_URL,
+  DEFAULT_REPO_NAME,
+  GITHUB_ACCESS_TOKEN_URL,
+  GITHUB_CLIENT_ID,
+  GITHUB_DEVICE_CODE_URL,
   README_PATH,
   SECRET_LENGTH,
+  WORKER_COMPATIBILITY_DATE,
+  WORKER_COMPATIBILITY_FLAGS,
+  WORKER_SCRIPT_NAME,
   checkDeviceId,
   checkDeviceName,
   createDataRepo,
+  deployWorker,
+  fetchWorkerBundle,
+  findDataRepo,
   inspectRepo,
   generateSecret,
+  joinOrCreateRepo,
+  listCloudflareAccounts,
   listRepos,
   mcpAddCommand,
+  multipartBody,
+  pollDeviceLogin,
   readRepo,
   readmeFor,
+  startDeviceLogin,
+  suggestDeviceName,
   testCalendar,
   testIcs,
   testSync,
   endpointUrl,
   testWorker,
+  uploadWorker,
   verifyToken,
+  waitForDeviceLogin,
+  workerBundleUrl,
   wranglerCommands,
+  type DeviceCode,
 } from './setup.js';
 
 /** What a route answers with: a status and the body as a plain string. */
@@ -791,5 +815,439 @@ describe('testSync against a repository that already has a log', () => {
     expect(result.status).toBe('ok');
     expect(result.status === 'ok' && result.detail).toContain('Joined the log already here');
     expect(result.status === 'ok' && result.detail).toContain('laptop');
+  });
+});
+
+describe('signing in with GitHub', () => {
+  const form = (req: HttpRequest): Record<string, string> =>
+    Object.fromEntries(new URLSearchParams(req.body ?? ''));
+
+  it('asks for a device code with the app client id and the repo scope', async () => {
+    const { http, seen } = transport([
+      [
+        /login\/device\/code$/,
+        json(200, {
+          device_code: 'dev-1',
+          user_code: 'ABCD-1234',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5,
+        }),
+      ],
+    ]);
+    const result = await startDeviceLogin(http, { now: () => 1_000 });
+
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: {
+        deviceCode: 'dev-1',
+        userCode: 'ABCD-1234',
+        verificationUri: 'https://github.com/login/device',
+        expiresAt: 1_000 + 900_000,
+        intervalMs: 5_000,
+      },
+    });
+    expect(seen[0]!.url).toBe(GITHUB_DEVICE_CODE_URL);
+    expect(seen[0]!.method).toBe('POST');
+    // Form encoded in, JSON out: the two things GitHub's OAuth endpoints insist on.
+    expect(seen[0]!.headers?.['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(seen[0]!.headers?.['accept']).toBe('application/json');
+    expect(form(seen[0]!)).toEqual({ client_id: GITHUB_CLIENT_ID, scope: 'repo' });
+  });
+
+  it('names a device flow that is switched off on the app', async () => {
+    const { http } = transport([
+      [/login\/device\/code$/, json(400, { error: 'device_flow_disabled', error_description: 'Device flow is disabled' })],
+    ]);
+    const result = await startDeviceLogin(http);
+    expect(result).toMatchObject({ status: 'error', detail: 'Device flow is disabled' });
+    expect(result.status === 'error' && result.hint).toContain('device flow');
+  });
+
+  const code: DeviceCode = {
+    deviceCode: 'dev-1',
+    userCode: 'ABCD-1234',
+    verificationUri: 'https://github.com/login/device',
+    expiresAt: 100_000,
+    intervalMs: 5_000,
+  };
+
+  it('polls the token endpoint with the device grant', async () => {
+    const { http, seen } = transport([[/access_token$/, json(200, { access_token: 'gho_x', token_type: 'bearer' })]]);
+    expect(await pollDeviceLogin(http, code)).toEqual({ status: 'ok', token: 'gho_x' });
+    expect(seen[0]!.url).toBe(GITHUB_ACCESS_TOKEN_URL);
+    expect(form(seen[0]!)).toEqual({
+      client_id: GITHUB_CLIENT_ID,
+      device_code: 'dev-1',
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    });
+  });
+
+  it('keeps waiting on authorization_pending and backs off on slow_down', async () => {
+    // Both arrive as 200 with an error field: they are the ordinary shape of a
+    // person who has not finished typing, not failures.
+    const pending = transport([[/access_token$/, json(200, { error: 'authorization_pending' })]]);
+    expect(await pollDeviceLogin(pending.http, code)).toEqual({ status: 'pending', intervalMs: 5_000 });
+
+    const slow = transport([[/access_token$/, json(200, { error: 'slow_down', interval: 10 })]]);
+    expect(await pollDeviceLogin(slow.http, code)).toEqual({ status: 'pending', intervalMs: 10_000 });
+
+    const slowUnsaid = transport([[/access_token$/, json(200, { error: 'slow_down' })]]);
+    expect(await pollDeviceLogin(slowUnsaid.http, code)).toEqual({ status: 'pending', intervalMs: 10_000 });
+  });
+
+  it.each([
+    ['expired_token', 'The code expired before it was entered.'],
+    ['access_denied', 'The sign-in was cancelled on GitHub.'],
+  ])('turns %s into a sentence', async (error, detail) => {
+    const { http } = transport([[/access_token$/, json(200, { error })]]);
+    expect(await pollDeviceLogin(http, code)).toMatchObject({ status: 'error', detail });
+  });
+
+  it('waits through the pending polls, at the interval GitHub asks for', async () => {
+    let calls = 0;
+    const http: Http = async () => {
+      calls++;
+      const body =
+        calls === 1
+          ? { error: 'authorization_pending' }
+          : calls === 2
+            ? { error: 'slow_down', interval: 8 }
+            : { access_token: 'gho_done' };
+      return { status: 200, headers: {}, text: async () => JSON.stringify(body) };
+    };
+    const slept: number[] = [];
+    const result = await waitForDeviceLogin(http, code, {
+      now: () => 0,
+      sleep: async ms => void slept.push(ms),
+    });
+    expect(result).toMatchObject({ status: 'ok', value: 'gho_done' });
+    // Five seconds after the first pending answer, eight after GitHub raised it.
+    expect(slept).toEqual([5_000, 8_000]);
+  });
+
+  it('gives up when the code has expired rather than polling forever', async () => {
+    const { http, seen } = transport([[/access_token$/, json(200, { error: 'authorization_pending' })]]);
+    let clock = 0;
+    const result = await waitForDeviceLogin(http, code, {
+      now: () => clock,
+      sleep: async () => {
+        clock += 60_000;
+      },
+    });
+    expect(result).toMatchObject({ status: 'error', detail: /expired/ });
+    // 100 seconds of life at a 5 second interval, minus the poll that expired.
+    expect(seen.length).toBeLessThanOrEqual(3);
+  });
+
+  it('stops when the person cancels', async () => {
+    const { http, seen } = transport([[/access_token$/, json(200, { error: 'authorization_pending' })]]);
+    let cancelled = false;
+    const result = await waitForDeviceLogin(http, code, {
+      now: () => 0,
+      sleep: async () => {
+        cancelled = true;
+      },
+      cancelled: () => cancelled,
+    });
+    expect(result).toMatchObject({ status: 'error', detail: 'Sign-in cancelled.' });
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe('finding the data repository', () => {
+  const listing = (repos: Array<[full: string, branch: string]>) =>
+    json(200, repos.map(([full_name, default_branch]) => ({ full_name, default_branch })));
+
+  it('finds the account own repository by its default name, whatever the case', async () => {
+    const { http } = transport([
+      [/\/user\/repos/, listing([['someone/other', 'main'], ['someone/To-Hoot-Data', 'master']])],
+      [/\/repos\/someone\/To-Hoot-Data$/, json(200, { default_branch: 'master', private: true })],
+    ]);
+    const result = await findDataRepo(http, 't', 'someone');
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { owner: 'someone', repo: 'To-Hoot-Data', branch: 'master' },
+    });
+  });
+
+  it('ignores a repository of that name that belongs to somebody else', async () => {
+    const { http } = transport([[/\/user\/repos/, listing([['org/to-hoot-data', 'main']])]]);
+    const result = await findDataRepo(http, 't', 'someone');
+    expect(result).toMatchObject({ status: 'ok', value: null });
+    expect(result.detail).toContain(DEFAULT_REPO_NAME);
+  });
+
+  it('creates the repository when there is none, and says so', async () => {
+    const { http, seen } = transport([
+      [/\/user\/repos\?/, listing([])],
+      [/\/user\/repos$/, json(201, { full_name: 'someone/to-hoot-data', default_branch: 'main' })],
+    ]);
+    const result = await joinOrCreateRepo(http, 't', 'someone');
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { created: true, target: { owner: 'someone', repo: 'to-hoot-data' }, contents: { hasLog: false } },
+    });
+    const create = seen.find(r => r.method === 'POST')!;
+    expect(JSON.parse(create.body!)).toMatchObject({ name: 'to-hoot-data', private: true });
+  });
+
+  it('joins a repository that already holds a log, naming the devices in it', async () => {
+    const { http } = transport([
+      [/\/user\/repos\?/, listing([['someone/to-hoot-data', 'main']])],
+      [/\/repos\/someone\/to-hoot-data$/, json(200, { default_branch: 'main', private: true })],
+      [/\/commits\?/, json(200, [{ sha: 'c' }])],
+      [
+        /\/git\/trees\/c/,
+        json(200, {
+          truncated: false,
+          tree: [
+            { path: 'events/desktop/01A.json', sha: 'e1', type: 'blob' },
+            { path: 'meta.json', sha: 'm', type: 'blob' },
+          ],
+        }),
+      ],
+      [
+        /\/git\/blobs\/m/,
+        json(200, {
+          content: btoa(JSON.stringify({ schemaVersion: 1, devices: { desktop: { firstSeen: 1, lastSeen: 2 }, phone: { firstSeen: 1, lastSeen: 2 } } })),
+          encoding: 'base64',
+        }),
+      ],
+    ]);
+    const result = await joinOrCreateRepo(http, 't', 'someone');
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { created: false, contents: { hasLog: true, deviceIds: ['desktop', 'phone'] } },
+    });
+    expect(result.detail).toContain('desktop, phone');
+  });
+
+  it('passes a failure to create straight through', async () => {
+    const { http } = transport([
+      [/\/user\/repos\?/, listing([])],
+      [/\/user\/repos$/, json(403, { message: 'Resource not accessible by personal access token' })],
+    ]);
+    expect(await joinOrCreateRepo(http, 't', 'someone')).toMatchObject({ status: 'error' });
+  });
+});
+
+describe('suggestDeviceName', () => {
+  it('names the device after what the shell says it is', () => {
+    expect(suggestDeviceName('android', [])).toBe('phone');
+    expect(suggestDeviceName('desktop', [])).toBe('desktop');
+    expect(suggestDeviceName('browser', [])).toBe('browser');
+    expect(suggestDeviceName(undefined, [])).toBe('browser');
+  });
+
+  it('steps past names already writing to the repository', () => {
+    // A second phone is a real thing to own, and it must not share a folder
+    // with the first: every device writes only under its own prefix.
+    expect(suggestDeviceName('android', ['phone'])).toBe('phone-2');
+    expect(suggestDeviceName('android', ['phone', 'phone-2'])).toBe('phone-3');
+  });
+});
+
+describe('deploying the Worker from the app', () => {
+  const ACCOUNT = 'acc-1';
+  const okCf = (result: unknown) => json(200, { success: true, errors: [], result });
+  const cfError = (status: number, message: string) => json(status, { success: false, errors: [{ code: 1, message }] });
+
+  it('sends the token creation page the permission set it needs', () => {
+    const url = new URL(CLOUDFLARE_TOKEN_URL);
+    expect(url.origin + url.pathname).toBe('https://dash.cloudflare.com/profile/api-tokens');
+    const groups = JSON.parse(url.searchParams.get('permissionGroupKeys')!) as Array<{ key: string; type: string }>;
+    expect(groups).toEqual(
+      expect.arrayContaining([
+        { key: 'workers_scripts', type: 'edit' },
+        { key: 'account_settings', type: 'read' },
+      ]),
+    );
+    expect(url.searchParams.get('name')).toBe('ToHoot');
+  });
+
+  it('mirrors the compatibility settings wrangler.jsonc deploys with', () => {
+    // Two copies of one fact, and this is what notices them drifting: the
+    // endpoint the app deploys has to run the way the one wrangler deploys runs.
+    const jsonc = readFileSync(
+      fileURLToPath(new URL('../../../apps/worker/wrangler.jsonc', import.meta.url)),
+      'utf8',
+    );
+    expect(jsonc).toContain(`"compatibility_date": "${WORKER_COMPATIBILITY_DATE}"`);
+    expect(jsonc).toContain(`"compatibility_flags": ${JSON.stringify(WORKER_COMPATIBILITY_FLAGS)}`);
+    expect(jsonc).toContain(`"name": "${WORKER_SCRIPT_NAME}"`);
+  });
+
+  it('downloads the bundle for this build from the release', () => {
+    expect(workerBundleUrl('0.6.0')).toBe(
+      'https://github.com/danieltyukov/to-hoot/releases/download/v0.6.0/to-hoot-worker.mjs',
+    );
+  });
+
+  it('explains a release with no bundle rather than uploading nothing', async () => {
+    const { http } = transport([[/releases\/download/, { status: 404, text: 'Not Found' }]]);
+    const result = await fetchWorkerBundle(http);
+    expect(result).toMatchObject({ status: 'error', detail: /No Worker bundle is published/ });
+  });
+
+  it('refuses a download that is not a module', async () => {
+    const { http } = transport([[/releases\/download/, { status: 200, text: '<html>sign in</html>' }]]);
+    expect(await fetchWorkerBundle(http)).toMatchObject({ status: 'error', detail: /not a Worker module/ });
+  });
+
+  it('accepts the module shape esbuild actually writes', async () => {
+    // Wrangler's bundle ends in `export {\n  index_default as default\n};`, with
+    // a space, which is what the first version of this check did not accept.
+    const tail = 'var index_default = { fetch() {} };\nexport {\n  index_default as default\n};\n';
+    const { http } = transport([[/releases\/download/, { status: 200, text: tail }]]);
+    expect(await fetchWorkerBundle(http)).toMatchObject({ status: 'ok', value: tail });
+  });
+
+  it('lists the accounts the token can see, and names a rejected token', async () => {
+    const ok = transport([[/\/accounts$/, okCf([{ id: ACCOUNT, name: 'Someone' }])]]);
+    expect(await listCloudflareAccounts(ok.http, 'cf')).toMatchObject({
+      status: 'ok',
+      value: [{ id: ACCOUNT, name: 'Someone' }],
+    });
+    expect(ok.seen[0]!.headers?.['authorization']).toBe('Bearer cf');
+
+    const bad = transport([[/\/accounts$/, cfError(403, 'Authentication error')]]);
+    const result = await listCloudflareAccounts(bad.http, 'cf');
+    expect(result).toMatchObject({ status: 'error', detail: 'Cloudflare rejected the token.' });
+    expect(result.status === 'error' && result.hint).toContain('Workers Scripts: Edit');
+  });
+
+  it('builds a multipart body with the metadata and the module parts', () => {
+    const body = multipartBody(
+      [
+        { name: 'metadata', content: '{"a":1}', contentType: 'application/json' },
+        { name: 'index.mjs', filename: 'index.mjs', content: 'export default 1', contentType: 'application/javascript+module' },
+      ],
+      'B',
+    );
+    expect(body).toBe(
+      [
+        '--B',
+        'Content-Disposition: form-data; name="metadata"',
+        'Content-Type: application/json',
+        '',
+        '{"a":1}',
+        '--B',
+        'Content-Disposition: form-data; name="index.mjs"; filename="index.mjs"',
+        'Content-Type: application/javascript+module',
+        '',
+        'export default 1',
+        '--B--',
+        '',
+      ].join('\r\n'),
+    );
+  });
+
+  function deployRoutes(overrides: Array<[RegExp | ((req: HttpRequest) => boolean), Reply]> = []) {
+    return transport([
+      ...overrides,
+      [req => req.method === 'PUT' && /workers\/scripts\/to-hoot-mcp$/.test(req.url), okCf({ id: 'to-hoot-mcp' })],
+      [req => req.method === 'GET' && /workers\/subdomain$/.test(req.url), okCf({ subdomain: 'someone' })],
+      [req => req.method === 'POST' && /scripts\/to-hoot-mcp\/subdomain$/.test(req.url), okCf({ enabled: true })],
+      [/workers\.dev\/mcp\//, json(200, { result: { tools: [{ name: 'list_tasks' }, { name: 'add_task' }] } })],
+    ]);
+  }
+
+  it('uploads the module with every secret as a binding, then routes it', async () => {
+    const { http, seen } = deployRoutes();
+    const result = await uploadWorker(http, {
+      apiToken: 'cf',
+      accountId: ACCOUNT,
+      bundle: 'export default {}',
+      secrets: { MCP_PATH_SECRET: 's'.repeat(40), GITHUB_OWNER: 'someone', GITHUB_REPO: 'to-hoot-data', GITHUB_TOKEN: 'gho_x', GITHUB_BRANCH: '' },
+      boundary: 'B',
+    });
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { scriptName: 'to-hoot-mcp', subdomain: 'someone', base: 'https://to-hoot-mcp.someone.workers.dev' },
+    });
+
+    const upload = seen.find(r => r.method === 'PUT')!;
+    expect(upload.url).toBe(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/to-hoot-mcp`);
+    expect(upload.headers?.['content-type']).toBe('multipart/form-data; boundary=B');
+    const metadataText = /name="metadata"\r\nContent-Type: application\/json\r\n\r\n(.*?)\r\n--B/s.exec(upload.body!)![1]!;
+    const metadata = JSON.parse(metadataText) as {
+      main_module: string;
+      compatibility_date: string;
+      compatibility_flags: string[];
+      bindings: Array<{ type: string; name: string; text: string }>;
+    };
+    expect(metadata.main_module).toBe('index.mjs');
+    expect(metadata.compatibility_date).toBe(WORKER_COMPATIBILITY_DATE);
+    expect(metadata.compatibility_flags).toEqual(WORKER_COMPATIBILITY_FLAGS);
+    // An empty branch is not a binding: the Worker's own fallback is the
+    // repository's default, and an empty string would set it to nothing.
+    expect(metadata.bindings.map(b => b.name).sort()).toEqual(
+      ['GITHUB_OWNER', 'GITHUB_REPO', 'GITHUB_TOKEN', 'MCP_PATH_SECRET'],
+    );
+    expect(metadata.bindings.every(b => b.type === 'secret_text')).toBe(true);
+    expect(upload.body).toContain('filename="index.mjs"');
+    expect(upload.body).toContain('export default {}');
+
+    // The route is switched on for the script after the upload.
+    const enable = seen.find(r => r.method === 'POST' && r.url.endsWith('/subdomain'))!;
+    expect(JSON.parse(enable.body!)).toEqual({ enabled: true, previews_enabled: false });
+  });
+
+  it('registers a workers.dev subdomain for an account that has none', async () => {
+    const { http, seen } = deployRoutes([
+      [req => req.method === 'GET' && /workers\/subdomain$/.test(req.url), cfError(404, 'no subdomain')],
+      [req => req.method === 'PUT' && /workers\/subdomain$/.test(req.url), okCf({ subdomain: 'to-hoot-abc123' })],
+    ]);
+    const result = await uploadWorker(http, {
+      apiToken: 'cf',
+      accountId: ACCOUNT,
+      bundle: 'export default {}',
+      secrets: {},
+      randomSuffix: () => 'abc123',
+    });
+    expect(result).toMatchObject({ status: 'ok', value: { subdomain: 'to-hoot-abc123' } });
+    const register = seen.find(r => r.method === 'PUT' && r.url.endsWith('/workers/subdomain'))!;
+    expect(JSON.parse(register.body!)).toEqual({ subdomain: 'to-hoot-abc123' });
+  });
+
+  it('surfaces Cloudflare own message when the upload is refused', async () => {
+    const { http } = deployRoutes([
+      [req => req.method === 'PUT' && /workers\/scripts/.test(req.url), cfError(400, 'Uncaught SyntaxError: Unexpected token')],
+    ]);
+    const result = await uploadWorker(http, { apiToken: 'cf', accountId: ACCOUNT, bundle: 'x', secrets: {} });
+    expect(result).toMatchObject({ status: 'error', detail: 'Uncaught SyntaxError: Unexpected token' });
+  });
+
+  it('proves the endpoint answers, retrying while the hostname settles', async () => {
+    let checks = 0;
+    const { http } = deployRoutes([
+      [
+        req => /workers\.dev\/mcp\//.test(req.url) && ++checks === 1,
+        { status: 530, text: 'not yet' },
+      ],
+    ]);
+    const slept: number[] = [];
+    const result = await deployWorker(
+      http,
+      { apiToken: 'cf', accountId: ACCOUNT, bundle: 'export default {}', secrets: {}, pathSecret: 'p'.repeat(40) },
+      { sleep: async ms => void slept.push(ms) },
+    );
+    expect(result).toMatchObject({
+      status: 'ok',
+      value: { endpoint: `https://to-hoot-mcp.someone.workers.dev/mcp/${'p'.repeat(40)}`, tools: ['list_tasks', 'add_task'] },
+    });
+    expect(slept).toEqual([3000]);
+    expect(checks).toBe(2);
+  });
+
+  it('says the upload landed even when the endpoint has not answered yet', async () => {
+    const { http } = deployRoutes([[/workers\.dev\/mcp\//, { status: 530, text: 'not yet' }]]);
+    const result = await deployWorker(
+      http,
+      { apiToken: 'cf', accountId: ACCOUNT, bundle: 'export default {}', secrets: {}, pathSecret: 'p'.repeat(40) },
+      { sleep: async () => undefined, attempts: 2 },
+    );
+    expect(result).toMatchObject({ status: 'error', detail: /Deployed to https:\/\/to-hoot-mcp\.someone\.workers\.dev, but/ });
   });
 });

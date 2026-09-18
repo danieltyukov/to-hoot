@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type FormEvent, type ReactNode } from 're
 import type { Project, Tag } from '@to-hoot/core';
 
 import { OwlMark } from '../icons/OwlMark.js';
+import { PlusGlyph, ProjectGlyph, TagGlyph, TodayGlyph } from '../icons/glyphs.js';
 import { Wordmark } from './Wordmark.js';
 import './Sidebar.css';
 
@@ -31,7 +32,7 @@ export function Sidebar({
   onAddTag,
   footer,
 }: SidebarProps) {
-  const item = (view: View, label: string, color?: string): ReactNode => {
+  const item = (view: View, label: string, color?: string, glyph?: ReactNode): ReactNode => {
     const count = counts[view];
     return (
       <li key={view}>
@@ -42,7 +43,11 @@ export function Sidebar({
           aria-current={active === view ? 'page' : undefined}
           onClick={() => onSelect(view)}
         >
-          {color === undefined ? null : (
+          {glyph !== undefined ? (
+            <span className="nav-glyph" aria-hidden="true">
+              {glyph}
+            </span>
+          ) : color === undefined ? null : (
             <span className="nav-dot" style={{ background: color }} aria-hidden="true" />
           )}
           <span className="nav-label">{label}</span>
@@ -65,14 +70,14 @@ export function Sidebar({
         <Wordmark className="brand-word" />
       </div>
 
-      <ul className="nav">{item('today', 'Today')}</ul>
+      <ul className="nav">{item('today', 'Today', undefined, <TodayGlyph />)}</ul>
 
       {/*
         The headings show even with nothing under them, which an earlier version
         did not. They carry the only way to make the first project or the first
         tag, and a section that hides until it has contents can never get any.
       */}
-      <Section heading="Projects" label="project" onAdd={onAddProject}>
+      <Section heading="Projects" label="project" onAdd={onAddProject} glyph={<ProjectGlyph />}>
         {projects.length === 0 ? (
           <li className="nav-none">No projects yet.</li>
         ) : (
@@ -80,7 +85,7 @@ export function Sidebar({
         )}
       </Section>
 
-      <Section heading="Tags" label="tag" onAdd={onAddTag} className="nav-tags">
+      <Section heading="Tags" label="tag" onAdd={onAddTag} className="nav-tags" glyph={<TagGlyph />}>
         {tags.length === 0 ? (
           <li className="nav-none">No tags yet.</li>
         ) : (
@@ -112,6 +117,7 @@ function Section({
   label,
   onAdd,
   className,
+  glyph,
   children,
 }: {
   heading: string;
@@ -119,6 +125,8 @@ function Section({
   label: string;
   onAdd?: ((title: string) => void) | undefined;
   className?: string;
+  /** Sits before the heading, faint, so the section reads as a kind of thing. */
+  glyph?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -136,7 +144,14 @@ function Section({
   return (
     <>
       <div className="nav-head-row">
-        <h2 className="micro nav-head">{heading}</h2>
+        <h2 className="micro nav-head">
+          {glyph === undefined ? null : (
+            <span className="nav-head-glyph" aria-hidden="true">
+              {glyph}
+            </span>
+          )}
+          {heading}
+        </h2>
         {onAdd === undefined ? null : (
           <button
             type="button"
@@ -171,19 +186,5 @@ function Section({
 
       <ul className={className === undefined ? 'nav' : `nav ${className}`}>{children}</ul>
     </>
-  );
-}
-
-function PlusGlyph() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-      <path
-        d="M8 3.5 V12.5 M3.5 8 H12.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }

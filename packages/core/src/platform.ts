@@ -104,7 +104,18 @@ export interface WindowFrame {
   startDragging(): Promise<void>;
 }
 
+/** The shells this app ships in, plus the browser it is developed and tested in. */
+export type PlatformKind = 'desktop' | 'android' | 'browser';
+
 export interface Platform {
+  /**
+   * Which shell this is, for the one decision the app makes on the user's
+   * behalf: the name it suggests for this device when it joins a data
+   * repository. A phone is called "phone" and a desktop "desktop" without
+   * anyone typing either. Absent means the shell has not said, and the app
+   * treats that as a browser.
+   */
+  kind?: PlatformKind;
   http: Http;
   /** Settings, and nothing larger. See `files` for the log. */
   store: KeyValueStore;

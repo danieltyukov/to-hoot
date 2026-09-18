@@ -18,3 +18,9 @@
 .theme-toggle[aria-pressed='true'] {
   color: var(--text);
 }
+
+/* The gear beside "Settings", drawn like the theme toggle's own glyph. */
+.tool-glyph {
+  width: 14px;
+  height: 14px;
+}

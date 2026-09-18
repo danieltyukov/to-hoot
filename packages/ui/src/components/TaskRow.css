@@ -29,6 +29,14 @@
   border-bottom: 0;
 }
 
+/* The running row carries the accent on its leading edge, the way the day
+   timeline marks the block being tracked, so the two read as one thing. An
+   inset shadow rather than a border, so the row's width does not change when
+   the timer starts. */
+.row[data-running] {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
 /* Completed work fades back rather than disappearing: it stays on the list for
    the day it was finished, and a struck-through line is the record of that. */
 .row[data-done] {
@@ -105,6 +113,35 @@
   gap: 5px;
   font-size: var(--fs-mini);
   color: var(--muted);
+}
+
+/* The tags on a row, as the same pill the sidebar draws them with, smaller.
+   Hidden on a phone, where the title needs the width more than the tags do. */
+.row-tags {
+  flex: 0 1 auto;
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.row-tag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding-inline: 7px;
+  border: 1px solid var(--tag-color, var(--border-strong));
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 899px) {
+  .row-tags {
+    display: none;
+  }
 }
 
 /* A dot and a name, not a filled pill. Tags get pills; projects get this, so the

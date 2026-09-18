@@ -1,9 +1,33 @@
+/*
+ * First run: one card on the paper.
+ *
+ * On a desktop the card floats in the window with room around it, which is
+ * what says "this is a moment, not the app". On a phone it is the screen: the
+ * margins go, the corners go, and the head and foot pin to the edges so the
+ * step body is the only thing that scrolls.
+ */
+
 .wizard {
   display: flex;
-  flex-direction: column;
+  justify-content: center;
   height: 100%;
   min-height: 0;
+  padding: 28px 20px;
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.wizard-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 720px;
+  max-height: 100%;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .wizard-head {
@@ -11,27 +35,55 @@
   align-items: center;
   gap: 20px;
   flex-wrap: wrap;
-  padding: 14px 16px 10px;
+  padding: 16px 20px 12px;
   border-bottom: 1px solid var(--border);
 }
 
 .wizard-steps {
   display: flex;
-  gap: 2px;
+  gap: 4px;
+  margin-inline-start: auto;
 }
 
+/* Four pills. The current one is tinted, the ones behind it have their number
+   filled in, the ones ahead are faint: a progress bar that is also the nav. */
 .wizard-step {
-  min-height: 26px;
-  padding-inline: 9px;
-  border-radius: var(--r-control);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding-inline: 6px 10px;
+  border-radius: 999px;
   font-size: var(--fs-mini);
   color: var(--faint);
-  transition: color var(--dur-quick) var(--ease);
+  transition:
+    color var(--dur-quick) var(--ease),
+    background-color var(--dur-quick) var(--ease);
+}
+
+.wizard-step-number {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 10px;
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    border-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
 }
 
 .wizard-step:hover,
 .wizard-step[data-visited] {
   color: var(--muted);
+}
+
+.wizard-step[data-visited] .wizard-step-number {
+  border-color: var(--success);
+  background-color: var(--success);
+  color: var(--surface);
 }
 
 .wizard-step[aria-current='step'] {
@@ -40,18 +92,36 @@
   font-weight: 500;
 }
 
+.wizard-step[aria-current='step'] .wizard-step-number {
+  border-color: var(--accent-hover);
+  background-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
 .wizard-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  animation: wizard-in var(--dur-base) var(--ease);
+}
+
+/* A new step arrives rather than replaces. Opacity only: nothing slides or
+   scales, which is the difference between a page turning and a toy. */
+@keyframes wizard-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .step {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   max-width: 640px;
-  padding: 20px 16px 28px;
+  padding: 22px 20px 30px;
 }
 
 .step-lead {
@@ -92,7 +162,7 @@
 
 .step-numbered li {
   counter-increment: step;
-  padding-inline-start: 26px;
+  padding-inline-start: 28px;
   position: relative;
 }
 
@@ -101,8 +171,8 @@
   position: absolute;
   inset-inline-start: 0;
   top: 1px;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -112,7 +182,7 @@
   font-size: 10px;
 }
 
-/* The Claude step's three stages each hold a field, a code pane and a row of
+/* The calendar step's three stages each hold prose, a field and a row of
    buttons, so they need the room a one-line numbered item does not. */
 .step-stages {
   gap: 22px;
@@ -130,7 +200,7 @@
 
 .step-actions {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -139,8 +209,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .wizard-spacer {
@@ -148,6 +219,38 @@
 }
 
 .wizard-next {
-  color: var(--accent-hover);
-  border-color: var(--accent);
+  min-width: 96px;
+  justify-content: center;
+}
+
+@media (max-width: 899px) {
+  .wizard {
+    padding: 0;
+  }
+
+  .wizard-card {
+    max-width: none;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .wizard-head {
+    gap: 12px;
+    padding: 14px 16px 10px;
+  }
+
+  .wizard-steps {
+    width: 100%;
+    margin-inline-start: 0;
+    justify-content: space-between;
+  }
+
+  .step {
+    padding: 18px 16px 26px;
+  }
+
+  .wizard-foot {
+    padding: 10px 16px;
+  }
 }

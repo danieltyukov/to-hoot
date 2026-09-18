@@ -288,6 +288,7 @@ async function openUrl(url: string): Promise<void> {
 }
 
 export const platform: MobilePlatform = {
+  kind: 'android',
   http,
   store,
   files,
