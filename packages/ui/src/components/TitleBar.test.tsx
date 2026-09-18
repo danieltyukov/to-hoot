@@ -10,7 +10,7 @@ describe('TitleBar', () => {
     const { frame } = fakeFrame();
     const { container } = render(<TitleBar frame={frame} title="Today" />);
 
-    expect(container.querySelector('.brand-word')).toHaveTextContent('to-hoot');
+    expect(container.querySelector('.brand-word')).toHaveTextContent('ToHoot');
     expect(container.querySelector('.titlebar-where')).toHaveTextContent('Today');
     const group = screen.getByRole('group', { name: 'Window' });
     expect(within(group).getAllByRole('button').map(b => b.getAttribute('aria-label'))).toEqual([

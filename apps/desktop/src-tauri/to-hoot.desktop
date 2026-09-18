@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name={{name}}
+# The product name, not {{name}}: the package, the binary and the icon files
+# stay to-hoot so an installed 0.5.x upgrades in place, and only the word a
+# person reads in the launcher changes.
+Name=ToHoot
 {{#if comment}}
 Comment={{comment}}
 {{/if}}

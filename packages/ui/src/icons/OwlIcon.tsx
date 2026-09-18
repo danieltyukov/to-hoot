@@ -19,7 +19,7 @@ export interface OwlIconProps extends Omit<SVGProps<SVGSVGElement>, 'width' | 'h
  * out and no gap to close, so the shape degrades into a disc with three marks
  * rather than into a blob.
  */
-export function OwlIcon({ size = 32, label = 'to-hoot', ...rest }: OwlIconProps) {
+export function OwlIcon({ size = 32, label = 'ToHoot', ...rest }: OwlIconProps) {
   const a11y =
     label === null ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': label };
   return (

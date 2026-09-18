@@ -200,7 +200,7 @@ test('the wordmark is still one word to anything that reads it', async ({ page }
   // search and the accessible name all come from textContent, so the word has
   // to survive being cut up.
   await page.setViewportSize(DESKTOP);
-  await expect(page.getByText('to-hoot', { exact: true })).toBeVisible();
+  await expect(page.getByText('ToHoot', { exact: true })).toBeVisible();
 });
 
 test('the accent is never used as a text colour', async ({ page }) => {

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.tohoot.app',
-  appName: 'to-hoot',
+  appName: 'ToHoot',
   // `dist` is the staged copy written by `scripts/stage-web.mjs`: the ui build
   // plus this shell's platform adapter. Pointing straight at `packages/ui/dist`
   // would ship the app with no adapter and therefore no network or storage.

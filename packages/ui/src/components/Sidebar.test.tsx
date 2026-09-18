@@ -67,7 +67,7 @@ describe('Sidebar', () => {
     // selection, search, and the accessible name are all textContent.
     const { container } = setup();
     const wordmark = container.querySelector('.wordmark')!;
-    expect(wordmark.textContent).toBe('to-hoot');
+    expect(wordmark.textContent).toBe('ToHoot');
     expect(wordmark.querySelectorAll('.wordmark-eye')).toHaveLength(2);
     for (const eye of wordmark.querySelectorAll('.wordmark-eye')) {
       expect(eye.textContent).toBe('o');

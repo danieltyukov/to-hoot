@@ -3,7 +3,7 @@ import type { SVGProps } from 'react';
 export interface OwlMarkProps extends Omit<SVGProps<SVGSVGElement>, 'width' | 'height'> {
   size?: number;
   /**
-   * Pass null where the mark sits beside the word "to-hoot" already: two
+   * Pass null where the mark sits beside the word "ToHoot" already: two
    * accessible names for one thing makes a screen reader say it twice.
    */
   label?: string | null;
@@ -23,7 +23,7 @@ export interface OwlMarkProps extends Omit<SVGProps<SVGSVGElement>, 'width' | 'h
  * This mark fills in below roughly 20px, where the 2.1 stroke and the gaps
  * around the eyes collapse into a blob. Use OwlIcon there.
  */
-export function OwlMark({ size = 32, label = 'to-hoot', ...rest }: OwlMarkProps) {
+export function OwlMark({ size = 32, label = 'ToHoot', ...rest }: OwlMarkProps) {
   const a11y =
     label === null ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': label };
   return (

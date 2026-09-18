@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Three layers. The background is the clay tile and the foreground is the face;
+  the monochrome layer is what Android 13 and later tint to the wallpaper when
+  the launcher uses themed icons, and without it the icon there is a generic
+  tile with nothing of the mark in it.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background"/>
-    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+    <monochrome android:drawable="@drawable/ic_launcher_foreground"/>
 </adaptive-icon>

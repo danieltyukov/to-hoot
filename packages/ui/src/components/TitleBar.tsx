@@ -48,7 +48,7 @@ export function TitleBar({ frame, title }: TitleBarProps) {
       <p className="titlebar-title" aria-hidden="true">
         <span className="titlebar-where">{title}</span>
         <span className="titlebar-sep">·</span>
-        <span>to-hoot</span>
+        <span>ToHoot</span>
       </p>
 
       <WindowControls frame={frame} />

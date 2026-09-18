@@ -92,7 +92,7 @@ export function StepSync({ http, settings, onSave }: StepSyncProps) {
     <div className="step">
       <h2>Sync between devices</h2>
       <p className="prose step-lead">
-        Your tasks live in a private GitHub repository that you own and can delete. to-hoot
+        Your tasks live in a private GitHub repository that you own and can delete. ToHoot
         never sees it; the token stays on this device.
       </p>
 

@@ -16,7 +16,18 @@
     </style>
 
 
+    <!--
+      The launch theme, shown from the tap until the WebView's first frame.
+
+      Theme.SplashScreen draws the icon on the background on every API level:
+      the system splash on Android 12 and later, and a compatible drawable on
+      older ones. Capacitor's own BridgeActivity switches to AppTheme.NoActionBar
+      in onCreate, so nothing here has to hand over. The stock template pointed
+      android:background at a splash.png that was Capacitor's blue placeholder
+      and, on Android 12 and later, was never shown at all.
+    -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
     </style>
 </resources>
