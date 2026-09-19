@@ -594,6 +594,8 @@ describe('GoogleCalendarClient tokens', () => {
     await client.listEvents(DAY);
     await client.writeLog([{ toHootId: 't1::2026-08-23', title: 'x', start: 0, end: 1000 }]);
     await client.deleteLog(['t1::2026-08-23']);
+    // The fixture's primary calendar is named `primary`, not an address, so
+    // this is the fallback path through userinfo.
     await expect(client.email()).resolves.toBe('someone@example.com');
 
     expect(fake.apiCalls().length).toBeGreaterThan(8);
@@ -659,5 +661,21 @@ describe('GoogleCalendarClient failures', () => {
     // The hash never became a fragment, so the query string survived it.
     expect(call.url.hash).toBe('');
     expect(call.url.searchParams.get('singleEvents')).toBe('true');
+  });
+});
+
+describe('email', () => {
+  it('reads the address off the primary calendar without touching userinfo', async () => {
+    // The calendar scope is the only one the app asks for, and userinfo
+    // answers 401 without the email scope. The primary calendar's id is the
+    // address, so that is where the address comes from.
+    const fake = new FakeGoogle();
+    accountWith(fake, [
+      { id: 'me@example.com', accessRole: 'owner', primary: true },
+      { id: 'other', accessRole: 'reader' },
+    ]);
+    const client = clientFor(fake);
+    await expect(client.email()).resolves.toBe('me@example.com');
+    expect(JSON.stringify(fake.apiCalls())).not.toContain('userinfo');
   });
 });

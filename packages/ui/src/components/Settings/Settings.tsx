@@ -32,7 +32,7 @@ export interface SettingsProps {
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
   /** The shell, for how a sign-in comes back to it. */
-  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'> | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
   /** Removes a device from the repository's registry. Its events stay. */

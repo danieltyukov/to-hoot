@@ -418,9 +418,19 @@ export class GoogleCalendarClient {
     return this.logCalendar;
   }
 
-  /** The signed-in account's address, for the settings screen. */
+  /**
+   * The signed-in account's address, for the settings screen.
+   *
+   * Read off the calendar list first: a Google account's primary calendar has
+   * the account's address as its id, and the calendar scope is the only one
+   * the app asks for. The userinfo endpoint wants the email scope on top and
+   * answers 401 without it, so it is the fallback for an account whose
+   * primary calendar is named something else, not the first call.
+   */
   async email(): Promise<string> {
     return this.guarded(async () => {
+      const primary = (await this.calendarList('freeBusyReader')).find(entry => entry.primary === true);
+      if (typeof primary?.id === 'string' && primary.id.includes('@')) return primary.id;
       const body = await this.json('GET', GOOGLE_USERINFO_URL);
       const email = body['email'];
       if (typeof email !== 'string' || email.length === 0) {

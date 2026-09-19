@@ -65,7 +65,7 @@ export interface AppProps {
    * Absent in tests and in SSR.
    */
   platform?:
-    | Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind' | 'oauthLoopback' | 'oauthScheme'>
+    | Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'>
     | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;

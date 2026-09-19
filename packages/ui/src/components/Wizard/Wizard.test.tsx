@@ -642,6 +642,58 @@ describe('Wizard', () => {
     expect(screen.getByRole('button', { name: /Sign in and deploy/ })).toBeDisabled();
   });
 
+  it('registers with Claude Code in one press, pointing at the endpoint when there is one', async () => {
+    // What `claude mcp add` does, done by the app: one entry in Claude Code's
+    // own config. With an endpoint deployed it is an http entry, so an
+    // installed app needs no checkout and no build on the machine.
+    const added: Array<{ name: string; server: unknown }> = [];
+    const claudeCode = {
+      add: async (name: string, server: unknown) => {
+        added.push({ name, server });
+        return '/home/someone/.claude.json';
+      },
+      inspect: async () => ({ path: '/home/someone/.claude.json', present: false, target: null }),
+    };
+    const { user } = setup([], {
+      platform: { kind: 'desktop', claudeCode },
+      initial: s => {
+        s.worker = { url: 'https://to-hoot-mcp.someone.workers.dev/mcp/abc', pathSecret: 'abc', base: 'https://to-hoot-mcp.someone.workers.dev' };
+      },
+    });
+    await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Add to Claude Code' }));
+    await waitFor(() => expect(screen.getByText('Registered with Claude Code')).toBeInTheDocument());
+    expect(added).toEqual([
+      { name: 'to-hoot', server: { type: 'http', url: 'https://to-hoot-mcp.someone.workers.dev/mcp/abc' } },
+    ]);
+    expect(screen.getByText(/Registered in \/home\/someone\/\.claude\.json/)).toBeInTheDocument();
+  });
+
+  it('points Claude Code at the local server when nothing is deployed, and shows what is registered', async () => {
+    const added: unknown[] = [];
+    const claudeCode = {
+      add: async (_name: string, server: unknown) => {
+        added.push(server);
+        return '/home/someone/.claude.json';
+      },
+      inspect: async () => ({ path: '/home/someone/.claude.json', present: true, target: 'node' }),
+    };
+    const { user } = setup([], { platform: { kind: 'desktop', claudeCode } });
+    await go(user, 'claude');
+    // Already registered, as the file says, and pointing where it should.
+    await waitFor(() => expect(screen.getByText('Registered with Claude Code')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Add to Claude Code again' }));
+    await waitFor(() => expect(added).toHaveLength(1));
+    expect(added[0]).toEqual({ type: 'stdio', command: 'node', args: ['/home/someone/to-hoot/apps/mcp/dist/index.js'] });
+  });
+
+  it('keeps the terminal command where the shell cannot write the config', async () => {
+    const { user, container } = setup();
+    await go(user, 'claude');
+    expect(screen.queryByRole('button', { name: /Add to Claude Code/ })).toBeNull();
+    expect(container.textContent).toContain('claude mcp add to-hoot');
+  });
+
 });
 
 describe('joining a repository that already has a log', () => {
