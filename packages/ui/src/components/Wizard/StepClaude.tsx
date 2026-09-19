@@ -327,17 +327,13 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, pla
                 : `Deployed from the desktop at ${settings.worker.base}.`
             }
           />
-          <FlowStep status={settings.worker.base === '' ? 'idle' : 'ok'} title="Add it to Claude">
+          <FlowStep status={settings.worker.base === '' ? 'idle' : 'ok'} title="Add it to Claude, on the desktop">
             <p className="prose">
               The endpoint URL is a credential and stays on the desktop that deployed it. There,
-              press Copy the endpoint and open Claude, and add it under Customize, Connectors. The
-              same connector then works in the Claude app on this phone.
+              press Copy the endpoint and open Claude, and add it under Customize, Connectors.
+              Connectors belong to your Claude account, so the Claude app on this phone has it
+              from then on. Nothing to do here.
             </p>
-            <div className="step-actions">
-              <ExternalLink href={CLAUDE_CONNECTORS} openUrl={openUrl}>
-                Open Claude connectors
-              </ExternalLink>
-            </div>
           </FlowStep>
         </Flow>
       </div>

@@ -343,6 +343,21 @@ export class Store {
       }
     }
     this.publish(patch);
+    this.announceEndpoint();
+  }
+
+  /**
+   * Puts this device's endpoint hostname into the log if the log does not have
+   * it. The hostname normally travels with the settings event the deploy
+   * writes; a device that deployed while its replay could not yet carry the
+   * field (0.7.0 on a snapshot compacted by 0.6.0) kept the hostname in its
+   * own store and lost the event. Announcing on load closes that gap once,
+   * and is a no-op for every device whose log already agrees.
+   */
+  private announceEndpoint(): void {
+    const own = this.snapshot.settings.worker.base;
+    if (own === '' || this.snapshot.state.settings.worker.base === own) return;
+    this.commit([this.event('update', 'settings', 'app', { worker: { base: own } })]);
   }
 
   /**

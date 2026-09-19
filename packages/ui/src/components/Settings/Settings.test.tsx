@@ -500,4 +500,28 @@ describe('when the log on disk cannot be read', () => {
     expect(claude.textContent).toContain('Endpoint deployed from another device');
   });
 
+
+  it('announces an endpoint the log does not know about, once, on load', async () => {
+    // The desktop that deployed on 0.7.0 kept the hostname in its own store
+    // but lost the settings event to a replay crash. On load, a device whose
+    // own hostname is missing from the log writes exactly that one field.
+    const settings = cloneSettings(DEFAULT_SETTINGS);
+    settings.worker = { url: 'https://x.workers.dev/mcp/PATHSECRET', pathSecret: 'PATHSECRET', base: 'https://x.workers.dev' };
+    const vault = memoryStore({ settings: JSON.stringify(settings), 'setup-done': 'true' });
+    const store = new Store({ now: () => NOW, storage: null, vault });
+    await store.load();
+
+    const pending = store.pending().filter(e => e.entity === 'settings');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.payload).toEqual({ worker: { base: 'https://x.workers.dev' } });
+    expect(JSON.stringify(pending)).not.toContain('PATHSECRET');
+    expect(store.getSnapshot().state.settings.worker.base).toBe('https://x.workers.dev');
+
+    // A second load, with the log now carrying it, announces nothing more.
+    const again = new Store({ now: () => NOW, storage: null, vault });
+    again.merge(pending);
+    await again.load();
+    expect(again.pending().filter(e => e.entity === 'settings')).toHaveLength(1);
+  });
+
 });
