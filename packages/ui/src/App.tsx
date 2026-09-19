@@ -30,6 +30,7 @@ import { browserHttp, browserStore } from './platform/browser.js';
 import type { Span, TimelineEvent } from './components/timeline-layout.js';
 import type { Http, Platform } from '@to-hoot/core';
 import { SyncController, type SyncStatus } from './sync.js';
+import { googleClientFor } from './setup.js';
 import { CalendarService, timelineEventsFrom } from './calendar.js';
 import type { BridgeEvent } from '@to-hoot/core';
 import { formatDuration } from './format.js';
@@ -63,7 +64,9 @@ export interface AppProps {
    * title bar for, and for opening a link somewhere that is not this window.
    * Absent in tests and in SSR.
    */
-  platform?: Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind'> | undefined;
+  platform?:
+    | Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind' | 'oauthLoopback' | 'oauthScheme'>
+    | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
 }
@@ -165,9 +168,12 @@ export default function App({
         http,
         settings: () => store.getSnapshot().settings,
         onEvents: setCalendarEvents,
+        onSave: patch => store.saveSettings(patch),
       }),
     [store, http],
   );
+  // Which Google client this shell signs in with, so refreshed tokens work.
+  calendar.googleClient = googleClientFor(platform?.kind);
 
   useEffect(() => calendar.start(), [calendar]);
   useEffect(() => {
@@ -342,6 +348,7 @@ export default function App({
             mcpServerPath={mcpServerPath}
             openUrl={platform?.openUrl}
             deviceKind={platform?.kind}
+            platform={platform}
           />
         </div>
       </div>
@@ -408,6 +415,7 @@ export default function App({
               mcpServerPath={mcpServerPath}
               openUrl={platform?.openUrl}
               deviceKind={platform?.kind}
+              platform={platform}
             />
           ) : selected === undefined ? (
             <TaskList

@@ -229,8 +229,10 @@ over a good one.
 
 ## What is not in the log
 
-**Secrets.** The GitHub token, the Apps Script secret and the Worker URL are per
-device, kept in the platform store, and never appear in an event. The sync target
+**Secrets.** The GitHub token, the Google grant, the Apps Script secret and the
+Worker URL are per device, kept in the platform store, and never appear in an
+event. The Worker's hostname does travel, so a second device can show the
+endpoint as deployed; the path secret that makes the URL a credential does not. The sync target
 is a git repository: a token written there is a durable credential leak that
 reaches every device and every clone, and stays in the history after you notice.
 
@@ -259,9 +261,16 @@ what makes rule 1 above possible.
 
 ## Calendar
 
-The calendar bridge is not part of the log. It is a Google Apps Script web app
-deployed to your own account, called over HTTP from the shells' native stacks
-because Apps Script cannot answer a CORS preflight.
+The calendar is not part of the log. The app talks to the Google Calendar API
+directly with an OAuth grant obtained by signing in: the desktop app listens on
+the loopback interface for the redirect, the Android app registers a custom
+URL scheme, and both use PKCE so no secret has to be trusted to the shell. The
+grant is refreshed in place and the refreshed tokens are written back to the
+platform store. The older Apps Script bridge, a web app deployed to your own
+account and called over HTTP from the shells' native stacks because Apps Script
+cannot answer a CORS preflight, is still supported for a deployment that
+already exists, and a read-only iCal feed covers a person who only wants to
+see their day. Signing in with Google takes precedence over both.
 
 Reading covers every calendar the account can see, merged into one day and
 sorted by start. The account's own calendar is rarely the whole story: a

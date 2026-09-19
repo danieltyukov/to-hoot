@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from 'react';
-import type { Http, Settings } from '@to-hoot/core';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { Http, Platform, Settings } from '@to-hoot/core';
 
 import {
   Copyable,
@@ -18,12 +18,17 @@ import {
   CLOUDFLARE_DASHBOARD,
   CLOUDFLARE_TOKEN_URL,
   SETUP_GUIDE,
+  cloudflareAuthUrl,
   deployWorker,
   endpointUrl,
+  exchangeCloudflareCode,
   fetchWorkerBundle,
   generateSecret,
   listCloudflareAccounts,
   mcpAddCommand,
+  newOAuthAttempt,
+  readCallback,
+  revokeCloudflareToken,
   testWorker,
   wranglerCommands,
   type CloudflareAccount,
@@ -36,6 +41,8 @@ export interface StepClaudeProps {
   mcpServerPath?: string;
   /** The shell's way of opening a link, where the host will not follow one. */
   openUrl?: ((url: string) => Promise<void>) | undefined;
+  /** The shell, for whether a sign-in can come back to it. */
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback'> | undefined;
 }
 
 const DEFAULT_MCP_PATH = 'apps/mcp/dist/index.js';
@@ -48,19 +55,22 @@ type Stage = { status: FlowStatus; detail?: string; hint?: string };
  * Two independent paths, both optional. Claude Code talks to a local process
  * over stdio and needs nothing but a command pasted once. Claude on the web and
  * on a phone cannot reach a local process, so they need an endpoint, and the
- * endpoint now deploys from this screen.
+ * endpoint deploys from this screen with one press.
  *
- * The deploy is the same upload wrangler makes, sent to Cloudflare's API with a
- * token the person creates on one page: the app downloads the Worker built for
- * this release, uploads it with the four secrets as bindings, switches on its
- * workers.dev route, and asks the new endpoint for its tools. Every stage is a
- * line that fills in. The token is used once and never stored; it can rewrite
- * every Worker on the account, and a task app has no business keeping that.
+ * That press signs in with Cloudflare in the browser, using the same public
+ * OAuth client wrangler uses, and then makes the same upload wrangler makes:
+ * the app downloads the Worker built for this release, uploads it with the
+ * four secrets as bindings, switches on its workers.dev route, and asks the
+ * new endpoint for its tools. Every stage is a line that fills in. The token
+ * lives in memory for the deploy and is revoked the moment it is done; it can
+ * rewrite every Worker on the account, and a task app has no business keeping
+ * that.
  *
- * Wrangler stays available, folded away, for a terminal person or a fork with
- * no release to download from.
+ * Cloudflare's client only redirects to localhost, so the sign-in needs the
+ * desktop app. The phone learns the endpoint exists through sync and shows it
+ * as deployed. A pasted API token and wrangler stay available, folded away.
  */
-export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: StepClaudeProps) {
+export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, platform }: StepClaudeProps) {
   const ids = useId();
   const field = (name: string): string => `${ids}-${name}`;
 
@@ -86,20 +96,76 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
   const githubReady =
     settings.github.owner !== '' && settings.github.repo !== '' && settings.github.token !== '';
 
+  const listener = platform?.oauthLoopback?.() ?? null;
+  const canSignIn = listener !== null;
+  const deployedElsewhere = settings.worker.url === '' && settings.worker.base !== '';
+
   // The deploy, stage by stage.
   const [apiToken, setApiToken] = useState('');
   const [accounts, setAccounts] = useState<CloudflareAccount[] | null>(null);
   const [accountId, setAccountId] = useState('');
+  const [signIn, setSignIn] = useState<Stage>(
+    settings.worker.url === '' ? { status: 'idle' } : { status: 'ok', detail: 'Signed in and deployed.' },
+  );
   const [deploy, setDeploy] = useState<Stage>(
-    settings.worker.url === '' ? { status: 'idle' } : { status: 'ok', detail: `Endpoint: ${settings.worker.url}` },
+    settings.worker.url === ''
+      ? deployedElsewhere
+        ? { status: 'ok', detail: `Deployed from another device at ${settings.worker.base}.` }
+        : { status: 'idle' }
+      : { status: 'ok', detail: `Endpoint: ${settings.worker.url}` },
   );
   const [busy, setBusy] = useState(false);
+  const cancelled = useRef(false);
+  /** A token from the sign-in, held only until the deploy that uses it is done. */
+  const grant = useRef('');
 
-  const runDeploy = async (): Promise<void> => {
+  /** Signs in with Cloudflare in the browser and deploys with what comes back. */
+  const signInAndDeploy = async (): Promise<void> => {
+    if (listener === null) return;
+    cancelled.current = false;
     setBusy(true);
     try {
-      setDeploy({ status: 'running', detail: 'Checking the Cloudflare token.' });
-      const found = await listCloudflareAccounts(http, apiToken);
+      const attempt = await newOAuthAttempt();
+      setSignIn({ status: 'running', detail: 'Approve ToHoot in the browser that just opened.' });
+      const url = cloudflareAuthUrl(attempt);
+      if (openUrl !== undefined) void openUrl(url);
+      else globalThis.window?.open(url, '_blank', 'noopener,noreferrer');
+      let callback: string;
+      try {
+        callback = await listener.waitForCallback(() => cancelled.current);
+      } catch (err) {
+        setSignIn(cancelled.current ? { status: 'idle' } : { status: 'error', detail: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      const code = readCallback(callback, attempt);
+      if (code.status === 'error') {
+        setSignIn({ status: 'error', detail: code.detail, hint: code.hint });
+        return;
+      }
+      setSignIn({ status: 'running', detail: 'Finishing the sign-in.' });
+      const token = await exchangeCloudflareCode(http, code.value, attempt);
+      if (token.status === 'error') {
+        setSignIn({ status: 'error', detail: token.detail, hint: token.hint });
+        return;
+      }
+      grant.current = token.value;
+      setSignIn({ status: 'ok', detail: 'Signed in with Cloudflare.' });
+      await runDeploy(token.value);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelSignIn = (): void => {
+    cancelled.current = true;
+  };
+
+  const runDeploy = async (token: string): Promise<void> => {
+    setBusy(true);
+    let keepToken = false;
+    try {
+      setDeploy({ status: 'running', detail: 'Checking the Cloudflare account.' });
+      const found = await listCloudflareAccounts(http, token);
       if (found.status === 'error') {
         setDeploy({ status: 'error', detail: found.detail, hint: found.hint });
         return;
@@ -107,7 +173,9 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
       setAccounts(found.value);
       const chosen = found.value.length === 1 ? found.value[0]!.id : accountId;
       if (chosen === '') {
-        setDeploy({ status: 'error', detail: 'The token can see more than one account. Choose one.' });
+        // The person has to pick one; the token waits for that press only.
+        keepToken = true;
+        setDeploy({ status: 'idle', detail: 'This account can deploy to more than one Cloudflare account. Choose one.' });
         return;
       }
 
@@ -120,7 +188,7 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
 
       setDeploy({ status: 'running', detail: 'Uploading it and switching the endpoint on.' });
       const result = await deployWorker(http, {
-        apiToken,
+        apiToken: token,
         accountId: chosen,
         bundle: bundle.value,
         pathSecret,
@@ -136,13 +204,26 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
         setDeploy({ status: 'error', detail: result.detail, hint: result.hint });
         return;
       }
-      onSave({ worker: { url: result.value.endpoint, pathSecret } });
+      onSave({ worker: { url: result.value.endpoint, pathSecret, base: result.value.base } });
       setDeploy({ status: 'ok', detail: result.detail });
     } finally {
-      // Forgotten on purpose, whatever happened. See the note at the top.
-      setApiToken('');
+      // Forgotten on purpose, whatever happened, and a signed-in token is
+      // revoked as well so nothing on Cloudflare's side outlives the deploy.
+      if (!keepToken) {
+        setApiToken('');
+        if (grant.current !== '') {
+          const revoke = grant.current;
+          grant.current = '';
+          void revokeCloudflareToken(http, revoke);
+        }
+      }
       setBusy(false);
     }
+  };
+
+  /** After an account was chosen, deploys with whichever token is still held. */
+  const deployWithChosen = (): void => {
+    void runDeploy(grant.current !== '' ? grant.current : apiToken);
   };
 
   const endpoint = settings.worker.url;
@@ -195,27 +276,42 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
 
       <Flow label="Deploying the Claude endpoint">
         <FlowStep
-          status={apiToken.trim() !== '' || deploy.status === 'ok' ? 'ok' : 'idle'}
-          title="Create a Cloudflare token"
+          status={signIn.status}
+          title={deploy.status === 'ok' ? 'Signed in with Cloudflare' : 'Sign in with Cloudflare'}
+          detail={signIn.detail}
+          hint={signIn.hint}
         >
+          {githubReady ? null : (
+            <p className="field-hint">
+              Connect sync first. The endpoint reads your data repository with that token, so there
+              is nothing to deploy until there is one.
+            </p>
+          )}
+          {signIn.status === 'running' ? (
+            <div className="step-actions">
+              <button type="button" className="button" onClick={cancelSignIn}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="step-actions">
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={busy || !canSignIn || !githubReady}
+                onClick={() => void signInAndDeploy()}
+              >
+                {deploy.status === 'ok' ? 'Sign in and deploy again' : 'Sign in and deploy'}
+              </button>
+            </div>
+          )}
           <p className="field-hint">
-            Cloudflare opens on the token page with the two permissions already chosen. Press Create
-            Token, copy it, and paste it here. If the form did not fill itself in, pick the Edit
-            Cloudflare Workers template.
+            {canSignIn
+              ? 'A Cloudflare account is free and needs no payment method. Approve ToHoot in the browser and the endpoint deploys by itself.'
+              : deployedElsewhere
+                ? 'The endpoint was deployed from another device. Deploying again happens there.'
+                : 'Cloudflare sends the sign-in back to the desktop app only. Deploy from there once; this device then shows the endpoint as deployed.'}
           </p>
-          <div className="step-actions">
-            <ExternalLink href={CLOUDFLARE_TOKEN_URL} openUrl={openUrl}>
-              Open Cloudflare
-            </ExternalLink>
-          </div>
-          <SecretField
-            id={field('cf')}
-            label="Cloudflare API token"
-            value={apiToken}
-            onChange={setApiToken}
-            placeholder="Paste the token"
-            hint="Used for this deploy and then forgotten. It is never stored."
-          />
           {accounts !== null && accounts.length > 1 ? (
             <div className="field">
               <label className="micro" htmlFor={field('account')}>
@@ -234,40 +330,66 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
                   </option>
                 ))}
               </select>
+              <div className="step-actions">
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={busy || accountId === ''}
+                  onClick={deployWithChosen}
+                >
+                  Deploy to this account
+                </button>
+              </div>
             </div>
           ) : null}
         </FlowStep>
 
         <FlowStep status={deploy.status} title="Deploy the endpoint" detail={deploy.detail} hint={deploy.hint}>
-          {githubReady ? null : (
+          <Reveal label="Path secret and token options">
+            <SecretField
+              id={field('path')}
+              label="Path secret"
+              value={pathSecret}
+              readOnly
+              hint="The endpoint is /mcp/<secret>, so the URL is the credential: treat it like a password."
+            />
+            <div className="step-actions">
+              <button type="button" className="button" onClick={rotatePath} disabled={busy}>
+                Generate a new path secret
+              </button>
+            </div>
             <p className="field-hint">
-              Connect sync first. The endpoint reads your data repository with that token, so there
-              is nothing to deploy until there is one.
+              Without signing in, an API token does the same deploy. Cloudflare opens on the token
+              page with the two permissions already chosen. Press Create Token, copy it, and paste
+              it here.
             </p>
-          )}
-          <SecretField
-            id={field('path')}
-            label="Path secret"
-            value={pathSecret}
-            readOnly
-            hint="The endpoint is /mcp/<secret>, so the URL is the credential: treat it like a password."
-          />
-          <div className="step-actions">
-            <button
-              type="button"
-              className="button button-primary"
-              disabled={busy || apiToken.trim() === '' || !githubReady}
-              onClick={() => void runDeploy()}
-            >
-              {deploy.status === 'ok' ? 'Deploy again' : 'Deploy endpoint'}
-            </button>
-            <button type="button" className="button" onClick={rotatePath} disabled={busy}>
-              Generate a new path secret
-            </button>
-          </div>
+            <div className="step-actions">
+              <ExternalLink href={CLOUDFLARE_TOKEN_URL} openUrl={openUrl}>
+                Open Cloudflare
+              </ExternalLink>
+            </div>
+            <SecretField
+              id={field('cf')}
+              label="Cloudflare API token"
+              value={apiToken}
+              onChange={setApiToken}
+              placeholder="Paste the token"
+              hint="Used for this deploy and then forgotten. It is never stored."
+            />
+            <div className="step-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={busy || apiToken.trim() === '' || !githubReady}
+                onClick={() => void runDeploy(apiToken)}
+              >
+                {deploy.status === 'ok' ? 'Deploy again with the token' : 'Deploy with the token'}
+              </button>
+            </div>
+          </Reveal>
           <p className="field-hint">
-            A Cloudflare account is free and needs no payment method. The free plan allows 100,000
-            requests a day, and at the limit it answers with an error rather than a bill.
+            The free plan allows 100,000 requests a day, and at the limit it answers with an error
+            rather than a bill.
           </p>
         </FlowStep>
 
@@ -327,7 +449,7 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl }: S
             runManual(async () => {
               const check = await testWorker(http, manualEndpoint);
               if (check.status === 'ok') {
-                onSave({ worker: { url: manualEndpoint, pathSecret } });
+                onSave({ worker: { url: manualEndpoint, pathSecret, base: manualEndpoint.replace(/\/mcp\/.*$/, '') } });
                 setDeploy({ status: 'ok', detail: `Endpoint: ${manualEndpoint}` });
               }
               return check;

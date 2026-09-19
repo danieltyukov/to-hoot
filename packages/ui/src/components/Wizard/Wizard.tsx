@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { Http, PlatformKind, Settings } from '@to-hoot/core';
+import type { Http, Platform, PlatformKind, Settings } from '@to-hoot/core';
 
 import { OwlMark } from '../../icons/OwlMark.js';
 import { Wordmark } from '../Wordmark.js';
@@ -30,6 +30,8 @@ export interface WizardProps {
   openUrl?: ((url: string) => Promise<void>) | undefined;
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
+  /** The shell, for how a sign-in comes back to it. */
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
 }
 
 /*
@@ -50,7 +52,16 @@ export interface WizardProps {
  * the top and one filled button at the foot: the shape a person expects a
  * setup screen to have, on a phone and on a desktop alike.
  */
-export function Wizard({ http, settings, onSave, onDone, mcpServerPath, openUrl, deviceKind }: WizardProps) {
+export function Wizard({
+  http,
+  settings,
+  onSave,
+  onDone,
+  mcpServerPath,
+  openUrl,
+  deviceKind,
+  platform,
+}: WizardProps) {
   const [at, setAt] = useState(0);
   const step = STEPS[at]!;
   const isLast = at === STEPS.length - 1;
@@ -63,7 +74,9 @@ export function Wizard({ http, settings, onSave, onDone, mcpServerPath, openUrl,
   const body: Record<StepId, ReactNode> = {
     local: <StepLocal />,
     sync: <StepSync http={http} settings={settings} onSave={onSave} deviceKind={deviceKind} openUrl={openUrl} />,
-    calendar: <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} />,
+    calendar: (
+      <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
+    ),
     claude: (
       <StepClaude
         http={http}
@@ -71,6 +84,7 @@ export function Wizard({ http, settings, onSave, onDone, mcpServerPath, openUrl,
         onSave={onSave}
         mcpServerPath={mcpServerPath}
         openUrl={openUrl}
+        platform={platform}
       />
     ),
   };

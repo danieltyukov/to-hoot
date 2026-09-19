@@ -45,6 +45,19 @@ import {
   workerBundleUrl,
   wranglerCommands,
   type DeviceCode,
+  CLOUDFLARE_CLIENT_ID,
+  CLOUDFLARE_REDIRECT_URI,
+  GOOGLE_CALENDAR_SCOPE,
+  cloudflareAuthUrl,
+  exchangeCloudflareCode,
+  exchangeGoogleCode,
+  googleAuthUrl,
+  googleClientFor,
+  newOAuthAttempt,
+  readCallback,
+  reversedClientId,
+  revokeCloudflareToken,
+  revokeGoogleGrant,
 } from './setup.js';
 
 /** What a route answers with: a status and the body as a plain string. */
@@ -1249,5 +1262,185 @@ describe('deploying the Worker from the app', () => {
       { sleep: async () => undefined, attempts: 2 },
     );
     expect(result).toMatchObject({ status: 'error', detail: /Deployed to https:\/\/to-hoot-mcp\.someone\.workers\.dev, but/ });
+  });
+});
+
+/*
+ * Signing in. The two providers share one shape: a PKCE attempt, a URL the
+ * browser is sent to, a callback URL that comes back, and a code exchanged
+ * for tokens. What is tested here is that the shape is followed exactly, since
+ * a missing verifier or a wrong state is refused by the provider with a
+ * message about the request rather than about the sign-in.
+ */
+describe('a sign-in attempt', () => {
+  it('is fresh every time and carries the S256 challenge of its own verifier', async () => {
+    const a = await newOAuthAttempt();
+    const b = await newOAuthAttempt();
+    expect(a.state).not.toBe(b.state);
+    expect(a.verifier).not.toBe(b.verifier);
+    expect(a.verifier).toMatch(/^[A-Za-z0-9]{64}$/);
+    // Base64url with no padding, as RFC 7636 asks for.
+    expect(a.challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(a.verifier));
+    const expected = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    expect(a.challenge).toBe(expected);
+  });
+
+  it('accepts only the callback that answers this attempt', async () => {
+    const attempt = await newOAuthAttempt();
+    const good = readCallback(`http://localhost:8976/oauth/callback?code=abc&state=${attempt.state}`, attempt);
+    expect(good).toMatchObject({ status: 'ok', value: 'abc' });
+
+    // A state that does not match is somebody else's callback, or a forged one.
+    expect(readCallback('http://localhost:8976/oauth/callback?code=abc&state=other', attempt).status).toBe('error');
+    expect(readCallback(`http://localhost:8976/oauth/callback?state=${attempt.state}`, attempt)).toMatchObject({
+      status: 'error',
+      detail: expect.stringContaining('without a code'),
+    });
+    expect(readCallback('not a url', attempt).status).toBe('error');
+  });
+
+  it('turns a refusal in the browser into a sentence, not an error code', async () => {
+    const attempt = await newOAuthAttempt();
+    expect(readCallback('http://localhost:8976/oauth/callback?error=access_denied', attempt)).toMatchObject({
+      status: 'error',
+      detail: 'The sign-in was cancelled in the browser.',
+    });
+    expect(
+      readCallback('http://localhost:8976/oauth/callback?error=x&error_description=Something+else', attempt),
+    ).toMatchObject({ status: 'error', detail: 'Something else' });
+  });
+});
+
+describe('Google sign-in', () => {
+  const desktop = { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'sekrit-value' };
+
+  it('reverses the client id into the Android scheme', () => {
+    expect(reversedClientId('123-abc.apps.googleusercontent.com')).toBe('com.googleusercontent.apps.123-abc');
+  });
+
+  it('has no client for a shell it cannot come back to', () => {
+    // A browser tab has nowhere to receive a redirect; the ids are baked in
+    // at build time, so the choice depends only on the kind.
+    expect(googleClientFor('browser')).toBeNull();
+    expect(googleClientFor(undefined)).toBeNull();
+  });
+
+  it('asks for offline access to the calendar with the challenge attached', async () => {
+    const attempt = await newOAuthAttempt();
+    const url = new URL(googleAuthUrl(desktop, 'http://localhost:8976/oauth/callback', attempt));
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('client_id')).toBe(desktop.clientId);
+    expect(url.searchParams.get('redirect_uri')).toBe('http://localhost:8976/oauth/callback');
+    expect(url.searchParams.get('scope')).toBe(GOOGLE_CALENDAR_SCOPE);
+    expect(url.searchParams.get('code_challenge')).toBe(attempt.challenge);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('state')).toBe(attempt.state);
+    // Offline with consent forced is what earns a refresh token every time.
+    expect(url.searchParams.get('access_type')).toBe('offline');
+    expect(url.searchParams.get('prompt')).toBe('consent');
+    // The secret never goes in a URL.
+    expect(url.toString()).not.toContain('sekrit-value');
+  });
+
+  it('exchanges the code with the verifier and keeps a minute of slack on expiry', async () => {
+    const attempt = await newOAuthAttempt();
+    const { http, seen } = transport([
+      [/oauth2\.googleapis\.com\/token/, json(200, { access_token: 'A', refresh_token: 'R', expires_in: 3600 })],
+    ]);
+    const grant = await exchangeGoogleCode(http, desktop, 'http://localhost:8976/oauth/callback', 'CODE', attempt, () => 1_000_000);
+    expect(grant).toMatchObject({
+      status: 'ok',
+      value: { accessToken: 'A', refreshToken: 'R', expiresAt: 1_000_000 + 3600_000 - 60_000 },
+    });
+    const body = new URLSearchParams(seen[0]!.body ?? '');
+    expect(body.get('code')).toBe('CODE');
+    expect(body.get('code_verifier')).toBe(attempt.verifier);
+    expect(body.get('client_secret')).toBe('sekrit-value');
+    expect(body.get('grant_type')).toBe('authorization_code');
+  });
+
+  it('sends no secret for an Android client, which has none', async () => {
+    const attempt = await newOAuthAttempt();
+    const { http, seen } = transport([
+      [/oauth2\.googleapis\.com\/token/, json(200, { access_token: 'A', refresh_token: 'R' })],
+    ]);
+    await exchangeGoogleCode(http, { clientId: 'x', scheme: 'com.x' }, 'com.x:/oauth2redirect', 'CODE', attempt);
+    expect(new URLSearchParams(seen[0]!.body ?? '').has('client_secret')).toBe(false);
+  });
+
+  it('refuses a grant with no refresh token and says how to get one', async () => {
+    // Google only sends one on the first consent unless prompt=consent is
+    // set. It is, but an account that revoked and re-approved in the wrong
+    // order can still come back without one.
+    const attempt = await newOAuthAttempt();
+    const { http } = transport([[/token/, json(200, { access_token: 'A' })]]);
+    const grant = await exchangeGoogleCode(http, desktop, 'http://localhost:8976/oauth/callback', 'CODE', attempt);
+    expect(grant).toMatchObject({ status: 'error', hint: expect.stringContaining('permissions') });
+  });
+
+  it('relays what Google says when the exchange is refused', async () => {
+    const attempt = await newOAuthAttempt();
+    const { http } = transport([[/token/, json(400, { error: 'invalid_grant', error_description: 'Bad code' })]]);
+    const grant = await exchangeGoogleCode(http, desktop, 'http://localhost:8976/oauth/callback', 'CODE', attempt);
+    expect(grant).toMatchObject({ status: 'error', detail: 'Bad code' });
+  });
+
+  it('revokes quietly, even when Google cannot be reached', async () => {
+    const { http, seen } = transport([[/revoke/, { status: 200 }]]);
+    await revokeGoogleGrant(http, 'R');
+    expect(new URLSearchParams(seen[0]!.body ?? '').get('token')).toBe('R');
+    const down: Http = async () => {
+      throw new Error('offline');
+    };
+    await expect(revokeGoogleGrant(down, 'R')).resolves.toBeUndefined();
+  });
+});
+
+describe('Cloudflare sign-in', () => {
+  it("uses wrangler's own public client and its fixed loopback redirect", async () => {
+    const attempt = await newOAuthAttempt();
+    const url = new URL(cloudflareAuthUrl(attempt));
+    expect(url.origin + url.pathname).toBe('https://dash.cloudflare.com/oauth2/auth');
+    expect(url.searchParams.get('client_id')).toBe(CLOUDFLARE_CLIENT_ID);
+    expect(url.searchParams.get('redirect_uri')).toBe(CLOUDFLARE_REDIRECT_URI);
+    expect(CLOUDFLARE_REDIRECT_URI).toBe('http://localhost:8976/oauth/callback');
+    expect(url.searchParams.get('code_challenge')).toBe(attempt.challenge);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('state')).toBe(attempt.state);
+    // Enough to upload a Worker and read the account, and nothing more.
+    const scope = url.searchParams.get('scope') ?? '';
+    expect(scope).toContain('workers_scripts:write');
+    expect(scope).toContain('account:read');
+    expect(scope).not.toContain('zone');
+  });
+
+  it('exchanges the code with the verifier and hands back the token alone', async () => {
+    const attempt = await newOAuthAttempt();
+    const { http, seen } = transport([[/oauth2\/token/, json(200, { access_token: 'T', refresh_token: 'RT' })]]);
+    const token = await exchangeCloudflareCode(http, 'CODE', attempt);
+    expect(token).toMatchObject({ status: 'ok', value: 'T' });
+    const body = new URLSearchParams(seen[0]!.body ?? '');
+    expect(body.get('code_verifier')).toBe(attempt.verifier);
+    expect(body.get('client_id')).toBe(CLOUDFLARE_CLIENT_ID);
+  });
+
+  it('relays a refusal', async () => {
+    const attempt = await newOAuthAttempt();
+    const { http } = transport([[/oauth2\/token/, json(400, { error: 'invalid_grant' })]]);
+    expect(await exchangeCloudflareCode(http, 'CODE', attempt)).toMatchObject({ status: 'error', detail: 'invalid_grant' });
+  });
+
+  it('revokes the token once the deploy is done, and shrugs when it cannot', async () => {
+    const { http, seen } = transport([[/oauth2\/revoke/, { status: 200 }]]);
+    await revokeCloudflareToken(http, 'T');
+    expect(new URLSearchParams(seen[0]!.body ?? '').get('token')).toBe('T');
+    const down: Http = async () => {
+      throw new Error('offline');
+    };
+    await expect(revokeCloudflareToken(down, 'T')).resolves.toBeUndefined();
   });
 });

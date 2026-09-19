@@ -197,8 +197,8 @@
                   <td>Not applicable</td>
                 </tr>
                 <tr>
-                  <th scope="row">Apps Script and Calendar API v3</th>
-                  <td>The calendar bridge, in your account</td>
+                  <th scope="row">Google Calendar API v3</th>
+                  <td>Your calendar, read and written by the app</td>
                   <td>Free, with no billing account</td>
                   <td>Quota error</td>
                 </tr>
@@ -247,18 +247,19 @@
             <li>
               <h3>Calendar</h3>
               <p>
-                Optional. The app gives you the complete Apps Script source and a generated secret;
-                you paste them into a new project in your own Google account, enable the Calendar
-                service, deploy it as a web app, and paste the URL back. A secret calendar address
-                in ICS format is the read-only shortcut if you do not need write-back.
+                Optional. Press Sign in with Google, approve the app in your browser, and your day
+                appears beside your tasks with tracked time written to a calendar of its own. A
+                secret calendar address in ICS format is the read-only shortcut, and the Apps
+                Script bridge is still there for a deployment that already exists.
               </p>
             </li>
             <li>
               <h3>Claude</h3>
               <p>
                 Optional. One command registers the local MCP server with Claude Code. For Claude
-                on the web, deploy the Cloudflare Worker to your own free account and add the URL
-                as a custom connector. Skipping this changes nothing else.
+                on the web and on your phone, press Sign in and deploy: the app signs in with your
+                free Cloudflare account, uploads the endpoint, and hands you the URL to add as a
+                connector. Skipping this changes nothing else.
               </p>
             </li>
           </ol>

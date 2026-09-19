@@ -3,6 +3,7 @@
 //! a durable key-value store, and OS notifications).
 
 mod idle;
+mod oauth;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -124,7 +125,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![idle_seconds])
+        // The sign-in listener's state: one waiting listener at most, and the
+        // handle `oauth_cancel` needs to stop it.
+        .manage(oauth::Listener::default())
+        .invoke_handler(tauri::generate_handler![
+            idle_seconds,
+            oauth::oauth_listen,
+            oauth::oauth_cancel
+        ])
         .setup(|app| {
             build_tray(app.handle())?;
             Ok(())

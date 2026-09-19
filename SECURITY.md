@@ -11,8 +11,8 @@ This is one person's side project with no service behind it and no on-call
 rotation. Expect a reply in days, not hours. There is no bounty.
 
 If the report is about your own deployment rather than about this code, rotate
-first and report second: revoke the GitHub token, redeploy the Apps Script web
-app with a new secret, and delete the Worker. Each of those is yours alone and
+first and report second: revoke the GitHub token, remove ToHoot under your
+Google account permissions, and delete the Worker. Each of those is yours alone and
 none of them needs anybody else's cooperation.
 
 ## Where the secrets live
@@ -23,9 +23,11 @@ shared account, no server holding anything on your behalf, and no telemetry.
 | Secret | Stored in | Scope |
 |---|---|---|
 | GitHub token, from Sign in with GitHub or pasted | Platform store: `tauri-plugin-store` on desktop, `@capacitor/preferences` on Android | `repo` from sign-in; Contents read and write on the data repository alone from a fine-grained token |
-| Cloudflare API token | Nowhere. Used for one deploy from Settings and dropped | Workers Scripts: Edit and Account Settings: Read on your account |
-| Apps Script shared secret | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
-| Apps Script `/exec` URL | Platform store | Your Google account |
+| Google OAuth grant, from Sign in with Google | Platform store | `calendar` on the account you signed in with |
+| Cloudflare OAuth token, from Sign in and deploy | Nowhere. Held in memory for one deploy and revoked when it is done | Workers Scripts: Edit and Account Settings: Read on your account |
+| Cloudflare API token, pasted instead of signing in | Nowhere. Used for one deploy from Settings and dropped | Whatever you gave it; the prefilled page asks for the same two |
+| Apps Script shared secret, if you use the bridge | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
+| Apps Script `/exec` URL, if you use the bridge | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
 | Android release keystore | Outside the repository, and in Actions secrets as base64 for CI | Signing releases |
 
@@ -98,28 +100,39 @@ To revoke, generate a new path secret in Settings, Claude and press Deploy
 again, or run `wrangler secret put MCP_PATH_SECRET` with a new value, then
 update the connector in Claude. The old URL 404s from the next request onward.
 
-The deploy from Settings uses a Cloudflare API token you create on the
-dashboard. It can rewrite every Worker on the account, so the app uses it for
-the one upload and forgets it: it is not written to the platform store, the log,
-or anywhere else, and a redeploy asks for it again. Delete it on the dashboard
-afterwards if you want; the deployed Worker does not need it.
+The deploy from Settings signs in with Cloudflare through the same public OAuth
+client wrangler uses, with PKCE, and the redirect lands on the desktop app's
+own loopback listener at `localhost:8976`. The token it gets can rewrite every
+Worker on the account, so the app holds it in memory for the one upload and
+then revokes it: it is not written to the platform store, the log, or anywhere
+else, and a redeploy signs in again. A pasted API token, the alternative, is
+treated the same way except that revoking it is yours to do on the dashboard.
 
 If you do not want a capability URL at all, skip the Worker. The stdio MCP
 server for Claude Code is a local process with no network listener, and
 everything else in the app works without either.
 
+## Google Calendar
+
+Sign in with Google asks for the `calendar` scope alone and keeps the grant on
+the device, in the platform store, never in the log. The desktop app receives
+the redirect on the loopback interface and the Android app on a custom URL
+scheme; both use PKCE, so the code that comes back is useless to anything that
+did not start the sign-in. Sign out revokes the grant at Google and forgets it
+locally. The app writes only to a separate calendar named "to-hoot log", found
+or created on first use, so a bug in write-back can only damage events this
+app wrote. Your real calendars are read and never modified.
+
 ## The Apps Script bridge
 
-The bridge is deployed with "Who has access: Anyone", because Apps Script has no
+Kept for a deployment that already exists. The bridge is deployed with "Who has access: Anyone", because Apps Script has no
 other setting that lets a non-browser client reach it. "Anyone" means no Google
 sign-in, so the shared secret is the whole of the authentication. It travels in
 the request body and never in the query string, because Apps Script logs request
 URLs.
 
-The bridge writes only to a separate calendar named "to-hoot log", found or
-created on first use. Your real calendars are read and never modified, so a bug
-in write-back can only damage events this app wrote, and the whole layer switches
-off with one checkbox in Google Calendar.
+The bridge writes to the same "to-hoot log" calendar and never to your real
+ones, and the whole layer switches off with one checkbox in Google Calendar.
 
 ## Releases
 

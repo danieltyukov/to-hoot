@@ -23,6 +23,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Where Google sends the calendar sign-in back to. The scheme is
+                 the Android OAuth client id reversed; build.gradle fills it in
+                 from google-oauth.json. singleTask above means the running
+                 activity receives it rather than a second copy starting. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${googleScheme}" />
+            </intent-filter>
+
         </activity>
 
         <provider

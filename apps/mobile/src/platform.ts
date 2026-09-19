@@ -14,6 +14,7 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
 
 import type {
+  CallbackListener,
   FileStore,
   Http,
   HttpResponse,
@@ -287,6 +288,45 @@ async function openUrl(url: string): Promise<void> {
   await Browser.open({ url });
 }
 
+/**
+ * The custom-scheme listener a sign-in redirects to.
+ *
+ * The browser (a Custom Tab, see `openUrl`) is sent to `<scheme>:/oauth2redirect`
+ * when the person approves, Android matches the scheme against the intent
+ * filter in AndroidManifest.xml and hands the URL to this activity, and the
+ * App plugin reports it as `appUrlOpen`. The Custom Tab is closed on the way
+ * out, so the person lands back on the setup screen rather than on a blank
+ * browser page.
+ *
+ * Only a scheme the manifest declares can arrive here. The app asks for the
+ * one it needs by name, which is what keeps the manifest and the app agreeing.
+ */
+function oauthScheme(scheme: string): CallbackListener {
+  return {
+    redirectUri: `${scheme}:/oauth2redirect`,
+    waitForCallback(cancelled) {
+      return new Promise<string>((resolve, reject) => {
+        let done = false;
+        const finish = (settle: () => void): void => {
+          if (done) return;
+          done = true;
+          clearInterval(poll);
+          void handle.then(h => h.remove());
+          void Browser.close().catch(() => undefined);
+          settle();
+        };
+        const handle = App.addListener('appUrlOpen', event => {
+          if (!event.url.startsWith(`${scheme}:`)) return;
+          finish(() => resolve(event.url));
+        });
+        const poll = setInterval(() => {
+          if (cancelled?.() === true) finish(() => reject(new Error('Sign-in cancelled.')));
+        }, 500);
+      });
+    },
+  };
+}
+
 export const platform: MobilePlatform = {
   kind: 'android',
   http,
@@ -297,6 +337,7 @@ export const platform: MobilePlatform = {
   onResume,
   haptics,
   openUrl,
+  oauthScheme,
 };
 
 declare global {

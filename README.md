@@ -28,9 +28,11 @@ tracking the same task at once produce a sum instead of one overwriting the
 other. `docs/ARCHITECTURE.md` describes the model in full, because anyone
 running this is storing their own data and should be able to audit it.
 
-The calendar layer is a Google Apps Script web app you deploy to your own
-account. It reads your calendars and writes tracked time back to a separate
-"to-hoot log" calendar, never to your real ones.
+The calendar layer is a sign-in with Google. The app reads your calendars and
+writes tracked time back to a separate "to-hoot log" calendar, never to your
+real ones, straight through the Calendar API with a grant that stays on the
+device. A read-only iCal address and the older Apps Script bridge remain as
+alternatives.
 
 The Claude layer is an MCP server offering fifteen tools over the same event
 log: `list_tasks`, `search_tasks`, `today`, `add_task`, `update_task`,
@@ -52,7 +54,7 @@ rather than billing.
 | GitHub Free | Holds your private data repository | Unlimited private repositories | 403 with `Retry-After` |
 | GitHub Actions | Builds the releases | Free and unmetered on public repositories, standard runners | n/a |
 | GitHub Releases | Hosts the downloads | Unmetered bandwidth, 2 GiB per file | n/a |
-| Apps Script and Calendar API v3 | The calendar bridge | Free, with no Google Cloud billing account | Quota error |
+| Google Calendar API v3 | Reading your calendar and writing the log | Free, with no Google Cloud billing account | Quota error |
 | Cloudflare Workers Free | Optional MCP endpoint for Claude web | 100,000 requests per day on `workers.dev` | HTTP error, never a bill |
 | Sideloaded APK | Installing on your phone | No Play Console account | n/a |
 

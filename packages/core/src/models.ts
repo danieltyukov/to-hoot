@@ -120,6 +120,13 @@ export interface Settings {
     /** Secret. Never synced. */
     secret: string;
     icsUrl: string;
+    /**
+     * The Google account signed in on this device, when the calendar is read
+     * directly rather than through a pasted script. Every field is device-local:
+     * the tokens are credentials, and the log calendar id is only meaningful to
+     * the account that holds them.
+     */
+    google: GoogleCalendarAccess;
   };
   worker: {
     /** Contains a path secret, so it is never synced. */
@@ -131,6 +138,14 @@ export interface Settings {
      * the URL already saved beside them cannot disagree.
      */
     pathSecret: string;
+    /**
+     * The endpoint's hostname with no path: `https://to-hoot-mcp.<sub>.workers.dev`.
+     *
+     * Synced, because it is not a credential and it is what lets every other
+     * device say "the Claude endpoint is deployed" without holding the secret
+     * that completes the URL. Empty until a deploy has happened anywhere.
+     */
+    base: string;
   };
   /** Device-local. Two devices must never share one id. */
   deviceId: string;
@@ -145,6 +160,31 @@ export interface Settings {
   /** "HH:MM", local time. */
   workdayEnd: string;
 }
+
+/**
+ * Sign-in with Google, as this device holds it. Empty strings and zero mean
+ * "not signed in"; a refresh token alone is enough to come back from.
+ */
+export interface GoogleCalendarAccess {
+  /** Secret. Never synced. */
+  refreshToken: string;
+  /** Secret. Never synced. Replaced from the refresh token when it expires. */
+  accessToken: string;
+  /** Epoch milliseconds. */
+  expiresAt: number;
+  /** For the settings screen: who is signed in. */
+  email: string;
+  /** The dedicated log calendar, once adopted or created. */
+  logCalendarId: string;
+}
+
+export const EMPTY_GOOGLE_ACCESS: GoogleCalendarAccess = {
+  refreshToken: '',
+  accessToken: '',
+  expiresAt: 0,
+  email: '',
+  logCalendarId: '',
+};
 
 export const DEFAULT_PROJECT_ID = 'inbox';
 
@@ -226,8 +266,8 @@ export const DEFAULT_TASK: Omit<Task, 'id' | 'created' | 'updated'> = {
 
 export const DEFAULT_SETTINGS: Settings = {
   github: { owner: '', repo: '', branch: '', token: '' },
-  calendar: { execUrl: '', secret: '', icsUrl: '' },
-  worker: { url: '', pathSecret: '' },
+  calendar: { execUrl: '', secret: '', icsUrl: '', google: { ...EMPTY_GOOGLE_ACCESS } },
+  worker: { url: '', pathSecret: '', base: '' },
   deviceId: '',
   deviceName: '',
   theme: 'system',

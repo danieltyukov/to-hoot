@@ -107,6 +107,25 @@ export interface WindowFrame {
 /** The shells this app ships in, plus the browser it is developed and tested in. */
 export type PlatformKind = 'desktop' | 'android' | 'browser';
 
+/**
+ * Somewhere a browser can send an OAuth authorization code back to the app.
+ *
+ * Signing in with Google or Cloudflare means opening a page in the person's
+ * own browser and getting one URL back when they approve. The two shells can
+ * receive that URL in different ways, and neither way exists in a browser tab,
+ * which is why both are optional on `Platform`.
+ */
+export interface CallbackListener {
+  /** The redirect URI to put in the authorization request. */
+  redirectUri: string;
+  /**
+   * Resolves with the full URL the browser was sent to, query string included,
+   * the first time one arrives. Asked `cancelled` now and then; true stops the
+   * wait with a rejection.
+   */
+  waitForCallback(cancelled?: () => boolean): Promise<string>;
+}
+
 export interface Platform {
   /**
    * Which shell this is, for the one decision the app makes on the user's
@@ -116,6 +135,19 @@ export interface Platform {
    * treats that as a browser.
    */
   kind?: PlatformKind;
+  /**
+   * A one-shot listener on the loopback interface, for a desktop: the browser
+   * lands on `http://localhost:<port>/oauth/callback` and the shell answers it
+   * with a page that says to come back. Cloudflare's sign-in accepts nothing
+   * else, and Google's desktop clients accept exactly this.
+   */
+  oauthLoopback?(): CallbackListener;
+  /**
+   * A one-shot listener for a custom URL scheme, for a phone: the browser opens
+   * `<scheme>:/oauth2redirect?...` and the OS hands it to this app. The scheme
+   * has to be declared in the shell's manifest, so the app asks by name.
+   */
+  oauthScheme?(scheme: string): CallbackListener;
   http: Http;
   /** Settings, and nothing larger. See `files` for the log. */
   store: KeyValueStore;

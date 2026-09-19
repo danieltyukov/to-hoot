@@ -377,6 +377,7 @@ export class Store {
           workdayEnd: syncable.workdayEnd,
           github: syncable.github,
           calendar: syncable.calendar,
+          worker: syncable.worker,
         }),
       ],
       { settings: merged, theme: merged.theme },

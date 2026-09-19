@@ -119,6 +119,11 @@ const SETTINGS_CALENDAR_FIELDS: FieldTable = {
   icsUrl: { check: isString },
 };
 
+// The endpoint's hostname travels; the path secret that completes it does not.
+const SETTINGS_WORKER_FIELDS: FieldTable = {
+  base: { check: isString },
+};
+
 function applyFields(target: Record_, payload: Record_, table: FieldTable): void {
   for (const [key, spec] of Object.entries(table)) {
     if (!has(payload, key)) continue;
@@ -470,6 +475,9 @@ function applySettingsEvent(state: State, e: Event, payload: Record_): void {
   }
   if (isPlainObject(payload['calendar'])) {
     applyFields(state.settings.calendar as unknown as Record_, payload['calendar'], SETTINGS_CALENDAR_FIELDS);
+  }
+  if (isPlainObject(payload['worker'])) {
+    applyFields(state.settings.worker as unknown as Record_, payload['worker'], SETTINGS_WORKER_FIELDS);
   }
 }
 

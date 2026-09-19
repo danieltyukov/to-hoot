@@ -9,8 +9,9 @@ removed later from Settings without disturbing the ones you already did.
 
 1. [Local only](#1-local-only), no accounts.
 2. [Sync](#2-sync), a private GitHub repository you own, one button.
-3. [Calendar](#3-calendar), an Apps Script bridge in your own Google account.
-4. [Claude](#4-claude), MCP over stdio, and an endpoint that deploys from the app.
+3. [Calendar](#3-calendar), a sign-in with Google, one button.
+4. [Claude](#4-claude), MCP over stdio, and an endpoint that signs in with
+   Cloudflare and deploys itself, one button.
 
 Every connection in the app does the real operation and shows it happening,
 line by line, rather than checking that a URL looks like a URL. A setup flow that
@@ -120,19 +121,41 @@ Optional. It gives you two things: your real events beside your task list, and
 tracked time written back to a separate calendar so a week of work is visible
 where the rest of your commitments are.
 
-Google requires a human to create and authorize a script, so this step cannot be
-a single button. It is three numbered stages with a button for each thing that
-can be a button, and one paste: the deployment URL. The check runs the moment
-that URL lands in the field.
+### Sign in with Google
+
+One button. Press **Sign in with Google**, approve ToHoot in the browser that
+opens, and come back. The app exchanges what Google sent back for a grant, reads
+your calendars to prove it works, finds or creates the "to-hoot log" calendar,
+and shows **Connected** with the address you signed in as. Nothing is pasted.
+
+Google shows an "unverified app" interstitial the first time, because this is
+one person's project and not a verified publisher: press **Advanced**, then
+continue to ToHoot. The consent screen asks for the calendar scope alone.
+
+The sign-in needs the desktop app or the Android app, because a browser tab has
+nowhere to receive Google's redirect. The desktop app listens on
+`localhost:8976` for it; the Android app registers a URL scheme of its own. Both
+use PKCE, so the code that comes back is useless to anything that did not start
+the sign-in. The grant stays on the device, in the platform store, and is
+refreshed in place; it never enters the event log. **Sign out** revokes it at
+Google and forgets it.
+
+Signing in on one device does not sign in the others. Each device that should
+show your day signs in once.
 
 ### The read-only shortcut
 
-If you only want to *see* your events and do not need write-back, skip the
-script: paste a **secret ICS URL** into Settings instead (Google Calendar,
-calendar settings, "Secret address in iCal format"). Read-only, no deployment,
-no secret to manage. Everything below is for write-back.
+If you only want to *see* your events and do not need write-back, and would
+rather not sign in, paste a **secret ICS URL** under **Only show my events,
+without signing in** (Google Calendar, calendar settings, "Secret address in
+iCal format"). Read-only, no grant to manage. Signing in with Google takes
+precedence over it if you do both.
 
-### Deploying the bridge
+### The Apps Script bridge
+
+Kept under **Use an Apps Script bridge instead** for a deployment that already
+exists, or for anyone who would rather not grant the app a Google token.
+Signing in with Google takes precedence over it if you do both.
 
 The app shows you the complete script source with a copy button, plus a freshly
 generated secret shown separately. The secret is deliberately **not** substituted
@@ -252,22 +275,32 @@ Neither can reach a program on your machine, so they need a public URL, which
 means a free Cloudflare account with no payment method on it. The Worker is
 stateless and holds nothing but the secrets you set on it.
 
-The endpoint deploys from **Settings, Claude**, in three stages:
+The endpoint deploys from **Settings, Claude**, with one press:
 
-1. **Create a Cloudflare token.** The button opens the dashboard's token page
-   with the two permissions the deploy needs prefilled (Workers Scripts: Edit,
-   Account Settings: Read). If the form did not fill itself in, pick the "Edit
-   Cloudflare Workers" template. Press Create Token, copy it, paste it into the
-   app. The app uses it for the deploy and then forgets it.
-2. **Deploy the endpoint.** One button. The app downloads the Worker built for
-   its own version from the release, uploads it to your account with the four
-   secrets (your GitHub token, the repository owner and name, and a generated
-   path secret), switches on its `workers.dev` address, and asks the new
-   endpoint for its tools.
-3. **Add it to Claude.** Copy the endpoint and open Customize, Connectors, Add
+1. **Sign in and deploy.** The browser opens on Cloudflare's own sign-in, using
+   the same public OAuth client wrangler uses. Approve it and come back. The app
+   downloads the Worker built for its own version from the release, uploads it
+   to your account with the four secrets (your GitHub token, the repository
+   owner and name, and a generated path secret), switches on its `workers.dev`
+   address, asks the new endpoint for its tools, and then revokes the token it
+   signed in with. If your account can deploy to more than one Cloudflare
+   account, it asks which before uploading.
+2. **Add it to Claude.** Copy the endpoint and open Customize, Connectors, Add
    custom connector. Paste the URL and leave the second step empty: this
    endpoint has no authentication to configure. The same connector then works
-   in Claude on the web and in the Claude app on your phone.
+   in Claude on the web and in the Claude app on your phone. This is the one
+   step that stays manual, because Claude has no way for an app to add a
+   connector on your behalf.
+
+Cloudflare sends the sign-in back to `localhost:8976` and nowhere else, so this
+is a desktop button. The phone learns the endpoint's hostname through sync and
+shows it as deployed; the path secret that makes the URL a credential stays on
+the device that deployed it.
+
+An API token still works, under **Path secret and token options**: the button
+there opens the dashboard's token page with the two permissions prefilled
+(Workers Scripts: Edit, Account Settings: Read), and the token is used for one
+deploy and forgotten.
 
 **That URL is a credential.** Anyone holding it can read and write your task
 list. Treat it the way you would treat the token itself; `SECURITY.md` explains
@@ -294,6 +327,33 @@ Two behaviours are worth knowing before you rely on it:
 - The running timer lives in the isolate, which Cloudflare can recycle between
   two requests. `stop_timer` refuses rather than guessing when the start is gone,
   and tells Claude to use `log_time` instead.
+
+## Running a fork
+
+Sign in with GitHub, Sign in with Google and Sign in and deploy each use an OAuth
+client registered to this project. The GitHub and Cloudflare clients are public
+and need nothing from you. The Google clients are registered to a Google Cloud
+project owned by the author, so a fork that wants Sign in with Google registers
+its own:
+
+1. In Google Cloud, create a project, configure the Google Auth Platform with
+   the app's name and an external audience, add the
+   `https://www.googleapis.com/auth/calendar` scope under Data Access, enable
+   the Google Calendar API, and publish the app.
+2. Under Clients, create a **Desktop app** client and an **Android** client
+   (package `com.tohoot.app`, or your own, with the SHA-1 of the certificate
+   that signs your APK).
+3. Put both client ids in `google-oauth.json` at the repository root. The web
+   build and the Android build both read it, so the client id the app signs in
+   with and the URL scheme the phone registers cannot disagree.
+4. Provide the Desktop client's secret as `VITE_GOOGLE_DESKTOP_CLIENT_SECRET`
+   at build time: a `.env` file in `packages/ui` for a local build, and a
+   repository secret of the same name for the release workflow. Google treats
+   the secret of an installed app as not actually secret, which is why PKCE
+   carries the real protection, but it is still kept out of the source.
+
+Without the ids the button is disabled and says so, and the feed and the bridge
+still work.
 
 ## Leaving
 

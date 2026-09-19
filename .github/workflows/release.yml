@@ -93,8 +93,15 @@ jobs:
       # second release finds the first release's .deb sitting beside the new one
       # and the collector below, which demands exactly one match, fails the job.
       # It would pass the first tag and fail every tag after it.
+      # The Desktop client's secret is folded into the web build by Vite. Google
+      # treats an installed app's secret as public knowledge (PKCE is the real
+      # protection), but it still lives in a repository secret rather than in
+      # the source. Absent, Sign in with Google is disabled in the build and
+      # says so; nothing else changes.
       - name: Build the bundles
         working-directory: apps/desktop
+        env:
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           rm -rf src-tauri/target/release/bundle

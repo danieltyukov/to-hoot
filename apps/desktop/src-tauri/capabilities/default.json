@@ -29,7 +29,8 @@
         { "url": "https://github.com/*" },
         { "url": "https://developers.cloudflare.com/*" },
         { "url": "https://script.google.com/*" },
-        { "url": "https://calendar.google.com/*" }
+        { "url": "https://calendar.google.com/*" },
+        { "url": "https://accounts.google.com/*" }
       ]
     },
     {
@@ -43,7 +44,10 @@
         { "url": "https://*.workers.dev/*" },
         { "url": "https://script.google.com/*" },
         { "url": "https://script.googleusercontent.com/*" },
-        { "url": "https://calendar.google.com/*" }
+        { "url": "https://calendar.google.com/*" },
+        { "url": "https://oauth2.googleapis.com/*" },
+        { "url": "https://www.googleapis.com/*" },
+        { "url": "https://dash.cloudflare.com/*" }
       ]
     }
   ]

@@ -6,6 +6,20 @@ import react from '@vitejs/plugin-react';
 
 const coreSrc = fileURLToPath(new URL('../core/src/index.ts', import.meta.url));
 
+/*
+ * The Google OAuth clients, from the one file the Android build reads too, so
+ * the scheme the phone registers and the client id the app signs in with
+ * cannot drift apart. Set as process env defaults, which is what Vite folds
+ * into `import.meta.env`; a VITE_ variable already in the environment, or in a
+ * .env file, wins over the file. The Desktop client's secret has no default:
+ * it is VITE_GOOGLE_DESKTOP_CLIENT_SECRET from the environment or from .env.
+ */
+const googleClients = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../google-oauth.json', import.meta.url)), 'utf8'),
+) as { desktopClientId?: string; androidClientId?: string };
+process.env['VITE_GOOGLE_DESKTOP_CLIENT_ID'] ??= googleClients.desktopClientId ?? '';
+process.env['VITE_GOOGLE_ANDROID_CLIENT_ID'] ??= googleClients.androidClientId ?? '';
+
 /**
  * Inlines the built Apps Script bundle, which the setup wizard shows for the
  * user to paste into their own Google account.
@@ -58,5 +72,12 @@ export default defineConfig({
     // glob, and vitest cannot run them.
     include: ['src/**/*.test.{ts,tsx}'],
     restoreMocks: true,
+    // Known Google clients under test, whatever google-oauth.json says, so the
+    // sign-in tests are the same on a fork with no clients registered.
+    env: {
+      VITE_GOOGLE_DESKTOP_CLIENT_ID: 'test-desktop.apps.googleusercontent.com',
+      VITE_GOOGLE_DESKTOP_CLIENT_SECRET: 'test-desktop-secret',
+      VITE_GOOGLE_ANDROID_CLIENT_ID: 'test-android.apps.googleusercontent.com',
+    },
   },
 });

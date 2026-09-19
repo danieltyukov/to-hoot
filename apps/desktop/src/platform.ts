@@ -26,6 +26,7 @@ import {
 import { load, type Store } from '@tauri-apps/plugin-store';
 
 import type {
+  CallbackListener,
   FileStore,
   Http,
   HttpResponse,
@@ -255,6 +256,34 @@ const frame: WindowFrame = {
 };
 
 /**
+ * The loopback listener a sign-in redirects to.
+ *
+ * `oauth_listen` binds port 8976 on the Rust side, which is the one port
+ * Cloudflare's sign-in will redirect to (it is registered for wrangler, its
+ * own tool), and waits for exactly one request. The wait is cancelled by
+ * asking the shell to close the socket: a person who closed the browser tab
+ * would otherwise leave the port held until the app quits.
+ */
+function oauthLoopback(): CallbackListener {
+  return {
+    redirectUri: 'http://localhost:8976/oauth/callback',
+    async waitForCallback(cancelled) {
+      const poll =
+        cancelled === undefined
+          ? undefined
+          : setInterval(() => {
+              if (cancelled()) void invoke('oauth_cancel').catch(() => undefined);
+            }, 500);
+      try {
+        return await invoke<string>('oauth_listen');
+      } finally {
+        if (poll !== undefined) clearInterval(poll);
+      }
+    },
+  };
+}
+
+/**
  * Hands a URL to the desktop's own browser, through the OS.
  *
  * An anchor in this window is not a link to anywhere: the window is the
@@ -277,6 +306,7 @@ export const platform: Platform = {
   idleSeconds,
   window: frame,
   openUrl,
+  oauthLoopback,
 };
 
 declare global {

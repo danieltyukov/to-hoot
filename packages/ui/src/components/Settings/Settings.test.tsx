@@ -113,6 +113,7 @@ describe('Settings', () => {
   it('rotates the calendar secret and reprints the instructions with the new one', async () => {
     const { user } = setup();
     const calendar = await open(user, 'Calendar');
+    await user.click(within(calendar).getByRole('button', { name: 'Use an Apps Script bridge instead' }));
     const before = (within(calendar).getByLabelText('Shared secret') as HTMLInputElement).value;
 
     await user.click(within(calendar).getByRole('button', { name: 'Generate a new secret' }));
@@ -182,16 +183,26 @@ describe('Settings', () => {
     const { store } = setup();
     store.saveSettings({
       github: { owner: 'someone', repo: 'data', branch: 'master', token: 'github_pat_SECRET' },
-      calendar: { execUrl: 'https://script.google.com/x/exec', secret: 'CALENDARSECRET', icsUrl: '' },
-      worker: { url: 'https://x.workers.dev/mcp/PATHSECRET', pathSecret: 'PATHSECRET' },
+      calendar: {
+        execUrl: 'https://script.google.com/x/exec',
+        secret: 'CALENDARSECRET',
+        icsUrl: '',
+        google: { refreshToken: 'GOOGLEREFRESH', accessToken: 'GOOGLEACCESS', expiresAt: 1, email: 'me@example.test', logCalendarId: 'LOGCAL' },
+      },
+      worker: { url: 'https://x.workers.dev/mcp/PATHSECRET', pathSecret: 'PATHSECRET', base: 'https://x.workers.dev' },
     });
 
     const log = JSON.stringify(store.getSnapshot().events);
     expect(log).not.toContain('github_pat_SECRET');
     expect(log).not.toContain('CALENDARSECRET');
     expect(log).not.toContain('PATHSECRET');
-    // What is allowed to travel did travel.
+    expect(log).not.toContain('GOOGLEREFRESH');
+    expect(log).not.toContain('GOOGLEACCESS');
+    expect(log).not.toContain('LOGCAL');
+    // What is allowed to travel did travel: the owner, and the endpoint's
+    // hostname, which is how the phone learns the endpoint exists.
     expect(log).toContain('someone');
+    expect(log).toContain('https://x.workers.dev');
     // And all of it is still on this device.
     expect(store.getSnapshot().settings.github.token).toBe('github_pat_SECRET');
   });

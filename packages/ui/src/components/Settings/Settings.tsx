@@ -1,5 +1,12 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
-import { VERSION, type Http, type PlatformKind, type Settings as CoreSettings, type Theme } from '@to-hoot/core';
+import {
+  VERSION,
+  type Http,
+  type Platform,
+  type PlatformKind,
+  type Settings as CoreSettings,
+  type Theme,
+} from '@to-hoot/core';
 
 import { CalendarGlyph, CloudDeviceGlyph, DesktopGlyph, PhoneGlyph, SparkGlyph, SyncGlyph } from '../../icons/glyphs.js';
 import type { SyncDevice, SyncStatus } from '../../sync.js';
@@ -24,6 +31,8 @@ export interface SettingsProps {
   openUrl?: ((url: string) => Promise<void>) | undefined;
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
+  /** The shell, for how a sign-in comes back to it. */
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
   /** Set when the log on disk cannot be read or written. */
@@ -60,6 +69,7 @@ export function Settings({
   mcpServerPath,
   openUrl,
   deviceKind,
+  platform,
   syncStatus = null,
   onSyncNow,
   storageError = null,
@@ -126,15 +136,21 @@ export function Settings({
           status={describeCalendar(settings)}
           connected={settings.calendar.execUrl !== '' || settings.calendar.icsUrl !== ''}
         >
-          <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} />
+          <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
         </Card>
 
         <Card
           id="claude"
           glyph={<SparkGlyph />}
           title="Claude"
-          status={settings.worker.url === '' ? 'Claude Code only, no endpoint yet' : 'Endpoint deployed'}
-          connected={settings.worker.url !== ''}
+          status={
+            settings.worker.url !== ''
+              ? 'Endpoint deployed'
+              : settings.worker.base !== ''
+                ? 'Endpoint deployed from another device'
+                : 'Claude Code only, no endpoint yet'
+          }
+          connected={settings.worker.url !== '' || settings.worker.base !== ''}
         >
           <StepClaude
             http={http}
@@ -142,6 +158,7 @@ export function Settings({
             onSave={onSave}
             mcpServerPath={mcpServerPath}
             openUrl={openUrl}
+            platform={platform}
           />
         </Card>
 
