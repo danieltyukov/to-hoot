@@ -29,7 +29,7 @@ import {
   type ToolContext,
 } from '@to-hoot/core/tools';
 
-import { allowedHostnames, matchesMcpPath, secretProblem } from './routing.js';
+import { APP_ORIGIN_HOSTNAMES, allowedHostnames, matchesMcpPath, secretProblem } from './routing.js';
 
 export interface Env {
   GITHUB_OWNER: string;
@@ -175,7 +175,8 @@ export default {
     const hosts = allowedHostnames(env.ALLOWED_HOSTNAMES, url.hostname);
     const badHost = hostHeaderValidationResponse(request, hosts);
     if (badHost !== undefined) return badHost;
-    const badOrigin = originValidationResponse(request, hosts);
+    // The app's own shells are browsers too, as far as the Origin header goes.
+    const badOrigin = originValidationResponse(request, [...hosts, ...APP_ORIGIN_HOSTNAMES]);
     if (badOrigin !== undefined) return badOrigin;
 
     return handlerFor(env).fetch(request);

@@ -109,6 +109,13 @@ then revokes it: it is not written to the platform store, the log, or anywhere
 else, and a redeploy signs in again. A pasted API token, the alternative, is
 treated the same way except that revoking it is yours to do on the dashboard.
 
+The Worker refuses a browser request whose `Origin` is not its own hostname,
+which is what stops a page on someone else's site from driving the endpoint
+through your browser. The app's own shells send an origin too, `tauri://localhost`
+on the desktop and `capacitor://localhost` on the phone, and those two hostnames
+are allowed so the app can check a deploy; a page served from a local port would
+also pass that check, and still needs the path secret.
+
 If you do not want a capability URL at all, skip the Worker. The stdio MCP
 server for Claude Code is a local process with no network listener, and
 everything else in the app works without either.

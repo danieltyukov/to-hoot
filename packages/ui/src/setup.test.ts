@@ -1254,14 +1254,21 @@ describe('deploying the Worker from the app', () => {
     expect(checks).toBe(2);
   });
 
-  it('says the upload landed even when the endpoint has not answered yet', async () => {
-    const { http } = deployRoutes([[/workers\.dev\/mcp\//, { status: 530, text: 'not yet' }]]);
+  it('keeps the deploy when the endpoint has not answered the check yet', async () => {
+    // The upload landed and the route is on. Reporting that as a failure made
+    // the caller drop the endpoint, so a Worker whose check was refused (the
+    // desktop's Origin header, once) was deployed and invisible at once.
+    const { http } = deployRoutes([[/workers\.dev\/mcp\//, { status: 403, text: 'Invalid Origin header' }]]);
     const result = await deployWorker(
       http,
       { apiToken: 'cf', accountId: ACCOUNT, bundle: 'export default {}', secrets: {}, pathSecret: 'p'.repeat(40) },
       { sleep: async () => undefined, attempts: 2 },
     );
-    expect(result).toMatchObject({ status: 'error', detail: /Deployed to https:\/\/to-hoot-mcp\.someone\.workers\.dev, but/ });
+    expect(result).toMatchObject({
+      status: 'ok',
+      detail: /Deployed to https:\/\/to-hoot-mcp\.someone\.workers\.dev, but the endpoint did not answer the check: The endpoint answered 403\./,
+      value: { endpoint: `https://to-hoot-mcp.someone.workers.dev/mcp/${'p'.repeat(40)}`, tools: [] },
+    });
   });
 });
 

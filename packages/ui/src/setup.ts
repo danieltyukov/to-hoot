@@ -1556,10 +1556,16 @@ export async function deployWorker(
       };
     }
   }
+  // The upload is done and the route is on, whatever the check said. A deploy
+  // that is reported as failed here is thrown away by the caller, endpoint
+  // and all, and the person is left with a Worker they cannot see: that is
+  // what happened when the check itself was refused. So the deploy stands,
+  // with the check's complaint beside it, and the endpoint can be tested
+  // again from the same screen.
   return {
-    status: 'error',
-    detail: `Deployed to ${uploaded.value.base}, but the endpoint did not answer yet.`,
-    hint: `${last?.detail ?? ''} Test it again in a moment.`.trim(),
+    status: 'ok',
+    detail: `Deployed to ${uploaded.value.base}, but the endpoint did not answer the check: ${last?.detail ?? 'no answer'} Check it again in a moment.`,
+    value: { ...uploaded.value, endpoint, tools: [] },
   };
 }
 
