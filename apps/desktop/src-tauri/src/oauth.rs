@@ -84,36 +84,42 @@ pub async fn oauth_listen(listener: State<'_, Listener>) -> Result<String, Strin
         *slot = Some(Arc::clone(&cancel));
     }
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        loop {
-            let (mut stream, _) = socket
-                .accept()
-                .map_err(|err| format!("the sign-in listener stopped: {err}"))?;
-            if cancel.load(Ordering::SeqCst) {
-                respond(&mut stream, "400 Bad Request", NOT_FOUND_PAGE);
-                return Err("Sign-in cancelled.".to_string());
-            }
-            let Some(target) = request_target(&mut stream) else {
-                respond(&mut stream, "400 Bad Request", NOT_FOUND_PAGE);
-                continue;
-            };
-            // Browsers ask for a favicon, and a stray tab can ask for anything.
-            // Only the callback path ends the wait.
-            if !target.starts_with(PATH) {
-                respond(&mut stream, "404 Not Found", NOT_FOUND_PAGE);
-                continue;
-            }
-            respond(&mut stream, "200 OK", DONE_PAGE);
-            return Ok(format!("http://localhost:{PORT}{target}"));
-        }
-    })
-    .await
-    .map_err(|err| format!("the sign-in listener panicked: {err}"))?;
+    let result = tauri::async_runtime::spawn_blocking(move || serve(socket, cancel))
+        .await
+        .map_err(|err| format!("the sign-in listener panicked: {err}"))?;
 
     if let Ok(mut slot) = listener.0.lock() {
         *slot = None;
     }
     result
+}
+
+/// The accept loop: answers every request until the callback arrives, or until
+/// the cancel flag is seen on a connection. Returns the callback's full URL,
+/// built on the port the socket is bound to.
+fn serve(socket: TcpListener, cancel: Arc<AtomicBool>) -> Result<String, String> {
+    let port = socket.local_addr().map(|a| a.port()).unwrap_or(PORT);
+    loop {
+        let (mut stream, _) = socket
+            .accept()
+            .map_err(|err| format!("the sign-in listener stopped: {err}"))?;
+        if cancel.load(Ordering::SeqCst) {
+            respond(&mut stream, "400 Bad Request", NOT_FOUND_PAGE);
+            return Err("Sign-in cancelled.".to_string());
+        }
+        let Some(target) = request_target(&mut stream) else {
+            respond(&mut stream, "400 Bad Request", NOT_FOUND_PAGE);
+            continue;
+        };
+        // Browsers ask for a favicon, and a stray tab can ask for anything.
+        // Only the callback path ends the wait.
+        if !target.starts_with(PATH) {
+            respond(&mut stream, "404 Not Found", NOT_FOUND_PAGE);
+            continue;
+        }
+        respond(&mut stream, "200 OK", DONE_PAGE);
+        return Ok(format!("http://localhost:{port}{target}"));
+    }
 }
 
 /// Stops a waiting `oauth_listen`: raises its flag, then connects to the port
@@ -130,4 +136,75 @@ pub fn oauth_cancel(listener: State<'_, Listener>) -> Result<(), String> {
         let _ = TcpStream::connect_timeout(&poke, Duration::from_millis(500));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::thread;
+
+    fn get(port: u16, target: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut reply = String::new();
+        let _ = stream.read_to_string(&mut reply);
+        reply
+    }
+
+    /// The callback ends the wait with its full URL; a favicon request, which
+    /// every browser makes, is answered and ignored.
+    #[test]
+    fn returns_the_callback_url_and_ignores_other_requests() {
+        let socket = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let waiter = thread::spawn(move || serve(socket, cancel));
+
+        let stray = get(port, "/favicon.ico");
+        assert!(stray.starts_with("HTTP/1.1 404"));
+        let done = get(port, "/oauth/callback?code=abc&state=xyz");
+        assert!(done.starts_with("HTTP/1.1 200"));
+        assert!(done.contains("Signed in"));
+
+        let url = waiter.join().unwrap().unwrap();
+        assert_eq!(url, format!("http://localhost:{port}/oauth/callback?code=abc&state=xyz"));
+    }
+
+    /// Cancelling is a flag plus a poke: the accept wakes on the poke, sees
+    /// the flag, and stops without a callback.
+    #[test]
+    fn stops_when_cancelled() {
+        let socket = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let waiter = thread::spawn(move || serve(socket, cancel));
+
+        flag.store(true, Ordering::SeqCst);
+        let poke = SocketAddr::from(([127, 0, 0, 1], port));
+        let _ = TcpStream::connect_timeout(&poke, Duration::from_millis(500));
+
+        assert_eq!(waiter.join().unwrap(), Err("Sign-in cancelled.".to_string()));
+    }
+
+    /// A request that is not HTTP at all does not end the wait either.
+    #[test]
+    fn ignores_a_non_http_connection() {
+        let socket = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let waiter = thread::spawn(move || serve(socket, cancel));
+
+        {
+            let mut junk = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(junk, "not http at all\r\n").unwrap();
+            let mut reply = String::new();
+            let _ = junk.read_to_string(&mut reply);
+            assert!(reply.starts_with("HTTP/1.1 400"));
+        }
+        let done = get(port, "/oauth/callback?code=1&state=2");
+        assert!(done.starts_with("HTTP/1.1 200"));
+        assert!(waiter.join().unwrap().is_ok());
+    }
 }

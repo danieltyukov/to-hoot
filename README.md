@@ -6,9 +6,11 @@
 </picture>
 
 A task list that tracks time against the day you actually had. One list on your
-Linux desktop and your Android phone, synced through a private GitHub repository
-you own, with your real calendar beside it and the whole thing reachable from
-Claude. The repository is `to-hoot`; the app calls itself ToHoot.
+Linux or Windows desktop and your Android phone, synced through a private GitHub
+repository you own, with your real calendar beside it and the whole thing
+reachable from Claude. Every connection is one button: sign in with GitHub for
+sync, with Google for the calendar, and with Cloudflare for the Claude endpoint.
+The repository is `to-hoot`; the app calls itself ToHoot.
 
 Project site: <https://danieltyukov.github.io/to-hoot/>
 
@@ -75,17 +77,32 @@ place.
 `sudo apt install ./to-hoot_amd64.deb`. Both are built on Ubuntu 22.04 so they
 run on older systems as well as newer ones.
 
+**Windows.** `ToHoot_x64-setup.exe` installs for the current user with no admin
+prompt and fetches the WebView2 runtime itself if the machine lacks it. The
+installer is not code-signed, so SmartScreen asks once: More info, then Run
+anyway. `ToHoot_x64.msi` is the same build for anyone who deploys with MSI.
+
 If the desktop window opens blank on NVIDIA hardware, the app already sets
 `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, however it was launched. Try
 `WEBKIT_DISABLE_DMABUF_RENDERER=1` as well; setting either by hand overrides
 what the app would have chosen.
 
 Everything works with no accounts at all. Sync, calendar and Claude are added
-later from Settings, and each one is optional. Sync is one button: sign in with
-GitHub on the device itself, and the app finds or creates the data repository,
-names the device, and proves the round trip. The Claude endpoint deploys from
-the same screen against your own Cloudflare account. `docs/SETUP.md` is the
-long-form version.
+later from Settings, and each one is optional and one button:
+
+- **Sync.** Sign in with GitHub on the device itself. The app finds or creates
+  the data repository, names the device, and proves the round trip. Every
+  device that writes to the repository is listed in Settings, and one you no
+  longer use can be forgotten there; its tasks stay.
+- **Calendar.** Sign in with Google. The app reads your calendars and writes
+  tracked time to its own "to-hoot log" calendar. Sign out revokes the grant.
+- **Claude.** Sign in and deploy. The app signs in with your free Cloudflare
+  account, uploads the endpoint, revokes the token, and hands you the URL to
+  paste into Claude as a custom connector, which is the one step Claude has no
+  API for. Claude Code needs only a local command.
+
+`docs/SETUP.md` is the long-form version, including what a fork has to register
+to get the Google sign-in.
 
 ## Build from source
 
@@ -104,23 +121,29 @@ deliberately not npm workspaces, because the Tauri and Capacitor CLIs both want
 a flat `node_modules`:
 
 ```
-cd apps/desktop && npm install && npm run build     # deb and AppImage
+cd apps/desktop && npm install && npm run build     # deb and AppImage on Linux
+cd apps/desktop && npm install && npx tauri build --bundles nsis,msi   # on Windows
 cd apps/mobile  && npm install && npm run apk:debug # debug APK, self-signed
 ```
 
-The desktop build needs the WebKitGTK toolchain; the exact package list is in
-`CONTRIBUTING.md`. No keystore is needed to build: debug builds sign themselves,
-and a release build with no signing material stays unsigned rather than failing.
+The Linux desktop build needs the WebKitGTK toolchain; the exact package list
+is in `CONTRIBUTING.md`. The Windows build needs the Rust toolchain and the
+Visual Studio Build Tools. No keystore is needed to build: debug builds sign
+themselves, and a release build with no signing material stays unsigned rather
+than failing. Sign in with Google needs the Desktop client's secret in
+`packages/ui/.env` as `VITE_GOOGLE_DESKTOP_CLIENT_SECRET`; without it the
+button is disabled and everything else builds and works.
 
 ## Repository layout
 
     packages/core/     models, event log, merge, tick. No DOM.
     packages/ui/       React 19 and Vite. The entire application.
-    apps/desktop/      Tauri 2 shell, produces the AppImage and the deb
+    apps/desktop/      Tauri 2 shell, produces the AppImage, the deb and the Windows installers
     apps/mobile/       Capacitor 8 shell, produces the APK
     apps/mcp/          stdio MCP server for Claude Code
     apps/worker/       Cloudflare Worker, remote MCP for Claude web
-    apps/apps-script/  the Google Calendar bridge
+    apps/apps-script/  the older Google Calendar bridge, still supported
+    google-oauth.json  the Google OAuth client ids both builds read
     site/              the one-page project site
     docs/              SETUP and ARCHITECTURE
 

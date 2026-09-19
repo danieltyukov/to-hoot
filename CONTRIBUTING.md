@@ -73,6 +73,16 @@ cd apps/desktop && npm install && npm run dev
 plugin exits 1 with "there is no 'libdir' variable for 'librsvg-2.0'", while the
 deb still builds, which makes the failure look unrelated to the bundle target.
 
+**Desktop on Windows.** Needs the Rust toolchain from rustup and the Visual
+Studio Build Tools with the C++ workload. Then, in a Developer PowerShell:
+
+```
+cd apps/desktop; npm install; npx tauri build --bundles nsis,msi
+```
+
+`tauri.windows.conf.json` is merged over `tauri.conf.json` on Windows, which is
+where the product becomes "ToHoot" for the installer and the Start menu.
+
 **Mobile.** Needs JDK 21 and the Android SDK:
 
 ```
@@ -91,10 +101,17 @@ account value compiled in.
 ## Nothing is hardcoded
 
 Every account-specific value is a runtime setting, stored per device and never
-committed: the data repository owner and name, the GitHub token, the Apps Script
-`/exec` URL and shared secret, and the Worker URL and path secret. The only
-personal strings in this repository are the repository URL itself and the
-copyright line in `LICENSE`.
+committed: the data repository owner and name, the GitHub token, the Google
+grant, the Apps Script `/exec` URL and shared secret, and the Worker URL and
+path secret. The only personal strings in this repository are the repository
+URL itself and the copyright line in `LICENSE`.
+
+OAuth client ids are a different thing: they identify the app, not an account,
+and every sign-in needs one. The GitHub client id and wrangler's Cloudflare
+client id are in `packages/ui/src/setup.ts`; the Google client ids are in
+`google-oauth.json` at the root, where the Android build reads them too. The
+Desktop client's secret is the one value that is not committed, and
+`docs/SETUP.md` says how a fork registers its own set.
 
 A patch that adds a default pointing at somebody's account will be sent back,
 even if it is behind a flag.
