@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy, ToHoot</title>
+    <meta
+      name="description"
+      content="What ToHoot does with your data: nothing leaves the accounts you connect it to, and nothing is collected by anyone."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="../packages/ui/public/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="head">
+      <div class="wrap head-inner">
+        <div class="brand">
+          <a href="./" class="wordmark" aria-label="ToHoot home">to-h<i class="wordmark-eye">o</i><i class="wordmark-eye">o</i>t</a>
+        </div>
+
+        <button type="button" id="theme" class="toggle" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4" />
+            <path d="M8 2 A6 6 0 0 0 8 14 Z" fill="currentColor" />
+          </svg>
+          <span>Dark mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="wrap prose-page">
+        <h1>Privacy</h1>
+        <p class="lede">
+          ToHoot is a task and time tracker that runs on your own devices and talks only to
+          accounts you connect it to. There is no ToHoot server, no account with ToHoot, and no
+          analytics. Nobody but you can see what you track.
+        </p>
+
+        <h2>What the app stores, and where</h2>
+        <p>
+          Your tasks, projects, tags and tracked time live in an event log on the device. If you
+          turn on sync, that log is also written to a private GitHub repository that you own, under
+          your own GitHub account. The author of ToHoot has no access to it.
+        </p>
+        <p>
+          Credentials the app is given (a GitHub token, a Google grant, a Cloudflare token for one
+          deploy) are kept on the device that signed in and are never written to the log, never
+          synced, and never sent anywhere except to the service that issued them.
+        </p>
+
+        <h2>Google user data</h2>
+        <p>
+          If you press Sign in with Google, ToHoot asks for one permission: to see, edit, share and
+          delete your Google Calendar calendars, which is the scope Google offers for reading a
+          calendar and writing to one. The app uses it for two things only:
+        </p>
+        <ul>
+          <li>reading the events of the calendars you have selected in Google Calendar, so your day
+            appears next to your tasks on the device you signed in on;</li>
+          <li>writing the time you tracked to a separate calendar named "to-hoot log", which it
+            creates in your account on first use. Your other calendars are read and never changed.</li>
+        </ul>
+        <p>
+          Calendar data is read on the device and shown to you there. It is not stored beyond a
+          cache for the current day, not written to the sync repository, not sent to any server
+          operated by the author, and not shared with anyone. The email address of the account you
+          signed in with is shown in Settings so you can tell which account is connected.
+        </p>
+        <p>
+          ToHoot's use and transfer of information received from Google APIs adheres to the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes"
+            >Google API Services User Data Policy</a>, including the Limited Use requirements.
+        </p>
+        <p>
+          Sign out in Settings revokes the grant with Google and removes it from the device. You can
+          also revoke it at any time under your Google Account's third-party access page, and you
+          can delete the "to-hoot log" calendar in Google Calendar like any other calendar.
+        </p>
+
+        <h2>Other services you may connect</h2>
+        <p>
+          <strong>GitHub</strong> holds the sync repository. Signing in asks for repository access
+          so the app can create and write to that one private repository; the token stays on the
+          device.
+        </p>
+        <p>
+          <strong>Cloudflare</strong> can host an optional endpoint that lets Claude read and write
+          your task list. The app signs in to your own Cloudflare account, uploads the endpoint,
+          and revokes the sign-in token immediately afterwards. The endpoint runs in your account
+          and holds only the settings it needs to reach your repository.
+        </p>
+        <p>
+          <strong>Claude</strong> reaches your tasks only through an endpoint you deployed and a URL
+          you added yourself, or through a local process on your own computer.
+        </p>
+
+        <h2>This site</h2>
+        <p>
+          This page makes no third-party requests and sets no cookie. Your choice of light or dark
+          mode is kept in your browser and nowhere else.
+        </p>
+
+        <h2>Contact</h2>
+        <p>
+          Questions about this policy go to
+          <a href="mailto:contact@danieltyukov.com">contact@danieltyukov.com</a>. The source code
+          is at <a href="https://github.com/danieltyukov/to-hoot">github.com/danieltyukov/to-hoot</a>,
+          so every claim above can be checked.
+        </p>
+        <p class="fonts">Last updated 19 September 2026.</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <p>
+          <a href="./">ToHoot</a>
+          &middot;
+          <a href="https://github.com/danieltyukov/to-hoot">github.com/danieltyukov/to-hoot</a>
+          &middot;
+          <a href="https://github.com/danieltyukov/to-hoot/blob/main/LICENSE">MIT</a>
+        </p>
+      </div>
+    </footer>
+
+    <script type="module" src="./theme.js"></script>
+  </body>
+</html>

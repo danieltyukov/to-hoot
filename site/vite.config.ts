@@ -21,7 +21,20 @@ export default defineConfig({
   // `vite preview`. The page has no routing, so there is nothing else a base
   // path would be doing.
   base: './',
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2020', assetsInlineLimit: 0 },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    target: 'es2020',
+    assetsInlineLimit: 0,
+    // Two pages: the landing page and the privacy policy the Google sign-in
+    // points at. Both share the stylesheet and the theme script.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        privacy: fileURLToPath(new URL('./privacy.html', import.meta.url)),
+      },
+    },
+  },
   server: {
     port: 5174,
     strictPort: true,

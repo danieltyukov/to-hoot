@@ -564,6 +564,47 @@ pre code {
   line-height: 1.6;
 }
 
+/* A page of prose: the privacy policy. The landing page's sections set their
+   own rhythm; this one reads top to bottom.
+   ------------------------------------------------------------------------- */
+
+.prose-page {
+  padding-top: 48px;
+  max-width: 720px;
+}
+
+.prose-page h1 {
+  margin-bottom: 16px;
+}
+
+.prose-page h2 {
+  margin: 40px 0 10px;
+}
+
+.prose-page p,
+.prose-page li {
+  line-height: 1.6;
+  max-width: 68ch;
+}
+
+.prose-page p + p {
+  margin-top: 12px;
+}
+
+.prose-page ul {
+  padding-left: 22px;
+  margin: 10px 0;
+}
+
+.prose-page li + li {
+  margin-top: 6px;
+}
+
+a.wordmark {
+  text-decoration: none;
+  color: inherit;
+}
+
 /* Small screens
    ------------------------------------------------------------------------- */
 
