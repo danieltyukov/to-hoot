@@ -67,8 +67,22 @@ export function cloneSettings(s: Settings): Settings {
   };
 }
 
+/**
+ * A deep copy that also fills in whatever the copy is missing. A snapshot
+ * compacted by an older build carries the settings shape of that build, and a
+ * newer nested block (`worker` arrived in 0.7.0) is simply absent from it.
+ * Replaying an event that sets a field of that block onto such a state must
+ * not throw, so the block is created with its defaults first.
+ */
 export function cloneSyncableSettings(s: SyncableSettings): SyncableSettings {
-  return { ...s, github: { ...s.github }, calendar: { ...s.calendar }, worker: { ...s.worker } };
+  const d = DEFAULT_SYNCABLE_SETTINGS;
+  return {
+    ...d,
+    ...s,
+    github: { ...d.github, ...(s.github ?? {}) },
+    calendar: { ...d.calendar, ...(s.calendar ?? {}) },
+    worker: { ...d.worker, ...(s.worker ?? {}) },
+  };
 }
 
 const DAY_MS = 24 * 3600_000;

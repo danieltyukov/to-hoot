@@ -704,7 +704,10 @@ describe('Wizard', () => {
     expect(screen.queryByRole('button', { name: /Sign in and deploy/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deploy with wrangler instead' })).toBeNull();
     expect(screen.getByText('Deploy it from the desktop')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open Claude connectors' })).toBeInTheDocument();
+    // Claude's connector page is a desktop job too: on a phone it opens the
+    // web login rather than the Claude app, so the phone gets no link.
+    expect(screen.queryByRole('link', { name: 'Open Claude connectors' })).toBeNull();
+    expect(screen.getByText(/Nothing to do here/)).toBeInTheDocument();
   });
 
   it('tells a phone the desktop deployed, once the hostname has synced', async () => {

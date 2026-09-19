@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { replay } from './replay.js';
-import type { Event } from './events.js';
-import type { State } from './state.js';
+import { newEvent, type Event } from './events.js';
+import { emptyState, type State } from './state.js';
 
 const ev = (o: Partial<Event>): Event => ({
   id: o.id!, deviceId: o.deviceId ?? 'a', ts: o.ts ?? 0,
@@ -345,4 +345,28 @@ describe('work periods', () => {
     ]);
     expect(s.tasks.t1?.workPeriodsOnDay[DAY] ?? []).toEqual([]);
   });
+
+describe('a base state from before a settings block existed', () => {
+  it('replays an event that sets the block without throwing, and applies it', () => {
+    // Snapshot 42 in the wild was compacted by 0.6.0, whose settings had no
+    // `worker`. The 0.7.0 desktop then replayed its own deploy event onto it
+    // and crashed in saveSettings, which lost the event and, with it, every
+    // push from that device. The base is cloned with the defaults filled in.
+    const old = emptyState();
+    delete (old.settings as unknown as Record<string, unknown>)['worker'];
+    const event = newEvent({
+      deviceId: 'desktop',
+      type: 'update',
+      entity: 'settings',
+      entityId: 'app',
+      payload: { worker: { base: 'https://to-hoot-mcp.someone.workers.dev' } },
+      ts: 5_000,
+    });
+    const state = replay([event], old);
+    expect(state.settings.worker.base).toBe('https://to-hoot-mcp.someone.workers.dev');
+    // The base itself was not mutated, and still lacks the block.
+    expect((old.settings as unknown as Record<string, unknown>)['worker']).toBeUndefined();
+  });
+});
+
 });
