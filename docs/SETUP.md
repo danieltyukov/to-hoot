@@ -309,9 +309,12 @@ The endpoint deploys from **Settings, Claude**, with one press:
    connector on your behalf.
 
 Cloudflare sends the sign-in back to `localhost:8976` and nowhere else, so this
-is a desktop button. The phone learns the endpoint's hostname through sync and
-shows it as deployed; the path secret that makes the URL a credential stays on
-the device that deployed it.
+is a desktop button, and the phone does not show it. The phone learns the
+endpoint's hostname through sync and its Claude step says "Endpoint deployed"
+with the hostname, or tells you to deploy from the desktop until then. The
+path secret that makes the URL a credential stays on the device that deployed
+it, so the URL is copied into Claude from the desktop; the connector then
+serves the Claude app on the phone as well.
 
 An API token still works, under **Path secret and token options**: the button
 there opens the dashboard's token page with the two permissions prefilled

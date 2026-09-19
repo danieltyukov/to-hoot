@@ -880,6 +880,7 @@ export class Store {
       ...(gap === null ? {} : { idleGap: gap }),
       now,
     };
+    merged.settings = withSynced(merged.settings, merged.state);
     const running = merged.runningTaskId !== null && this.flushedAt !== null;
     this.snapshot = {
       ...merged,
@@ -893,4 +894,20 @@ export class Store {
 /** A store with no log and no browser storage. Used by tests and by SSR. */
 export function emptyStore(): Store {
   return new Store({ storage: null });
+}
+
+/**
+ * The device's own settings with the one synced field this device may not
+ * have set itself laid over them: the endpoint's hostname. A device that
+ * deployed the endpoint has both the hostname and the URL; every other device
+ * learns the hostname from the log and shows the endpoint as deployed. The
+ * device's own value wins when it has one, so a redeploy here is not undone
+ * by an older event from elsewhere, and nothing else in the synced settings
+ * is laid over: those fields are edited through the same log by every device
+ * and already agree.
+ */
+function withSynced(settings: Settings, state: State): Settings {
+  const base = settings.worker.base !== '' ? settings.worker.base : state.settings.worker.base;
+  if (base === settings.worker.base) return settings;
+  return { ...settings, worker: { ...settings.worker, base } };
 }

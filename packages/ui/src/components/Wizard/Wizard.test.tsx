@@ -694,6 +694,31 @@ describe('Wizard', () => {
     expect(container.textContent).toContain('claude mcp add to-hoot');
   });
 
+  it('shows a phone only what a phone can do with Claude', async () => {
+    // No terminal command, no deploy button it cannot press: the phone reports
+    // what the desktop deployed, once the hostname has synced, and points at
+    // Claude's connector page.
+    const { user, container } = setup([], { platform: { kind: 'android' } });
+    await go(user, 'claude');
+    expect(container.textContent).not.toContain('claude mcp add');
+    expect(screen.queryByRole('button', { name: /Sign in and deploy/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deploy with wrangler instead' })).toBeNull();
+    expect(screen.getByText('Deploy it from the desktop')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Claude connectors' })).toBeInTheDocument();
+  });
+
+  it('tells a phone the desktop deployed, once the hostname has synced', async () => {
+    const { user } = setup([], {
+      platform: { kind: 'android' },
+      initial: s => {
+        s.worker = { url: '', pathSecret: '', base: 'https://to-hoot-mcp.someone.workers.dev' };
+      },
+    });
+    await go(user, 'claude');
+    expect(screen.getByText('Endpoint deployed')).toBeInTheDocument();
+    expect(screen.getByText(/Deployed from the desktop at https:\/\/to-hoot-mcp\.someone\.workers\.dev/)).toBeInTheDocument();
+  });
+
 });
 
 describe('joining a repository that already has a log', () => {

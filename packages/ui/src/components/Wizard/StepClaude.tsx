@@ -102,6 +102,13 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, pla
   const listener = platform?.oauthLoopback?.() ?? null;
   const canSignIn = listener !== null;
   const deployedElsewhere = settings.worker.url === '' && settings.worker.base !== '';
+  /*
+   * A phone neither runs Claude Code nor deploys: Cloudflare's sign-in comes
+   * back to a desktop only. What it can do is know whether the desktop has
+   * deployed, which the hostname in the log tells it, and hand the person to
+   * Claude. So it gets that and none of the controls it cannot press.
+   */
+  const phone = platform?.kind === 'android';
 
   /*
    * Claude Code. The app writes the server into Claude Code's own config,
@@ -296,6 +303,46 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, pla
     if (openUrl !== undefined) void openUrl(CLAUDE_CONNECTORS);
     else globalThis.window?.open(CLAUDE_CONNECTORS, '_blank', 'noopener,noreferrer');
   };
+
+  if (phone) {
+    return (
+      <div className="step">
+        <h2>Let Claude help</h2>
+        <p className="prose step-lead">
+          Optional, and independent of everything else. Claude can list, add and finish tasks, start
+          the timer, and make projects and tags. A change it makes is one event in the same log.
+        </p>
+        <p className="prose">
+          The Claude app on this phone reaches your tasks through an endpoint on your own free
+          Cloudflare account. The endpoint is deployed from the desktop app, once; this phone
+          learns about it through sync.
+        </p>
+        <Flow label="The Claude endpoint">
+          <FlowStep
+            status={settings.worker.base === '' ? 'idle' : 'ok'}
+            title={settings.worker.base === '' ? 'Deploy it from the desktop' : 'Endpoint deployed'}
+            detail={
+              settings.worker.base === ''
+                ? 'On the desktop, open Settings, Claude, and press Sign in and deploy. It shows here as soon as the two sync.'
+                : `Deployed from the desktop at ${settings.worker.base}.`
+            }
+          />
+          <FlowStep status={settings.worker.base === '' ? 'idle' : 'ok'} title="Add it to Claude">
+            <p className="prose">
+              The endpoint URL is a credential and stays on the desktop that deployed it. There,
+              press Copy the endpoint and open Claude, and add it under Customize, Connectors. The
+              same connector then works in the Claude app on this phone.
+            </p>
+            <div className="step-actions">
+              <ExternalLink href={CLAUDE_CONNECTORS} openUrl={openUrl}>
+                Open Claude connectors
+              </ExternalLink>
+            </div>
+          </FlowStep>
+        </Flow>
+      </div>
+    );
+  }
 
   return (
     <div className="step">
