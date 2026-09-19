@@ -29,6 +29,7 @@ shared account, no server holding anything on your behalf, and no telemetry.
 | Apps Script shared secret, if you use the bridge | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
 | Apps Script `/exec` URL, if you use the bridge | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
+| Worker URL, if you pressed Add to Claude Code | Also in `~/.claude.json`, Claude Code's own config, as the `to-hoot` server entry, exactly where `claude mcp add` would put it | Claude Code on that machine |
 | Android release keystore | Outside the repository, and in Actions secrets as base64 for CI | Signing releases |
 
 **Tokens are per device and never sync.** They are deliberately kept out of the
