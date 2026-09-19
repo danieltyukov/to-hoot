@@ -34,6 +34,11 @@ env:
   # version and uploads it to the person's Cloudflare account, so the endpoint
   # always runs the Worker the app was tested against.
   WORKER_NAME: to-hoot-worker.mjs
+  # Windows. The NSIS installer is the one to hand out: it needs no admin
+  # rights and fetches the WebView2 runtime itself if the machine lacks it.
+  # The MSI is for anyone who deploys with one.
+  EXE_NAME: ToHoot_x64-setup.exe
+  MSI_NAME: ToHoot_x64.msi
 
 jobs:
   desktop:
@@ -133,6 +138,79 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: desktop
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  windows:
+    name: Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/desktop/src-tauri/target
+          key: cargo-windows-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - run: npm ci
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # tauri.windows.conf.json is merged on top of tauri.conf.json here, which
+      # is where the product becomes "ToHoot" for the installer and the Start
+      # menu, and where the bundle targets become nsis and msi.
+      - name: Build the installers
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/target/release/bundle
+          npx tauri build --bundles nsis,msi
+
+      - name: Collect them under stable names
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=apps/desktop/src-tauri/target/release/bundle
+          mkdir -p out
+
+          take() {
+            local dest="$1"
+            shift
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+              echo "expected exactly one bundle for $dest, found $#" >&2
+              find "$bundle" -maxdepth 2 -type f >&2 || true
+              exit 1
+            fi
+            cp "$1" "out/$dest"
+            echo "$1 -> $dest"
+          }
+
+          take "$EXE_NAME" "$bundle"/nsis/*.exe
+          take "$MSI_NAME" "$bundle"/msi/*.msi
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
           path: out/
           retention-days: 1
           if-no-files-found: error
@@ -281,7 +359,7 @@ jobs:
 
   release:
     name: Publish
-    needs: [desktop, android, worker]
+    needs: [desktop, windows, android, worker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -313,6 +391,10 @@ jobs:
           - `to-hoot_x86_64.AppImage`, Linux. `chmod +x` and run it.
           - `to-hoot_amd64.deb`, Debian and Ubuntu:
             `sudo apt install ./to-hoot_amd64.deb`
+          - `ToHoot_x64-setup.exe`, Windows. Installs for the current user with
+            no admin prompt. The installer is not code-signed, so SmartScreen
+            asks once: More info, then Run anyway. `ToHoot_x64.msi` is the same
+            build for anyone who deploys with MSI.
           - `to-hoot-worker.mjs`, the Claude endpoint. The app downloads this
             one itself when you press Deploy in Settings; nothing to do by hand.
 
@@ -328,4 +410,6 @@ jobs:
             "assets/$APK_NAME" \
             "assets/$DEB_NAME" \
             "assets/$APPIMAGE_NAME" \
+            "assets/$EXE_NAME" \
+            "assets/$MSI_NAME" \
             "assets/$WORKER_NAME"

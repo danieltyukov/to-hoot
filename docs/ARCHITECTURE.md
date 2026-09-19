@@ -26,7 +26,7 @@ still agree afterwards.
     snapshot.json                     the current state, and the log position it covers
     snapshot-<seq>-<rand>.json        an immutable copy of the same bytes
     events/<deviceId>/<ulid>.json     one file per sync batch, append-only
-    meta.json                         the devices the log has seen
+    meta.json                         the devices the log has seen, until one is forgotten
 
 Three properties carry the design:
 

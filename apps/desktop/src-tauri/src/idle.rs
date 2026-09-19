@@ -33,7 +33,32 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+mod platform {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+    /// Milliseconds since the last keyboard or mouse input on this session,
+    /// from the counter Windows itself uses for the screensaver. The tick
+    /// count wraps every 49.7 days; the subtraction wraps with it.
+    pub fn seconds() -> Option<f64> {
+        let mut info = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        // SAFETY: `info` is a correctly sized, writable LASTINPUTINFO, which is
+        // all GetLastInputInfo requires; a zero return means it wrote nothing.
+        let ok = unsafe { GetLastInputInfo(&mut info) };
+        if ok == 0 {
+            return None;
+        }
+        // SAFETY: GetTickCount takes no arguments and cannot fail.
+        let now = unsafe { GetTickCount() };
+        Some(f64::from(now.wrapping_sub(info.dwTime)) / 1000.0)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 mod platform {
     pub fn seconds() -> Option<f64> {
         None

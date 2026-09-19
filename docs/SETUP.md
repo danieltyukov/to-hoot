@@ -102,6 +102,12 @@ under their own prefix, so they cannot collide, and time tracked on both at once
 adds up instead of one overwriting the other. Settings lists every device that
 writes to the repository and when it last did.
 
+A device you no longer use stays on that list until you press **Forget** beside
+it. Forgetting removes it from the repository's registry and nothing else: the
+tasks and time it recorded are in the log and stay there, on every device. A
+device that writes again afterwards reappears, which is what happens if you
+forget the Claude endpoint's `worker` entry while the endpoint is still deployed.
+
 ### When it syncs
 
 On its own, and opportunistically: once the log has loaded, once a minute, when

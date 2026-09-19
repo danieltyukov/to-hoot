@@ -407,6 +407,7 @@ export default function App({
               onSetTheme={t => store.setTheme(t)}
               syncStatus={syncStatus}
               onSyncNow={() => sync.syncNow()}
+              onForgetDevice={id => void sync.forgetDevice(id)}
               storageError={snapshot.storageError}
               onStartFreshLog={() => void store.startFreshLog()}
               onExport={() => store.exportJson()}

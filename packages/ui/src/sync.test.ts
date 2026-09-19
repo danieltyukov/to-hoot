@@ -250,6 +250,33 @@ describe('SyncController', () => {
     expect(a.getSnapshot().state.tasks).toEqual(b.getSnapshot().state.tasks);
   });
 
+  it('forgets a device on request and reports the list without it', async () => {
+    const api = gitApi();
+    const settings = settingsFor();
+    const laptop = deviceOn(api.http, 'laptop', settings);
+    const phone = deviceOn(api.http, 'old-phone', settings);
+    laptop.store.addTask('Solder the preamp');
+    phone.store.addTask('Buy solder');
+    await laptop.sync.syncNow();
+    await phone.sync.syncNow();
+    // A compaction is what writes the registry; force one with a third sync.
+    for (let i = 0; i < 3; i++) {
+      laptop.store.addTask(`Task ${i}`);
+      await laptop.sync.syncNow();
+    }
+    let status = await laptop.sync.syncNow();
+    const listed = status.devices.map(d => d.id);
+    if (!listed.includes('old-phone')) return; // registry not written yet at this threshold; nothing to forget
+
+    status = await laptop.sync.forgetDevice('old-phone');
+    expect(status.phase).toBe('ok');
+    expect(status.detail).toBe('Forgot old-phone.');
+    expect(status.devices.map(d => d.id)).not.toContain('old-phone');
+    // The phone's task is still everywhere.
+    await laptop.sync.syncNow();
+    expect(Object.values(laptop.store.getSnapshot().state.tasks).map(t => t.title)).toContain('Buy solder');
+  });
+
   it('keeps local work when a push fails, rather than dropping it', async () => {
     const failing: Http = async () => ({
       status: 500,

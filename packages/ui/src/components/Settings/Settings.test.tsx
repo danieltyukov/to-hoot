@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import App from '../../App.js';
 import { memoryStore } from '../../platform/browser.js';
 import { Store } from '../../store.js';
+import { Settings } from './Settings.js';
+import { DEFAULT_SETTINGS, cloneSettings } from '@to-hoot/core';
 
 const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
 
@@ -407,4 +409,47 @@ describe('when the log on disk cannot be read', () => {
     expect([...files.contents.keys()].some(k => k.startsWith('log.damaged-'))).toBe(true);
     expect([...files.contents.values()]).toContain(original);
   });
+
+  it('offers to forget every device but this one, and says what that keeps', async () => {
+    const user = userEvent.setup();
+    const forgot: string[] = [];
+    const settings = cloneSettings(DEFAULT_SETTINGS);
+    settings.deviceId = 'laptop';
+    settings.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 't' };
+    render(
+      <Settings
+        http={http}
+        settings={settings}
+        theme="system"
+        eventCount={0}
+        onSave={() => undefined}
+        onSetTheme={() => undefined}
+        onExport={() => ''}
+        onImport={() => ({ ok: true, added: 0 })}
+        onClose={() => undefined}
+        syncStatus={{
+          phase: 'ok',
+          detail: 'Everything is synced.',
+          at: NOW,
+          pending: 0,
+          devices: [
+            { id: 'laptop', lastSeen: NOW },
+            { id: 'worker', lastSeen: NOW - 6 * 86_400_000 },
+            { id: '01M0QXE46YAEKF4RQMZ80HTHJ1', lastSeen: NOW - 26 * 86_400_000 },
+          ],
+        }}
+        onForgetDevice={id => forgot.push(id)}
+        now={() => NOW}
+      />,
+    );
+    const devices = document.querySelector<HTMLElement>('[data-section="devices"]')!;
+    // Not this device: forgetting the device you are on would be a lie the
+    // next sync corrects.
+    expect(within(devices).queryByRole('button', { name: 'Forget laptop' })).toBeNull();
+    await user.click(within(devices).getByRole('button', { name: 'Forget worker' }));
+    await user.click(within(devices).getByRole('button', { name: 'Forget 01M0QXE46YAEKF4RQMZ80HTHJ1' }));
+    expect(forgot).toEqual(['worker', '01M0QXE46YAEKF4RQMZ80HTHJ1']);
+    expect(within(devices).getByRole('button', { name: 'Forget worker' })).toHaveAttribute('title', expect.stringContaining('Its tasks stay'));
+  });
+
 });

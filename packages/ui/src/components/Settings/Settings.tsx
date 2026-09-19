@@ -35,6 +35,8 @@ export interface SettingsProps {
   platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
+  /** Removes a device from the repository's registry. Its events stay. */
+  onForgetDevice?: ((id: string) => void) | undefined;
   /** Set when the log on disk cannot be read or written. */
   storageError?: string | null;
   onStartFreshLog?: () => void;
@@ -72,6 +74,7 @@ export function Settings({
   platform,
   syncStatus = null,
   onSyncNow,
+  onForgetDevice,
   storageError = null,
   onStartFreshLog,
   now = Date.now,
@@ -168,6 +171,7 @@ export function Settings({
             thisDevice={settings.deviceId}
             now={now()}
             kind={deviceKind}
+            onForget={onForgetDevice}
           />
         ) : null}
 
@@ -321,18 +325,22 @@ function Card({
  *
  * The sync engine reads meta.json on every pull, so this is the repository's
  * own view and not this device's guess. A device that has not written in a
- * while is still here: nothing is ever removed from the registry.
+ * while is still here until someone presses Forget beside it, which removes it
+ * from the registry and nothing else: its tasks and time are in the log and
+ * stay there. A device that writes again after that reappears.
  */
 function Devices({
   devices,
   thisDevice,
   now,
   kind,
+  onForget,
 }: {
   devices: SyncDevice[];
   thisDevice: string;
   now: number;
   kind: PlatformKind | undefined;
+  onForget?: ((id: string) => void) | undefined;
 }) {
   return (
     <div className="card card-open" data-section="devices">
@@ -360,6 +368,17 @@ function Devices({
               <span className="device-when">
                 {device.lastSeen === 0 ? 'never' : `synced ${ago(device.lastSeen, now)}`}
               </span>
+              {device.id === thisDevice || onForget === undefined ? null : (
+                <button
+                  type="button"
+                  className="device-forget"
+                  onClick={() => onForget(device.id)}
+                  aria-label={`Forget ${device.id}`}
+                  title="Remove from this list. Its tasks stay."
+                >
+                  Forget
+                </button>
+              )}
             </li>
           ))}
         </ul>

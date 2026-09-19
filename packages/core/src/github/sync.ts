@@ -62,9 +62,17 @@ export interface DeviceRecord {
   lastSeen: number;
 }
 
+/**
+ * The registry, plus the devices someone chose to forget and the moment they
+ * did. A forgotten device's events are still in the log, so the registry has
+ * to remember not to grow it back from them at the next compaction; an event
+ * newer than the watermark is the device writing again, and it reappears.
+ */
 export interface MetaFile {
   schemaVersion: number;
   devices: Record<string, DeviceRecord>;
+  /** deviceId to the greatest event timestamp it had when it was forgotten. */
+  forgotten?: Record<string, number>;
 }
 
 export interface PushResult {
@@ -232,6 +240,55 @@ export class SyncEngine {
       if (attempts >= this.maxAttempts) {
         return { status: 'conflict', events: 0, compacted: false, attempts };
       }
+    }
+  }
+
+  /**
+   * Removes a device from the registry, and nothing else.
+   *
+   * The registry is the list Settings shows, and a device that was renamed,
+   * replaced or only ever wrote once stays on it forever otherwise. Its events
+   * are untouched: they are in the snapshot or in files under its own prefix,
+   * and a pull finds those by walking the tree, not by reading the registry.
+   * A device that writes again after this simply reappears, which is the
+   * right outcome for a Worker that was forgotten while still deployed.
+   *
+   * `unchanged` means the registry did not list it, which is what a second
+   * device pressing the same button a moment later sees.
+   */
+  async forgetDevice(id: string): Promise<'ok' | 'unchanged' | 'conflict'> {
+    let attempts = 0;
+    for (;;) {
+      await this.refresh();
+      if (this.meta.devices[id] === undefined) return 'unchanged';
+      const planned = this.head;
+      const devices: Record<string, DeviceRecord> = {};
+      for (const [other, record] of Object.entries(this.meta.devices)) {
+        if (other !== id) devices[other] = { ...record };
+      }
+      // The watermark covers everything the device has written so far: the
+      // registry's lastSeen and any event of its still sitting in the log.
+      let watermark = this.meta.devices[id]?.lastSeen ?? 0;
+      for (const event of this.events) {
+        if (event.deviceId === id && typeof event.ts === 'number' && event.ts > watermark) watermark = event.ts;
+      }
+      const forgotten = { ...(this.meta.forgotten ?? {}), [id]: watermark };
+      const meta: MetaFile = { schemaVersion: this.meta.schemaVersion, devices, forgotten };
+      attempts += 1;
+      const outcome = await this.client.commitFiles(
+        `to-hoot: forget device ${id}`,
+        [{ path: META_PATH, content: JSON.stringify(meta) }],
+        [],
+        planned,
+      );
+      this.etag = undefined;
+      if (outcome === 'ok') {
+        // What was written is what the head now says; the next pull re-reads
+        // it anyway, since the etag is gone.
+        this.meta = meta;
+        return 'ok';
+      }
+      if (attempts >= this.maxAttempts) return 'conflict';
     }
   }
 
@@ -450,9 +507,17 @@ export class SyncEngine {
   private mergedMeta(events: Event[]): MetaFile {
     const devices: Record<string, DeviceRecord> = {};
     for (const [id, record] of Object.entries(this.meta.devices)) devices[id] = { ...record };
+    const forgotten = { ...(this.meta.forgotten ?? {}) };
     for (const event of events) {
       if (typeof event.deviceId !== 'string' || event.deviceId === '') continue;
       const ts = typeof event.ts === 'number' && Number.isFinite(event.ts) ? event.ts : 0;
+      const until = forgotten[event.deviceId];
+      if (until !== undefined) {
+        // Forgotten, and this event is from before that: it does not bring the
+        // device back. A newer one does, and ends the forgetting.
+        if (ts <= until) continue;
+        delete forgotten[event.deviceId];
+      }
       const record = devices[event.deviceId];
       if (record === undefined) devices[event.deviceId] = { firstSeen: ts, lastSeen: ts };
       else {
@@ -462,7 +527,9 @@ export class SyncEngine {
     }
     const sorted: Record<string, DeviceRecord> = {};
     for (const id of Object.keys(devices).sort()) sorted[id] = devices[id]!;
-    return { schemaVersion: SCHEMA_VERSION, devices: sorted };
+    return Object.keys(forgotten).length === 0
+      ? { schemaVersion: SCHEMA_VERSION, devices: sorted }
+      : { schemaVersion: SCHEMA_VERSION, devices: sorted, forgotten };
   }
 }
 
@@ -530,7 +597,15 @@ function parseMeta(text: string): MetaFile {
     if (!isRecord(value)) continue;
     devices[id] = { firstSeen: num(value['firstSeen'], 0), lastSeen: num(value['lastSeen'], 0) };
   }
-  return { schemaVersion: num(raw['schemaVersion'], SCHEMA_VERSION), devices };
+  const forgotten: Record<string, number> = {};
+  if (isRecord(raw['forgotten'])) {
+    for (const [id, value] of Object.entries(raw['forgotten'])) {
+      if (typeof value === 'number' && Number.isFinite(value)) forgotten[id] = value;
+    }
+  }
+  return Object.keys(forgotten).length === 0
+    ? { schemaVersion: num(raw['schemaVersion'], SCHEMA_VERSION), devices }
+    : { schemaVersion: num(raw['schemaVersion'], SCHEMA_VERSION), devices, forgotten };
 }
 
 function num(v: unknown, fallback: number): number {

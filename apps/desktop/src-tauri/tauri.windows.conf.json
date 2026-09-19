@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ToHoot",
+  "mainBinaryName": "ToHoot",
+  "bundle": {
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ]
+      }
+    }
+  }
+}

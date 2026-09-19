@@ -250,6 +250,27 @@
   color: var(--muted);
 }
 
+/* A quiet text control: the list is a list, not a row of buttons. */
+.device-forget {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-mini);
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast);
+}
+
+.device-forget:hover,
+.device-forget:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
 .settings-version {
   padding: 16px 4px 0;
   text-align: center;

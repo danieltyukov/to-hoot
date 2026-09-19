@@ -4361,6 +4361,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
+ "windows-sys 0.59.0",
  "x11rb",
 ]
 
