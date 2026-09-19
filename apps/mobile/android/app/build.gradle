@@ -54,8 +54,8 @@ android {
         applicationId "com.tohoot.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
-        versionName "0.7.2"
+        versionCode 12
+        versionName "0.7.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // The custom scheme Google sends the sign-in back on: the Android
         // client id reversed, as Google specifies. Read from the same file the

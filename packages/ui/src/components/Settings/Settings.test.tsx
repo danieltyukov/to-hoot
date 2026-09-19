@@ -7,7 +7,7 @@ import App from '../../App.js';
 import { memoryStore } from '../../platform/browser.js';
 import { Store } from '../../store.js';
 import { Settings } from './Settings.js';
-import { DEFAULT_SETTINGS, cloneSettings } from '@to-hoot/core';
+import { DEFAULT_SETTINGS, cloneSettings, newEvent } from '@to-hoot/core';
 
 const NOW = new Date(2026, 7, 23, 10, 0, 0).getTime();
 
@@ -471,6 +471,33 @@ describe('when the log on disk cannot be read', () => {
     const cards = screen.getAllByRole('button', { name: /^Calendar/ });
     expect(cards.at(-1)!.textContent).toContain('Reading and writing back as me@example.test');
     expect(cards.at(-1)!.textContent).not.toContain('Not connected');
+  });
+
+
+  it('shows an endpoint another device deployed, from the hostname that travelled through the log', async () => {
+    // The phone never deploys. It learns the hostname from the desktop's
+    // settings event and shows the endpoint as deployed; the URL with the
+    // path secret stays on the desktop. The device's own settings come from
+    // its platform store, so the synced hostname has to be laid over them.
+    const { user, store } = setup();
+    store.saveSettings({ github: { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 't' } });
+    store.merge([
+      newEvent({
+        deviceId: 'desktop',
+        type: 'update',
+        entity: 'settings',
+        entityId: 'app',
+        payload: { worker: { base: 'https://to-hoot-mcp.someone.workers.dev' } },
+        ts: NOW,
+      }),
+    ]);
+    expect(store.getSnapshot().settings.worker.base).toBe('https://to-hoot-mcp.someone.workers.dev');
+    // Only the hostname travelled.
+    expect(store.getSnapshot().settings.worker.url).toBe('');
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    const claude = screen.getByRole('button', { name: /^Claude/ });
+    expect(claude.textContent).toContain('Endpoint deployed from another device');
   });
 
 });
