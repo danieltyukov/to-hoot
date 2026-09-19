@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { Http, Platform, Settings } from '@to-hoot/core';
+import type { ClaudeCodeServer, Http, Platform, Settings } from '@to-hoot/core';
 
 import {
   Copyable,
@@ -41,9 +41,12 @@ export interface StepClaudeProps {
   mcpServerPath?: string;
   /** The shell's way of opening a link, where the host will not follow one. */
   openUrl?: ((url: string) => Promise<void>) | undefined;
-  /** The shell, for whether a sign-in can come back to it. */
-  platform?: Pick<Platform, 'kind' | 'oauthLoopback'> | undefined;
+  /** The shell, for whether a sign-in can come back to it, and Claude Code's config. */
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'claudeCode'> | undefined;
 }
+
+/** The name the server has in Claude Code, which is also what `claude mcp add` was told. */
+export const CLAUDE_CODE_SERVER = 'to-hoot';
 
 const DEFAULT_MCP_PATH = 'apps/mcp/dist/index.js';
 
@@ -100,13 +103,62 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, pla
   const canSignIn = listener !== null;
   const deployedElsewhere = settings.worker.url === '' && settings.worker.base !== '';
 
+  /*
+   * Claude Code. The app writes the server into Claude Code's own config,
+   * which is what the terminal command does. With an endpoint deployed it
+   * points Claude Code at that, so an installed app needs no checkout and no
+   * build; without one it points at the local stdio server.
+   */
+  const claudeCode = platform?.claudeCode;
+  const [codeState, setCodeState] = useState<Stage>({ status: 'idle' });
+  const [codeTarget, setCodeTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (claudeCode === undefined) return;
+    let live = true;
+    claudeCode
+      .inspect(CLAUDE_CODE_SERVER)
+      .then(entry => {
+        if (!live) return;
+        setCodeTarget(entry.present ? entry.target : null);
+        setCodeState(entry.present ? { status: 'ok', detail: `Registered in ${entry.path}.` } : { status: 'idle' });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [claudeCode]);
+
+  const serverForClaudeCode = (): ClaudeCodeServer =>
+    settings.worker.url === ''
+      ? { type: 'stdio', command: 'node', args: [mcpServerPath ?? DEFAULT_MCP_PATH] }
+      : { type: 'http', url: settings.worker.url };
+
+  const addToClaudeCode = async (): Promise<void> => {
+    if (claudeCode === undefined) return;
+    const server = serverForClaudeCode();
+    setCodeState({ status: 'running', detail: 'Writing it into Claude Code.' });
+    try {
+      const path = await claudeCode.add(CLAUDE_CODE_SERVER, server);
+      setCodeTarget(server.type === 'http' ? server.url : server.command);
+      setCodeState({
+        status: 'ok',
+        detail: `Registered in ${path}. Claude Code picks it up the next time it starts.`,
+      });
+    } catch (err) {
+      setCodeState({ status: 'error', detail: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  // The entry is stale when the endpoint changed under it: a redeploy with a
+  // new path secret, or a first deploy after a stdio registration.
+  const wanted = serverForClaudeCode();
+  const wantedTarget = wanted.type === 'http' ? wanted.url : wanted.command;
+  const codeStale = codeState.status === 'ok' && codeTarget !== null && codeTarget !== wantedTarget;
+
   // The deploy, stage by stage.
   const [apiToken, setApiToken] = useState('');
   const [accounts, setAccounts] = useState<CloudflareAccount[] | null>(null);
   const [accountId, setAccountId] = useState('');
-  const [signIn, setSignIn] = useState<Stage>(
-    settings.worker.url === '' ? { status: 'idle' } : { status: 'ok', detail: 'Signed in and deployed.' },
-  );
+  const [signIn, setSignIn] = useState<Stage>(settings.worker.url === '' ? { status: 'idle' } : { status: 'ok' });
   const [deploy, setDeploy] = useState<Stage>(
     settings.worker.url === ''
       ? deployedElsewhere
@@ -254,17 +306,53 @@ export function StepClaude({ http, settings, onSave, mcpServerPath, openUrl, pla
       </p>
 
       <h3 className="micro">Claude Code</h3>
-      <p className="prose">
-        Runs a local server over stdio. No account, no network, nothing to deploy. Run this once in
-        a terminal:
-      </p>
-      <Copyable text={mcpAddCommand(mcpServerPath ?? DEFAULT_MCP_PATH)} label="Copy the claude mcp add command" wrap />
-      {mcpServerPath === undefined ? (
-        <p className="field-hint">
-          Run it from the repository root, or build the server first with{' '}
-          <span className="mono">npm run build -w @to-hoot/mcp</span>.
-        </p>
-      ) : null}
+      {claudeCode === undefined ? (
+        <>
+          <p className="prose">
+            Runs a local server over stdio. No account, no network, nothing to deploy. Run this
+            once in a terminal:
+          </p>
+          <Copyable text={mcpAddCommand(mcpServerPath ?? DEFAULT_MCP_PATH)} label="Copy the claude mcp add command" wrap />
+          {mcpServerPath === undefined ? (
+            <p className="field-hint">
+              Run it from the repository root, or build the server first with{' '}
+              <span className="mono">npm run build -w @to-hoot/mcp</span>.
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <Flow label="Registering with Claude Code">
+          <FlowStep
+            status={codeStale ? 'idle' : codeState.status}
+            title={codeState.status === 'ok' && !codeStale ? 'Registered with Claude Code' : 'Add to Claude Code'}
+            detail={codeStale ? 'The endpoint changed since this was registered. Add it again.' : codeState.detail}
+            hint={codeState.hint}
+          >
+            <p className="field-hint">
+              {settings.worker.url === ''
+                ? 'Points Claude Code at the local server over stdio. Deploy the endpoint first and it points there instead, which needs no checkout on this machine.'
+                : 'Points Claude Code at the deployed endpoint, the same one Claude on the web uses.'}
+            </p>
+            <div className="step-actions">
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={codeState.status === 'running'}
+                onClick={() => void addToClaudeCode()}
+              >
+                {codeState.status === 'ok' ? 'Add to Claude Code again' : 'Add to Claude Code'}
+              </button>
+            </div>
+            <Reveal label="Use the command instead">
+              <Copyable text={mcpAddCommand(mcpServerPath ?? DEFAULT_MCP_PATH)} label="Copy the claude mcp add command" wrap />
+              <p className="field-hint">
+                Run it from the repository root, or build the server first with{' '}
+                <span className="mono">npm run build -w @to-hoot/mcp</span>.
+              </p>
+            </Reveal>
+          </FlowStep>
+        </Flow>
+      )}
 
       <hr className="step-rule" />
 

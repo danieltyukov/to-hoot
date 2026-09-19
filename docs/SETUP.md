@@ -249,9 +249,19 @@ and tag names as well as ids, and a name nothing matches is created in the same
 batch as the task. A change Claude makes is one event appended to the log,
 indistinguishable from one you made in the app.
 
-### Claude Code, over stdio
+### Claude Code
 
-A local process with no network listener. Build it, then register it:
+One button on the desktop: **Add to Claude Code** writes a `to-hoot` server into
+Claude Code's own config file, `~/.claude.json`, which is what `claude mcp add`
+does from a terminal. Everything else in that file is left as it was. With the
+endpoint deployed, the entry points Claude Code at the endpoint over HTTP, the
+same one Claude on the web uses, so an installed app needs no checkout and no
+build on the machine. Without an endpoint it points at the local stdio server
+below. Claude Code picks the entry up the next time it starts, and the step
+says so when the endpoint has changed since the entry was written.
+
+The command is still there under **Use the command instead**, and it is the
+only way in a browser tab or on a phone, which cannot write the file:
 
 ```
 npm run build -w @to-hoot/core && npm run build -w @to-hoot/mcp
@@ -348,7 +358,9 @@ its own:
    the Google Calendar API, and publish the app.
 2. Under Clients, create a **Desktop app** client and an **Android** client
    (package `com.tohoot.app`, or your own, with the SHA-1 of the certificate
-   that signs your APK).
+   that signs your APK). On the Android client, open **Advanced settings** and
+   tick **Enable custom URI scheme**: Google leaves it off, and without it the
+   phone's sign-in ends on "Access blocked: request is invalid".
 3. Put both client ids in `google-oauth.json` at the repository root. The web
    build and the Android build both read it, so the client id the app signs in
    with and the URL scheme the phone registers cannot disagree.

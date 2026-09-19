@@ -36,6 +36,7 @@ import type {
   Platform,
   Unsubscribe,
   WindowFrame,
+  ClaudeCodeEntry,
 } from '@to-hoot/core';
 
 /**
@@ -304,6 +305,10 @@ export const platform: Platform = {
   cancelNotification,
   onResume,
   idleSeconds,
+  claudeCode: {
+    add: (name, server) => invoke<string>('claude_code_add', { name, server }),
+    inspect: name => invoke<ClaudeCodeEntry>('claude_code_inspect', { name }),
+  },
   window: frame,
   openUrl,
   oauthLoopback,

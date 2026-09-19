@@ -126,6 +126,25 @@ export interface CallbackListener {
   waitForCallback(cancelled?: () => boolean): Promise<string>;
 }
 
+/** One server as Claude Code's config spells it: http with a URL, or stdio with a command. */
+export type ClaudeCodeServer =
+  | { type: 'http'; url: string }
+  | { type: 'stdio'; command: string; args: string[] };
+
+export interface ClaudeCodeEntry {
+  /** The config file, for the settings screen to name. */
+  path: string;
+  present: boolean;
+  /** The URL of an http entry or the command of a stdio one. */
+  target: string | null;
+}
+
+export interface ClaudeCodeConfig {
+  /** Adds or replaces the named server and answers with the file written. */
+  add(name: string, server: ClaudeCodeServer): Promise<string>;
+  inspect(name: string): Promise<ClaudeCodeEntry>;
+}
+
 export interface Platform {
   /**
    * Which shell this is, for the one decision the app makes on the user's
@@ -148,6 +167,12 @@ export interface Platform {
    * has to be declared in the shell's manifest, so the app asks by name.
    */
   oauthScheme?(scheme: string): CallbackListener;
+  /**
+   * Claude Code's own config file, for registering the app's MCP server the
+   * way `claude mcp add` would. Desktop only: that file lives in the home
+   * directory of the machine Claude Code runs on.
+   */
+  claudeCode?: ClaudeCodeConfig;
   http: Http;
   /** Settings, and nothing larger. See `files` for the log. */
   store: KeyValueStore;

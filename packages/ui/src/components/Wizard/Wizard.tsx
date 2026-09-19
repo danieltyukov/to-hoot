@@ -31,7 +31,7 @@ export interface WizardProps {
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
   /** The shell, for how a sign-in comes back to it. */
-  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'> | undefined;
 }
 
 /*

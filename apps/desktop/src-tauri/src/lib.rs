@@ -2,6 +2,7 @@
 //! the web layer cannot provide for itself (HTTP that is not subject to CORS,
 //! a durable key-value store, and OS notifications).
 
+mod claude_code;
 mod idle;
 mod oauth;
 
@@ -131,7 +132,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             idle_seconds,
             oauth::oauth_listen,
-            oauth::oauth_cancel
+            oauth::oauth_cancel,
+            claude_code::claude_code_add,
+            claude_code::claude_code_inspect
         ])
         .setup(|app| {
             build_tray(app.handle())?;

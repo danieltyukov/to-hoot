@@ -80,3 +80,21 @@ credential stays where it was made.
   deployed elsewhere.
 - Rust: `cargo check`; the listener is exercised by hand against the real
   Google and Cloudflare sign-ins on this machine before the release.
+
+## 5. 0.7.1, after the first day in use
+
+- **Add to Claude Code.** The desktop shell gains two commands that read and
+  rewrite `~/.claude.json`, adding or replacing the `to-hoot` entry under
+  `mcpServers` and touching nothing else (a file that is not a JSON object is
+  refused, not overwritten; the write is a temp file renamed into place). The
+  entry is `http` with the endpoint URL when one is deployed, `stdio` with the
+  local server otherwise. The step shows what the file says on open, and calls
+  the entry stale when the endpoint no longer matches it.
+- **The address on the calendar step** comes from the primary calendar's id,
+  since the calendar scope alone gets a 401 from the userinfo endpoint. That
+  endpoint stays as the fallback.
+- **The Android client** needs Google's "Enable custom URI scheme" switch,
+  which is off for new clients and produced "Access blocked: request is
+  invalid" on the phone. Flipped in the console; written into the fork notes.
+- The Cloudflare line no longer says "Signed in and deployed" from a saved
+  endpoint; the title carries the state.

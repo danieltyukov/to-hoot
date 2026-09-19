@@ -1,6 +1,6 @@
 [package]
 name = "to-hoot-desktop"
-version = "0.7.0"
+version = "0.7.1"
 description = "to-hoot desktop shell"
 edition = "2021"
 rust-version = "1.77.2"
@@ -25,6 +25,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-store = "2"
+# For editing Claude Code's own config file in place: read what is there,
+# add one server, write it back. Tauri already pulls both in.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Pure Rust X11 client, so the OS idle query needs no C headers at build time.
 [target.'cfg(target_os = "linux")'.dependencies]
