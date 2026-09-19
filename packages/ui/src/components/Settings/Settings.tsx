@@ -9,6 +9,7 @@ import {
 } from '@to-hoot/core';
 
 import { CalendarGlyph, CloudDeviceGlyph, DesktopGlyph, PhoneGlyph, SparkGlyph, SyncGlyph } from '../../icons/glyphs.js';
+import { modeFor } from '../../calendar.js';
 import type { SyncDevice, SyncStatus } from '../../sync.js';
 import { StepCalendar } from '../Wizard/StepCalendar.js';
 import { StepClaude } from '../Wizard/StepClaude.js';
@@ -137,7 +138,7 @@ export function Settings({
           glyph={<CalendarGlyph />}
           title="Calendar"
           status={describeCalendar(settings)}
-          connected={settings.calendar.execUrl !== '' || settings.calendar.icsUrl !== ''}
+          connected={modeFor(settings) !== 'off'}
         >
           <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
         </Card>
@@ -256,9 +257,18 @@ function statusTone(status: SyncStatus): string | undefined {
 }
 
 function describeCalendar(settings: CoreSettings): string {
-  if (settings.calendar.execUrl !== '') return 'Reading and writing back';
-  if (settings.calendar.icsUrl !== '') return 'Read-only feed';
-  return 'Not connected';
+  switch (modeFor(settings)) {
+    case 'google': {
+      const email = settings.calendar.google.email;
+      return email === '' ? 'Reading and writing back' : `Reading and writing back as ${email}`;
+    }
+    case 'bridge':
+      return 'Reading and writing back through the bridge';
+    case 'ics':
+      return 'Read-only feed';
+    default:
+      return 'Not connected';
+  }
 }
 
 function describeAppearance(theme: Theme, settings: CoreSettings): string {

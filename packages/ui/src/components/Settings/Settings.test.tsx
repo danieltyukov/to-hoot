@@ -452,4 +452,25 @@ describe('when the log on disk cannot be read', () => {
     expect(within(devices).getByRole('button', { name: 'Forget worker' })).toHaveAttribute('title', expect.stringContaining('Its tasks stay'));
   });
 
+
+  it('calls the calendar connected once Google is signed in, and names the account', async () => {
+    // The card header used to read only the bridge and feed fields, so a
+    // phone that had just signed in with Google said "Not connected" above a
+    // step that said "Connected".
+    const { user } = setup();
+    const { store } = setup();
+    store.saveSettings({
+      calendar: {
+        execUrl: '',
+        secret: '',
+        icsUrl: '',
+        google: { refreshToken: 'R', accessToken: 'A', expiresAt: 1, email: 'me@example.test', logCalendarId: 'L' },
+      },
+    });
+    await user.click(screen.getAllByRole('button', { name: 'Settings' }).at(-1)!);
+    const cards = screen.getAllByRole('button', { name: /^Calendar/ });
+    expect(cards.at(-1)!.textContent).toContain('Reading and writing back as me@example.test');
+    expect(cards.at(-1)!.textContent).not.toContain('Not connected');
+  });
+
 });
