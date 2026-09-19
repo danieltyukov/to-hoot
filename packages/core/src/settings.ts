@@ -7,7 +7,15 @@
 //   - Device identity. Two devices sharing a deviceId would write the same
 //     event paths, and the whole merge model rests on them never colliding.
 
-import { DEVICE_ID_RULE, DEFAULT_SETTINGS, isValidDeviceId, type Settings, type Theme } from './models.js';
+import {
+  DEVICE_ID_RULE,
+  DEFAULT_SETTINGS,
+  EMPTY_GOOGLE_ACCESS,
+  isValidDeviceId,
+  type GoogleCalendarAccess,
+  type Settings,
+  type Theme,
+} from './models.js';
 
 export { DEFAULT_SETTINGS };
 export type { Settings, Theme };
@@ -18,6 +26,8 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 export interface SyncableSettings {
   github: { owner: string; repo: string; branch: string };
   calendar: { execUrl: string; icsUrl: string };
+  /** The endpoint's hostname only. The path secret that completes it stays local. */
+  worker: { base: string };
   theme: Theme;
   dayStartOffsetMs: number;
   idleThresholdMs: number;
@@ -28,13 +38,15 @@ export interface SyncableSettings {
 /**
  * The fields kept out of the synced payload, as a list rather than a comment so
  * a reader can check it against `SyncableSettings` at a glance:
- * `github.token`, `calendar.secret`, `worker.url` (it carries a path secret),
- * `deviceId` and `deviceName`.
+ * `github.token`, `calendar.secret`, everything under `calendar.google`,
+ * `worker.url` (it carries a path secret), `worker.pathSecret`, `deviceId` and
+ * `deviceName`.
  */
 export function toSyncable(s: Settings): SyncableSettings {
   return {
     github: { owner: s.github.owner, repo: s.github.repo, branch: s.github.branch },
     calendar: { execUrl: s.calendar.execUrl, icsUrl: s.calendar.icsUrl },
+    worker: { base: s.worker.base },
     theme: s.theme,
     dayStartOffsetMs: s.dayStartOffsetMs,
     idleThresholdMs: s.idleThresholdMs,
@@ -50,13 +62,13 @@ export function cloneSettings(s: Settings): Settings {
   return {
     ...s,
     github: { ...s.github },
-    calendar: { ...s.calendar },
+    calendar: { ...s.calendar, google: { ...s.calendar.google } },
     worker: { ...s.worker },
   };
 }
 
 export function cloneSyncableSettings(s: SyncableSettings): SyncableSettings {
-  return { ...s, github: { ...s.github }, calendar: { ...s.calendar } };
+  return { ...s, github: { ...s.github }, calendar: { ...s.calendar }, worker: { ...s.worker } };
 }
 
 const DAY_MS = 24 * 3600_000;
@@ -128,12 +140,26 @@ export function validateSettings(input: unknown): Result<Settings> {
     str(calendar['execUrl'], 'calendar.execUrl', v => { out.calendar.execUrl = v; });
     str(calendar['secret'], 'calendar.secret', v => { out.calendar.secret = v; });
     str(calendar['icsUrl'], 'calendar.icsUrl', v => { out.calendar.icsUrl = v; });
+    const google = calendar['google'];
+    if (google !== undefined) {
+      if (!isRecord(google)) bad.push('calendar.google');
+      else {
+        const access: GoogleCalendarAccess = { ...EMPTY_GOOGLE_ACCESS };
+        str(google['refreshToken'], 'calendar.google.refreshToken', v => { access.refreshToken = v; });
+        str(google['accessToken'], 'calendar.google.accessToken', v => { access.accessToken = v; });
+        num(google['expiresAt'], 'calendar.google.expiresAt', n => n >= 0, n => { access.expiresAt = n; });
+        str(google['email'], 'calendar.google.email', v => { access.email = v; });
+        str(google['logCalendarId'], 'calendar.google.logCalendarId', v => { access.logCalendarId = v; });
+        out.calendar.google = access;
+      }
+    }
   }
 
   const worker = nested('worker');
   if (worker) {
     str(worker['url'], 'worker.url', v => { out.worker.url = v; });
     str(worker['pathSecret'], 'worker.pathSecret', v => { out.worker.pathSecret = v; });
+    str(worker['base'], 'worker.base', v => { out.worker.base = v; });
   }
 
   /*

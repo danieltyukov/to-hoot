@@ -1,4 +1,4 @@
-export const VERSION = '0.6.0';
+export const VERSION = '0.7.0';
 
 export * from './models.js';
 export * from './events.js';
@@ -15,5 +15,6 @@ export * from './github/client.js';
 export * from './github/sync.js';
 export * from './calendar/bridge.js';
 export * from './calendar/client.js';
+export * from './calendar/google.js';
 export * from './calendar/queue.js';
 export * from './calendar/writeback.js';

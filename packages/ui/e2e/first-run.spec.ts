@@ -35,8 +35,18 @@ test('opens on the wizard and asks for nothing to begin with', async ({ page }) 
   await expect(page.getByLabel('New task')).toHaveCount(0);
 });
 
+test('leads the calendar step with one sign-in button and folds the script away', async ({ page }) => {
+  await page.locator('[data-step="calendar"]').click();
+  // The button is there in every shell. In a browser tab it is disabled and
+  // says why, since a tab has nowhere to receive Google's redirect.
+  await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
+  await expect(page.getByLabel('Shared secret', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Use an Apps Script bridge instead' })).toBeVisible();
+});
+
 test('generates a calendar secret nobody is asked to choose', async ({ page }) => {
   await page.locator('[data-step="calendar"]').click();
+  await page.getByRole('button', { name: 'Use an Apps Script bridge instead' }).click();
   await page.getByRole('button', { name: 'Show the script' }).click();
 
   const secret = page.getByLabel('Shared secret', { exact: true });
@@ -58,6 +68,7 @@ test('shows the built bridge source, with the secret still outside it', async ({
   test.skip(!existsSync(BRIDGE_BUNDLE), 'run npm run build -w @to-hoot/apps-script first');
 
   await page.locator('[data-step="calendar"]').click();
+  await page.getByRole('button', { name: 'Use an Apps Script bridge instead' }).click();
   await page.getByRole('button', { name: 'Show the script' }).click();
   const value = await page.getByLabel('Shared secret', { exact: true }).inputValue();
 

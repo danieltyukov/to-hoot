@@ -1,6 +1,6 @@
 [package]
 name = "to-hoot-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "to-hoot desktop shell"
 edition = "2021"
 rust-version = "1.77.2"
@@ -29,6 +29,11 @@ tauri-plugin-store = "2"
 # Pure Rust X11 client, so the OS idle query needs no C headers at build time.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["screensaver"] }
+
+# GetLastInputInfo and GetTickCount, the counter Windows drives its own
+# screensaver from. Raw bindings only; nothing else from the SDK is needed.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [profile.release]
 codegen-units = 1

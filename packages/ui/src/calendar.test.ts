@@ -1,6 +1,7 @@
 // @vitest-environment node
 import {
   DEFAULT_SETTINGS,
+  EMPTY_GOOGLE_ACCESS,
   cloneSettings,
   logIdFor,
   type BridgeEvent,
@@ -18,7 +19,12 @@ const NOON = new Date(2026, 7, 23, 12, 0, 0).getTime();
 
 function bridgeSettings(): Settings {
   const s = cloneSettings(DEFAULT_SETTINGS);
-  s.calendar = { execUrl: 'https://script.google.com/macros/s/AK/exec', secret: 'x'.repeat(40), icsUrl: '' };
+  s.calendar = {
+    execUrl: 'https://script.google.com/macros/s/AK/exec',
+    secret: 'x'.repeat(40),
+    icsUrl: '',
+    google: { ...EMPTY_GOOGLE_ACCESS },
+  };
   return s;
 }
 

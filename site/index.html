@@ -6,7 +6,7 @@
     <title>ToHoot</title>
     <meta
       name="description"
-      content="A task list that tracks time against the day you actually had. Linux and Android, synced through a private GitHub repository you own, reachable from Claude. Free to run, with no account and no server."
+      content="A task list that tracks time against the day you actually had. Linux, Windows and Android, synced through a private GitHub repository you own, reachable from Claude. Free to run, with no account and no server."
     />
     <link rel="icon" href="../packages/ui/public/favicon.svg" type="image/svg+xml" />
     <link rel="canonical" href="https://danieltyukov.github.io/to-hoot/" />
@@ -59,7 +59,7 @@
       <div class="wrap">
         <p class="lede">
           A task list that tracks time against the day you actually had. One list on your Linux
-          desktop and your Android phone, synced through a private repository you own.
+          or Windows desktop and your Android phone, synced through a private repository you own.
         </p>
 
         <p class="actions">
@@ -69,11 +69,16 @@
           <a class="btn" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/to-hoot_x86_64.AppImage">
             Download for Linux
           </a>
+          <a class="btn" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/ToHoot_x64-setup.exe">
+            Download for Windows
+          </a>
         </p>
         <p class="note">
-          The AppImage runs anywhere: <code>chmod +x</code> and go. A <code>.deb</code> is on the
-          <a href="https://github.com/danieltyukov/to-hoot/releases/latest">releases page</a>, and
-          both are built on Ubuntu 22.04 so they run on older systems too.
+          The AppImage runs anywhere: <code>chmod +x</code> and go. A <code>.deb</code> and an
+          <code>.msi</code> are on the
+          <a href="https://github.com/danieltyukov/to-hoot/releases/latest">releases page</a>. The
+          Linux builds are made on Ubuntu 22.04 so they run on older systems too; the Windows
+          installer is not code-signed, so SmartScreen asks once.
         </p>
       </div>
 
@@ -197,8 +202,8 @@
                   <td>Not applicable</td>
                 </tr>
                 <tr>
-                  <th scope="row">Apps Script and Calendar API v3</th>
-                  <td>The calendar bridge, in your account</td>
+                  <th scope="row">Google Calendar API v3</th>
+                  <td>Your calendar, read and written by the app</td>
                   <td>Free, with no billing account</td>
                   <td>Quota error</td>
                 </tr>
@@ -247,18 +252,19 @@
             <li>
               <h3>Calendar</h3>
               <p>
-                Optional. The app gives you the complete Apps Script source and a generated secret;
-                you paste them into a new project in your own Google account, enable the Calendar
-                service, deploy it as a web app, and paste the URL back. A secret calendar address
-                in ICS format is the read-only shortcut if you do not need write-back.
+                Optional. Press Sign in with Google, approve the app in your browser, and your day
+                appears beside your tasks with tracked time written to a calendar of its own. A
+                secret calendar address in ICS format is the read-only shortcut, and the Apps
+                Script bridge is still there for a deployment that already exists.
               </p>
             </li>
             <li>
               <h3>Claude</h3>
               <p>
                 Optional. One command registers the local MCP server with Claude Code. For Claude
-                on the web, deploy the Cloudflare Worker to your own free account and add the URL
-                as a custom connector. Skipping this changes nothing else.
+                on the web and on your phone, press Sign in and deploy: the app signs in with your
+                free Cloudflare account, uploads the endpoint, and hands you the URL to add as a
+                connector. Skipping this changes nothing else.
               </p>
             </li>
           </ol>
@@ -303,6 +309,8 @@ cd apps/mobile  &amp;&amp; npm install &amp;&amp; npm run apk:debug</code></pre>
           <a href="https://github.com/danieltyukov/to-hoot">github.com/danieltyukov/to-hoot</a>
           &middot;
           <a href="https://github.com/danieltyukov/to-hoot/blob/main/LICENSE">MIT</a>
+          &middot;
+          <a href="./privacy.html">Privacy</a>
         </p>
         <p class="fonts">
           Set in subsets of three fonts, each licensed under the SIL Open Font License 1.1 and

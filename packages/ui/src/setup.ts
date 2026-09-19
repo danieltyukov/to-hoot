@@ -1562,3 +1562,272 @@ export async function deployWorker(
     hint: `${last?.detail ?? ''} Test it again in a moment.`.trim(),
   };
 }
+
+/*
+ * Signing in with Google and with Cloudflare.
+ *
+ * Both are OAuth authorization-code flows with PKCE: the app opens a page in
+ * the person's own browser, the browser comes back to the app with a code, and
+ * the code is exchanged for tokens. Nothing is typed into the app and no
+ * password is ever seen by it. Where the browser comes back to is the shell's
+ * business (`Platform.oauthLoopback` on a desktop, `Platform.oauthScheme` on a
+ * phone); this file builds the URLs, checks the state, and does the exchange.
+ */
+
+/** The random `state` and PKCE verifier one sign-in is built around. */
+export interface OAuthAttempt {
+  state: string;
+  verifier: string;
+  challenge: string;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * A fresh state and verifier, with the S256 challenge of the verifier.
+ *
+ * The verifier is 64 characters of the alphabet the RFC allows, from the
+ * CSPRNG; the state is another 32, so a callback that was not started here is
+ * refused rather than exchanged.
+ */
+export async function newOAuthAttempt(): Promise<OAuthAttempt> {
+  const verifier = generateSecret(64);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return { state: generateSecret(32), verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+
+/**
+ * The code out of a callback URL, checked against the state the attempt was
+ * started with. A callback carrying an error (the person pressed Deny) or a
+ * foreign state is a refusal, never a token.
+ */
+export function readCallback(url: string, attempt: OAuthAttempt): Check<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { status: 'error', detail: 'The browser came back with something that is not a URL.' };
+  }
+  const error = parsed.searchParams.get('error');
+  if (error !== null) {
+    const description = parsed.searchParams.get('error_description');
+    return {
+      status: 'error',
+      detail: error === 'access_denied' ? 'The sign-in was cancelled in the browser.' : (description ?? error),
+    };
+  }
+  if (parsed.searchParams.get('state') !== attempt.state) {
+    return { status: 'error', detail: 'The sign-in that came back is not the one that was started.' };
+  }
+  const code = parsed.searchParams.get('code');
+  if (code === null || code === '') return { status: 'error', detail: 'The browser came back without a code.' };
+  return { status: 'ok', detail: 'Approved.', value: code };
+}
+
+/* Google. */
+
+/**
+ * The OAuth clients of the ToHoot project in Google Cloud. Public identifiers.
+ * The desktop client carries a secret because Google issues one to installed
+ * apps and requires it at the token endpoint; Google's own guidance is that it
+ * is not confidential in that setting. The Android client has none. A fork
+ * registers its own and sets the VITE_ variables at build time.
+ */
+export const GOOGLE_DESKTOP_CLIENT_ID: string =
+  (import.meta.env?.['VITE_GOOGLE_DESKTOP_CLIENT_ID'] as string | undefined) || '';
+export const GOOGLE_DESKTOP_CLIENT_SECRET: string =
+  (import.meta.env?.['VITE_GOOGLE_DESKTOP_CLIENT_SECRET'] as string | undefined) || '';
+export const GOOGLE_ANDROID_CLIENT_ID: string =
+  (import.meta.env?.['VITE_GOOGLE_ANDROID_CLIENT_ID'] as string | undefined) || '';
+
+export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/**
+ * Which Google client a shell uses. A desktop signs in through the loopback
+ * listener with the desktop client; a phone through its custom scheme with the
+ * Android client, whose scheme is the client id reversed, the way Google names
+ * it. A browser tab has neither and cannot sign in.
+ */
+export interface GoogleClientChoice {
+  clientId: string;
+  clientSecret?: string;
+  /** The custom scheme an Android client's redirect uses. */
+  scheme?: string;
+}
+
+export function googleClientFor(kind: PlatformKind | undefined): GoogleClientChoice | null {
+  if (kind === 'desktop' && GOOGLE_DESKTOP_CLIENT_ID !== '') {
+    return { clientId: GOOGLE_DESKTOP_CLIENT_ID, clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET };
+  }
+  if (kind === 'android' && GOOGLE_ANDROID_CLIENT_ID !== '') {
+    return { clientId: GOOGLE_ANDROID_CLIENT_ID, scheme: reversedClientId(GOOGLE_ANDROID_CLIENT_ID) };
+  }
+  return null;
+}
+
+/** `123-abc.apps.googleusercontent.com` becomes `com.googleusercontent.apps.123-abc`. */
+export function reversedClientId(clientId: string): string {
+  return clientId.split('.').reverse().join('.');
+}
+
+/** The page the browser opens to sign in with Google. */
+export function googleAuthUrl(client: GoogleClientChoice, redirectUri: string, attempt: OAuthAttempt): string {
+  const params = new URLSearchParams({
+    client_id: client.clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GOOGLE_CALENDAR_SCOPE,
+    // Offline, with consent forced, is what earns a refresh token every time
+    // rather than only on the first sign-in of an account.
+    access_type: 'offline',
+    prompt: 'consent',
+    state: attempt.state,
+    code_challenge: attempt.challenge,
+    code_challenge_method: 'S256',
+  });
+  return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+}
+
+export interface GoogleGrant {
+  accessToken: string;
+  refreshToken: string;
+  /** Epoch milliseconds. */
+  expiresAt: number;
+}
+
+/** Trades the code for tokens. The verifier proves this app started the flow. */
+export async function exchangeGoogleCode(
+  http: Http,
+  client: GoogleClientChoice,
+  redirectUri: string,
+  code: string,
+  attempt: OAuthAttempt,
+  now: () => number = Date.now,
+): Promise<Check<GoogleGrant>> {
+  const params: Record<string, string> = {
+    client_id: client.clientId,
+    code,
+    code_verifier: attempt.verifier,
+    grant_type: 'authorization_code',
+    redirect_uri: redirectUri,
+  };
+  if (client.clientSecret !== undefined && client.clientSecret !== '') params['client_secret'] = client.clientSecret;
+  let res: Json;
+  try {
+    res = await oauth(http, GOOGLE_TOKEN_URL, params);
+  } catch (err) {
+    return { status: 'error', detail: `Could not reach Google: ${messageOf(err)}` };
+  }
+  const body = res.body as Record<string, unknown> | undefined;
+  const accessToken = field(body, 'access_token');
+  const refreshToken = field(body, 'refresh_token');
+  if (res.status !== 200 || accessToken === undefined) {
+    return {
+      status: 'error',
+      detail: field(body, 'error_description') ?? field(body, 'error') ?? `Google answered ${res.status}.`,
+    };
+  }
+  if (refreshToken === undefined) {
+    return {
+      status: 'error',
+      detail: 'Google signed you in but sent no refresh token.',
+      hint: 'Remove ToHoot under your Google account permissions and sign in again.',
+    };
+  }
+  const expiresIn = typeof body?.['expires_in'] === 'number' ? body['expires_in'] : 3600;
+  return {
+    status: 'ok',
+    detail: 'Signed in with Google.',
+    value: { accessToken, refreshToken, expiresAt: now() + expiresIn * 1000 - 60_000 },
+  };
+}
+
+/** Tells Google to forget the grant. Best effort: a revoke that fails still signs out locally. */
+export async function revokeGoogleGrant(http: Http, token: string): Promise<void> {
+  try {
+    await http({
+      url: GOOGLE_REVOKE_URL,
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token }).toString(),
+    });
+  } catch {
+    // Google could not be reached. The local sign-out still happens.
+  }
+}
+
+/* Cloudflare. */
+
+/**
+ * Cloudflare offers no sign-in for third-party apps, only for wrangler, its
+ * own command-line tool, whose client id and loopback redirect are public in
+ * wrangler's source. Signing in through it is what the Cloudflare dashboard
+ * calls "Allow Wrangler to make changes", and the page says so; the app's copy
+ * says why. The redirect is pinned to port 8976 on the loopback interface,
+ * which is why this is a desktop-only sign-in.
+ */
+export const CLOUDFLARE_CLIENT_ID = '54d11594-84e4-41aa-b438-e81b8fa78ee7';
+export const CLOUDFLARE_AUTH_URL = 'https://dash.cloudflare.com/oauth2/auth';
+export const CLOUDFLARE_OAUTH_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
+export const CLOUDFLARE_REVOKE_URL = 'https://dash.cloudflare.com/oauth2/revoke';
+export const CLOUDFLARE_REDIRECT_URI = 'http://localhost:8976/oauth/callback';
+/** What a deploy needs and nothing more: list the accounts, write one script. */
+export const CLOUDFLARE_SCOPES = ['account:read', 'user:read', 'workers:write', 'workers_scripts:write', 'offline_access'];
+
+export function cloudflareAuthUrl(attempt: OAuthAttempt): string {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: CLOUDFLARE_CLIENT_ID,
+    redirect_uri: CLOUDFLARE_REDIRECT_URI,
+    scope: CLOUDFLARE_SCOPES.join(' '),
+    state: attempt.state,
+    code_challenge: attempt.challenge,
+    code_challenge_method: 'S256',
+  });
+  return `${CLOUDFLARE_AUTH_URL}?${params.toString()}`;
+}
+
+/** Trades the code for an access token, which the deploy uses and then revokes. */
+export async function exchangeCloudflareCode(
+  http: Http,
+  code: string,
+  attempt: OAuthAttempt,
+): Promise<Check<string>> {
+  let res: Json;
+  try {
+    res = await oauth(http, CLOUDFLARE_OAUTH_TOKEN_URL, {
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: attempt.verifier,
+      client_id: CLOUDFLARE_CLIENT_ID,
+      redirect_uri: CLOUDFLARE_REDIRECT_URI,
+    });
+  } catch (err) {
+    return { status: 'error', detail: `Could not reach Cloudflare: ${messageOf(err)}` };
+  }
+  const body = res.body as Record<string, unknown> | undefined;
+  const token = field(body, 'access_token');
+  if (res.status !== 200 || token === undefined) {
+    return {
+      status: 'error',
+      detail: field(body, 'error_description') ?? field(body, 'error') ?? `Cloudflare answered ${res.status}.`,
+    };
+  }
+  return { status: 'ok', detail: 'Signed in with Cloudflare.', value: token };
+}
+
+/** Gives the token back once the deploy is done. Best effort. */
+export async function revokeCloudflareToken(http: Http, token: string): Promise<void> {
+  try {
+    await oauth(http, CLOUDFLARE_REVOKE_URL, { token, client_id: CLOUDFLARE_CLIENT_ID });
+  } catch {
+    // Unreachable is fine: the token expires on its own within the hour.
+  }
+}

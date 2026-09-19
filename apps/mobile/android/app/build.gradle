@@ -19,6 +19,21 @@ apply plugin: 'com.android.application'
  * Losing it means the app can never be updated in place again, on any device
  * that installed a build signed with it.
  */
+/*
+ * The Google OAuth client for Android, from google-oauth.json at the
+ * repository root. Its id reversed is the URL scheme the sign-in comes back
+ * on, and the manifest registers that scheme through a placeholder below.
+ * With no id (a fork that has not registered one) the scheme is a harmless
+ * name nothing will ever open.
+ */
+def googleOAuthFile = rootProject.file('../../../google-oauth.json')
+def googleAndroidClientId = googleOAuthFile.exists()
+    ? (new groovy.json.JsonSlurper().parse(googleOAuthFile).androidClientId ?: '')
+    : ''
+def googleSignInScheme = googleAndroidClientId
+    ? googleAndroidClientId.split('\\.').reverse().join('.')
+    : 'com.tohoot.app.unregistered'
+
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('keystore.properties')
 if (keystorePropertiesFile.exists()) {
@@ -39,9 +54,13 @@ android {
         applicationId "com.tohoot.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 8
-        versionName "0.6.0"
+        versionCode 9
+        versionName "0.7.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // The custom scheme Google sends the sign-in back on: the Android
+        // client id reversed, as Google specifies. Read from the same file the
+        // web build reads, so the two cannot disagree.
+        manifestPlaceholders = [googleScheme: googleSignInScheme]
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61

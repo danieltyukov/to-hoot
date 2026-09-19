@@ -23,7 +23,13 @@ const outDir = join(app, 'dist');
 const fresh = process.argv.includes('--fresh');
 
 function buildUi() {
-  const r = spawnSync('npm', ['run', 'build', '-w', '@to-hoot/ui'], { cwd: repo, stdio: 'inherit' });
+  // Through a shell on Windows, where `npm` is npm.cmd and a bare spawn of it
+  // fails with ENOENT before anything is built.
+  const r = spawnSync('npm', ['run', 'build', '-w', '@to-hoot/ui'], {
+    cwd: repo,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 

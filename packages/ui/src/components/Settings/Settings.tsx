@@ -1,5 +1,12 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
-import { VERSION, type Http, type PlatformKind, type Settings as CoreSettings, type Theme } from '@to-hoot/core';
+import {
+  VERSION,
+  type Http,
+  type Platform,
+  type PlatformKind,
+  type Settings as CoreSettings,
+  type Theme,
+} from '@to-hoot/core';
 
 import { CalendarGlyph, CloudDeviceGlyph, DesktopGlyph, PhoneGlyph, SparkGlyph, SyncGlyph } from '../../icons/glyphs.js';
 import type { SyncDevice, SyncStatus } from '../../sync.js';
@@ -24,8 +31,12 @@ export interface SettingsProps {
   openUrl?: ((url: string) => Promise<void>) | undefined;
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
+  /** The shell, for how a sign-in comes back to it. */
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme'> | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
+  /** Removes a device from the repository's registry. Its events stay. */
+  onForgetDevice?: ((id: string) => void) | undefined;
   /** Set when the log on disk cannot be read or written. */
   storageError?: string | null;
   onStartFreshLog?: () => void;
@@ -60,8 +71,10 @@ export function Settings({
   mcpServerPath,
   openUrl,
   deviceKind,
+  platform,
   syncStatus = null,
   onSyncNow,
+  onForgetDevice,
   storageError = null,
   onStartFreshLog,
   now = Date.now,
@@ -126,15 +139,21 @@ export function Settings({
           status={describeCalendar(settings)}
           connected={settings.calendar.execUrl !== '' || settings.calendar.icsUrl !== ''}
         >
-          <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} />
+          <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
         </Card>
 
         <Card
           id="claude"
           glyph={<SparkGlyph />}
           title="Claude"
-          status={settings.worker.url === '' ? 'Claude Code only, no endpoint yet' : 'Endpoint deployed'}
-          connected={settings.worker.url !== ''}
+          status={
+            settings.worker.url !== ''
+              ? 'Endpoint deployed'
+              : settings.worker.base !== ''
+                ? 'Endpoint deployed from another device'
+                : 'Claude Code only, no endpoint yet'
+          }
+          connected={settings.worker.url !== '' || settings.worker.base !== ''}
         >
           <StepClaude
             http={http}
@@ -142,6 +161,7 @@ export function Settings({
             onSave={onSave}
             mcpServerPath={mcpServerPath}
             openUrl={openUrl}
+            platform={platform}
           />
         </Card>
 
@@ -151,6 +171,7 @@ export function Settings({
             thisDevice={settings.deviceId}
             now={now()}
             kind={deviceKind}
+            onForget={onForgetDevice}
           />
         ) : null}
 
@@ -304,18 +325,22 @@ function Card({
  *
  * The sync engine reads meta.json on every pull, so this is the repository's
  * own view and not this device's guess. A device that has not written in a
- * while is still here: nothing is ever removed from the registry.
+ * while is still here until someone presses Forget beside it, which removes it
+ * from the registry and nothing else: its tasks and time are in the log and
+ * stay there. A device that writes again after that reappears.
  */
 function Devices({
   devices,
   thisDevice,
   now,
   kind,
+  onForget,
 }: {
   devices: SyncDevice[];
   thisDevice: string;
   now: number;
   kind: PlatformKind | undefined;
+  onForget?: ((id: string) => void) | undefined;
 }) {
   return (
     <div className="card card-open" data-section="devices">
@@ -343,6 +368,17 @@ function Devices({
               <span className="device-when">
                 {device.lastSeen === 0 ? 'never' : `synced ${ago(device.lastSeen, now)}`}
               </span>
+              {device.id === thisDevice || onForget === undefined ? null : (
+                <button
+                  type="button"
+                  className="device-forget"
+                  onClick={() => onForget(device.id)}
+                  aria-label={`Forget ${device.id}`}
+                  title="Remove from this list. Its tasks stay."
+                >
+                  Forget
+                </button>
+              )}
             </li>
           ))}
         </ul>

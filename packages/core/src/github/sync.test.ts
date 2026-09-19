@@ -500,6 +500,67 @@ describe('SyncEngine', () => {
     });
   });
 
+  it('forgets a device from the registry without touching its events', async () => {
+    // Renamed devices, one-off imports and a Worker that was redeployed under
+    // another name all stay on the Devices list otherwise. Forgetting rewrites
+    // meta.json alone; the events stay where they are and still replay.
+    await makeEngine({ deviceId: 'laptop', compactThreshold: 1 }).push([
+      addTask('t1', 'From the laptop', { deviceId: 'laptop' }),
+    ]);
+    await makeEngine({ deviceId: 'old-phone', compactThreshold: 1 }).push([
+      addTask('t2', 'From the old phone', { deviceId: 'old-phone' }),
+    ]);
+
+    const reader = makeEngine({ deviceId: 'laptop' });
+    await reader.pull();
+    expect(Object.keys(reader.devices).sort()).toEqual(['laptop', 'old-phone']);
+    const filesBefore = [...gh.files.keys()].filter(p => p !== META_PATH).sort();
+
+    expect(await reader.forgetDevice('old-phone')).toBe('ok');
+    expect(Object.keys(reader.devices)).toEqual(['laptop']);
+    // Its task is still in the state every device replays.
+    const state = await reader.pullState();
+    expect(Object.values(state.tasks).map(t => t.title).sort()).toEqual(['From the laptop', 'From the old phone']);
+    // Nothing but meta.json changed.
+    expect([...gh.files.keys()].filter(p => p !== META_PATH).sort()).toEqual(filesBefore);
+
+    // Pressing it again, or from another device, is a no-op rather than an error.
+    expect(await reader.forgetDevice('old-phone')).toBe('unchanged');
+  });
+
+  it('keeps a forgotten device forgotten through a compaction of its own events', async () => {
+    // The registry is rebuilt from the events at every compaction. Without a
+    // watermark, forgetting a device whose events were still in the tail would
+    // hold for exactly one compaction.
+    const phone = (threshold: number) => makeEngine({ deviceId: 'old-phone', compactThreshold: threshold });
+    await phone(1).push([addTask('t1', 'First', { deviceId: 'old-phone', ts: 1_000 })]);
+    // Compacts the first event, which is what puts old-phone in the registry.
+    await phone(1).push([addTask('t2', 'Compacted', { deviceId: 'old-phone', ts: 2_000 })]);
+    // Left in the tail, past the snapshot: the laptop's compaction below folds it.
+    await phone(1_000).push([addTask('t3', 'In the tail', { deviceId: 'old-phone', ts: 3_000 })]);
+
+    const laptop = makeEngine({ deviceId: 'laptop' });
+    await laptop.pull();
+    expect(Object.keys(laptop.devices)).toEqual(['old-phone']);
+    expect(await laptop.forgetDevice('old-phone')).toBe('ok');
+
+    const compactor = makeEngine({ deviceId: 'laptop', compactThreshold: 1 });
+    await compactor.push([addTask('t4', 'Mine', { deviceId: 'laptop', ts: 4_000 })]);
+    // The registry is what the head says, so read the head this push made.
+    await compactor.pull();
+    expect(Object.keys(compactor.devices)).toEqual(['laptop']);
+    const state = await compactor.pullState();
+    expect(Object.values(state.tasks).map(t => t.title).sort()).toEqual(['Compacted', 'First', 'In the tail', 'Mine']);
+
+    // Writing again is the device saying it is still in use. It comes back,
+    // and the forgetting is over rather than lingering in the file.
+    await phone(1).push([addTask('t5', 'Back', { deviceId: 'old-phone', ts: 5_000 })]);
+    const again = makeEngine({ deviceId: 'laptop' });
+    await again.pull();
+    expect(Object.keys(again.devices).sort()).toEqual(['laptop', 'old-phone']);
+    expect(JSON.parse(gh.files.get(META_PATH)!).forgotten).toBeUndefined();
+  });
+
   it('has no devices until a compaction has written meta.json', async () => {
     expect(engine.devices).toEqual({});
     gh.blob(...eventFile('dev-b', [addTask('t2', 'theirs', { deviceId: 'dev-b', ts: 7_000 })]));

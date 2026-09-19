@@ -195,6 +195,53 @@ export class SyncController {
     }
   }
 
+  /**
+   * Removes a device from the repository's registry, so it leaves the Devices
+   * list on every device at their next sync. Its events stay; see
+   * `SyncEngine.forgetDevice`. Queued behind a sync in flight rather than
+   * racing it for the ref.
+   */
+  forgetDevice(id: string): Promise<SyncStatus> {
+    if (this.running !== null) return this.running.then(() => this.forgetDevice(id));
+    this.running = this.forget(id).finally(() => {
+      this.running = null;
+    });
+    return this.running;
+  }
+
+  private async forget(id: string): Promise<SyncStatus> {
+    const settings = this.readSettings();
+    if (!configured(settings)) return this.set('unconfigured', 'Not configured.');
+    const engine = this.engineFor(settings);
+    try {
+      await engine.pull();
+      const result = await engine.forgetDevice(id);
+      if (result === 'conflict') {
+        return this.set('error', 'Another device was writing. Try again.', this.status.at);
+      }
+      return this.set(
+        'ok',
+        result === 'ok' ? `Forgot ${id}.` : `${id} was already gone.`,
+        this.status.at,
+        devicesOf(engine.devices),
+      );
+    } catch (err) {
+      return this.set('error', messageOf(err), this.status.at);
+    }
+  }
+
+  private engineFor(settings: Settings): SyncEngine {
+    const client = new GitHubClient(this.http, {
+      owner: settings.github.owner,
+      repo: settings.github.repo,
+      token: settings.github.token,
+      // Empty means "resolve the repository's own default", which is what stops
+      // a guessed `main` from writing to a branch that does not exist.
+      ...(settings.github.branch === '' ? {} : { branch: settings.github.branch }),
+    });
+    return new SyncEngine({ client, deviceId: this.store.device });
+  }
+
   private set(
     phase: SyncPhase,
     detail: string,
@@ -211,15 +258,7 @@ export class SyncController {
     if (!configured(settings)) return this.set('unconfigured', 'Not configured.');
 
     this.set('syncing', 'Syncing.');
-    const client = new GitHubClient(this.http, {
-      owner: settings.github.owner,
-      repo: settings.github.repo,
-      token: settings.github.token,
-      // Empty means "resolve the repository's own default", which is what stops
-      // a guessed `main` from writing to a branch that does not exist.
-      ...(settings.github.branch === '' ? {} : { branch: settings.github.branch }),
-    });
-    const engine = new SyncEngine({ client, deviceId: this.store.device });
+    const engine = this.engineFor(settings);
 
     try {
       // Read before writing: the engine swaps its commit against the head it

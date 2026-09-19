@@ -10,7 +10,7 @@ import { Store } from '../../store.js';
 import { memoryStore } from '../../platform/browser.js';
 import { SECRET_LENGTH } from '../../setup.js';
 import { SECRET_PROPERTY } from './StepCalendar.js';
-import { Wizard } from './Wizard.js';
+import { Wizard, type WizardProps } from './Wizard.js';
 
 /*
  * `apps/apps-script/dist/Code.js` is a build artifact and is not committed, so
@@ -41,14 +41,25 @@ function transport(routes: Route[]): { http: Http; seen: Array<{ url: string; bo
   return { http, seen };
 }
 
+/** The shell a sign-in can come back to, or none, plus what it opened. */
+interface Shell {
+  platform?: WizardProps['platform'];
+  openUrl?: (url: string) => Promise<void>;
+  initial?: (settings: Settings) => void;
+}
+
 /** A host that keeps the settings the wizard writes, as the app does. */
-function setup(routes: Route[] = []) {
+function setup(routes: Route[] = [], shell: Shell = {}) {
   const { http, seen } = transport(routes);
   const saved: Array<Partial<Settings>> = [];
   const onDone = vi.fn();
 
   function Host() {
-    const [settings, setSettings] = useState<Settings>(() => cloneSettings(DEFAULT_SETTINGS));
+    const [settings, setSettings] = useState<Settings>(() => {
+      const s = cloneSettings(DEFAULT_SETTINGS);
+      shell.initial?.(s);
+      return s;
+    });
     return (
       <Wizard
         http={http}
@@ -65,12 +76,39 @@ function setup(routes: Route[] = []) {
           }));
         }}
         mcpServerPath="/home/someone/to-hoot/apps/mcp/dist/index.js"
+        openUrl={shell.openUrl}
+        platform={shell.platform}
       />
     );
   }
 
   const utils = render(<Host />);
   return { ...utils, http, seen, saved, onDone, user: userEvent.setup() };
+}
+
+/**
+ * A desktop shell whose loopback listener answers with the state of whatever
+ * sign-in URL was opened last, the way a browser redirect would. The code it
+ * hands back is fixed; what matters is that the state round-trips.
+ */
+function desktopShell(): Shell & { opened: string[] } {
+  const opened: string[] = [];
+  return {
+    opened,
+    openUrl: async url => {
+      opened.push(url);
+    },
+    platform: {
+      kind: 'desktop',
+      oauthLoopback: () => ({
+        redirectUri: 'http://localhost:8976/oauth/callback',
+        waitForCallback: async () => {
+          const state = new URL(opened.at(-1)!).searchParams.get('state') ?? '';
+          return `http://localhost:8976/oauth/callback?code=CODE&state=${state}`;
+        },
+      }),
+    },
+  };
 }
 
 const go = async (user: ReturnType<typeof userEvent.setup>, step: string): Promise<void> => {
@@ -113,6 +151,11 @@ function accessibleName(el: Element): string {
     if (label !== null) return label.textContent?.trim() ?? '';
   }
   return el.textContent?.trim() ?? '';
+}
+
+/** The Apps Script bridge is folded away now that signing in is the way in. */
+async function openBridge(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: 'Use an Apps Script bridge instead' }));
 }
 
 async function resultText(): Promise<string> {
@@ -244,6 +287,7 @@ describe('Wizard', () => {
      */
     const { user, container } = setup();
     await go(user, 'calendar');
+    await openBridge(user);
     await user.click(screen.getByRole('button', { name: 'Show the script' }));
 
     // Byte for byte what the module supplied, rather than longer than some
@@ -268,6 +312,7 @@ describe('Wizard', () => {
   it.runIf(HAS_BRIDGE_BUNDLE)('shows the built bridge, entry points and all', async () => {
     const { user, container } = setup();
     await go(user, 'calendar');
+    await openBridge(user);
     await user.click(screen.getByRole('button', { name: 'Show the script' }));
 
     const source = container.querySelector('.copyable-text')!.textContent!;
@@ -284,6 +329,7 @@ describe('Wizard', () => {
     // is configured, so the length is the entire security argument.
     const { user } = setup();
     await go(user, 'calendar');
+    await openBridge(user);
     const secret = screen.getByLabelText('Shared secret') as HTMLInputElement;
 
     expect(secret).toHaveAttribute('readonly');
@@ -297,6 +343,7 @@ describe('Wizard', () => {
   it('masks every secret until it is asked for', async () => {
     const { user } = setup();
     await go(user, 'calendar');
+    await openBridge(user);
     const secret = screen.getByLabelText('Shared secret');
     expect(secret).toHaveAttribute('type', 'password');
 
@@ -311,6 +358,7 @@ describe('Wizard', () => {
       [/script\.google\.com/, { body: { ok: false, code: 'unauthorized', error: 'no' } }],
     ]);
     await go(user, 'calendar');
+    await openBridge(user);
     await user.type(
       screen.getByLabelText('Deployment URL'),
       'https://script.google.com/macros/s/AK/exec',
@@ -335,6 +383,7 @@ describe('Wizard', () => {
       ],
     ]);
     await go(user, 'calendar');
+    await openBridge(user);
     await user.type(
       screen.getByLabelText('Deployment URL'),
       'https://script.google.com/macros/s/AK/exec',
@@ -347,7 +396,7 @@ describe('Wizard', () => {
     const feed = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR';
     const { user } = setup([[/basic\.ics/, { text: feed }]]);
     await go(user, 'calendar');
-    await user.click(screen.getByRole('button', { name: 'Only show my events, without the script' }));
+    await user.click(screen.getByRole('button', { name: 'Only show my events, without signing in' }));
     await user.type(
       screen.getByLabelText('Secret iCal address'),
       'https://calendar.google.com/x/basic.ics',
@@ -389,6 +438,7 @@ describe('Wizard', () => {
       [/workers\.dev/, { body: { result: { tools: [{ name: 'list_tasks' }] } } }],
     ]);
     await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Path secret and token options' }));
     const secret = (screen.getByLabelText('Path secret') as HTMLInputElement).value;
     expect(secret).not.toBe('');
     await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
@@ -405,6 +455,7 @@ describe('Wizard', () => {
   it('links out to the places the steps send you', async () => {
     const { user, container } = setup();
     await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Path secret and token options' }));
     await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     const links = [...container.querySelectorAll('a.link-button')].map(a => a.getAttribute('href'));
     // The token page, with the permission set in the URL.
@@ -436,6 +487,161 @@ describe('Wizard', () => {
       );
     }
   });
+  it('signs in with Google in one press and proves the calendar can be read', async () => {
+    /*
+     * What used to be three stages and a paste is one button. The listener
+     * hands back a callback carrying the state of the URL the app opened, the
+     * code is exchanged with the verifier, and the grant is proved by reading
+     * the calendars and finding the log calendar, all before "Connected" shows.
+     */
+    const shell = desktopShell();
+    const { user, seen, saved } = setup(
+      [
+        [/oauth2\.googleapis\.com\/token/, { body: { access_token: 'A', refresh_token: 'R', expires_in: 3600 } }],
+        [
+          /users\/me\/calendarList/,
+          {
+            body: {
+              items: [
+                { id: 'me@example.test', summary: 'Me', accessRole: 'owner', selected: true },
+                { id: 'log-cal-id', summary: 'to-hoot log', accessRole: 'owner' },
+              ],
+            },
+          },
+        ],
+        [/\/calendars\/[^/]+\/events/, { body: { items: [] } }],
+        [/oauth2\/v3\/userinfo/, { body: { email: 'me@example.test' } }],
+      ],
+      shell,
+    );
+    await go(user, 'calendar');
+    await user.click(screen.getByRole('button', { name: 'Sign in with Google' }));
+
+    await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
+    expect(screen.getByText(/Signed in as me@example\.test/)).toBeInTheDocument();
+
+    // The browser was sent to Google with PKCE and asked for offline access.
+    const auth = new URL(shell.opened[0]!);
+    expect(auth.origin).toBe('https://accounts.google.com');
+    expect(auth.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(auth.searchParams.get('access_type')).toBe('offline');
+    expect(auth.searchParams.get('redirect_uri')).toBe('http://localhost:8976/oauth/callback');
+
+    // The exchange carried the code and the verifier, never the challenge.
+    const exchange = seen.find(r => r.url.includes('oauth2.googleapis.com/token'))!;
+    const body = new URLSearchParams(exchange.body ?? '');
+    expect(body.get('code')).toBe('CODE');
+    expect(body.get('code_verifier')).toHaveLength(64);
+
+    // What was kept: the grant, the address, and the adopted log calendar.
+    const google = saved.map(p => p.calendar?.google).filter(g => g !== undefined);
+    expect(google.at(-1)).toMatchObject({ refreshToken: 'R', accessToken: 'A', email: 'me@example.test', logCalendarId: 'log-cal-id' });
+    // And nothing under the script route was touched.
+    expect(saved.every(p => (p.calendar?.execUrl ?? '') === '')).toBe(true);
+  });
+
+  it('says why a browser tab cannot sign in and leaves the older routes open', async () => {
+    const { user } = setup();
+    await go(user, 'calendar');
+    expect(screen.getByRole('button', { name: 'Sign in with Google' })).toBeDisabled();
+    expect(screen.getByText(/nowhere for Google to send the answer back/)).toBeInTheDocument();
+    // The feed and the bridge are still there, folded away.
+    expect(screen.getByRole('button', { name: 'Only show my events, without signing in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use an Apps Script bridge instead' })).toBeInTheDocument();
+  });
+
+  it('turns a refusal in the browser into a sentence and leaves nothing saved', async () => {
+    const shell = desktopShell();
+    shell.platform = {
+      kind: 'desktop',
+      oauthLoopback: () => ({
+        redirectUri: 'http://localhost:8976/oauth/callback',
+        waitForCallback: async () => 'http://localhost:8976/oauth/callback?error=access_denied',
+      }),
+    };
+    const { user, saved } = setup([], shell);
+    await go(user, 'calendar');
+    await user.click(screen.getByRole('button', { name: 'Sign in with Google' }));
+    await waitFor(() => expect(screen.getByText('The sign-in was cancelled in the browser.')).toBeInTheDocument());
+    expect(saved.some(p => p.calendar?.google !== undefined)).toBe(false);
+  });
+
+  it('signs out by revoking the grant and forgetting it', async () => {
+    const shell = desktopShell();
+    shell.initial = s => {
+      s.calendar.google = { refreshToken: 'R', accessToken: 'A', expiresAt: 1, email: 'me@example.test', logCalendarId: 'L' };
+    };
+    const { user, seen, saved } = setup([[/oauth2\.googleapis\.com\/revoke/, { body: {} }]], shell);
+    await go(user, 'calendar');
+    expect(screen.getByText('Signed in as me@example.test')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() => expect(seen.some(r => r.url.includes('/revoke'))).toBe(true));
+    expect(new URLSearchParams(seen.find(r => r.url.includes('/revoke'))!.body ?? '').get('token')).toBe('R');
+    expect(saved.at(-1)?.calendar?.google).toMatchObject({ refreshToken: '', accessToken: '', email: '', logCalendarId: '' });
+    expect(screen.getByRole('button', { name: 'Sign in with Google' })).toBeInTheDocument();
+  });
+
+  it('signs in with Cloudflare and deploys the endpoint in one press', async () => {
+    /*
+     * The same deploy as the token path, with the token coming from wrangler's
+     * own OAuth client instead of a paste, and revoked once the deploy is done
+     * so nothing that can rewrite every Worker on the account outlives it.
+     */
+    const shell = desktopShell();
+    const okCf = (result: unknown) => ({ body: { success: true, errors: [], result } });
+    const { user, seen, saved } = setup(
+      [
+        [/dash\.cloudflare\.com\/oauth2\/token/, { body: { access_token: 'CFTOKEN', refresh_token: 'x' } }],
+        [/dash\.cloudflare\.com\/oauth2\/revoke/, { body: {} }],
+        [/\/accounts$/, okCf([{ id: 'acct1', name: 'Someone' }])],
+        [/releases\/download\/.*to-hoot-worker\.mjs$/, { text: 'export default {}' }],
+        [/scripts\/to-hoot-mcp\/subdomain$/, okCf({ enabled: true })],
+        [/workers\/subdomain$/, okCf({ subdomain: 'someone' })],
+        [/workers\/scripts\/to-hoot-mcp$/, okCf({ id: 'to-hoot-mcp' })],
+        [/workers\.dev\/mcp\//, { body: { result: { tools: [{ name: 'list_tasks' }, { name: 'add_task' }] } } }],
+      ],
+      {
+        ...shell,
+        initial: s => {
+          s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
+        },
+      },
+    );
+    await go(user, 'claude');
+    await user.click(screen.getByRole('button', { name: 'Sign in and deploy' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy the endpoint and open Claude' })).toBeInTheDocument());
+    const auth = new URL(shell.opened[0]!);
+    expect(auth.origin + auth.pathname).toBe('https://dash.cloudflare.com/oauth2/auth');
+    expect(auth.searchParams.get('redirect_uri')).toBe('http://localhost:8976/oauth/callback');
+
+    // The upload carried the token it was just granted, and that token was
+    // revoked afterwards.
+    const upload = seen.find(r => /workers\/scripts\/to-hoot-mcp$/.test(r.url))!;
+    expect(upload).toBeDefined();
+    await waitFor(() => expect(seen.some(r => r.url.includes('/oauth2/revoke'))).toBe(true));
+    expect(new URLSearchParams(seen.find(r => r.url.includes('/oauth2/revoke'))!.body ?? '').get('token')).toBe('CFTOKEN');
+
+    const worker = saved.map(p => p.worker).filter(w => w !== undefined).at(-1)!;
+    expect(worker.base).toBe('https://to-hoot-mcp.someone.workers.dev');
+    expect(worker.url).toMatch(/^https:\/\/to-hoot-mcp\.someone\.workers\.dev\/mcp\/[A-Za-z0-9]{40}$/);
+  });
+
+  it('shows an endpoint deployed elsewhere as deployed, with nothing to press', async () => {
+    // The phone learns the hostname through sync and nothing else; the URL
+    // carries the path secret and stays on the device that deployed it.
+    const { user } = setup([], {
+      initial: s => {
+        s.worker = { url: '', pathSecret: '', base: 'https://to-hoot-mcp.someone.workers.dev' };
+        s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
+      },
+    });
+    await go(user, 'claude');
+    expect(screen.getByText(/Deployed from another device at https:\/\/to-hoot-mcp\.someone\.workers\.dev/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sign in and deploy/ })).toBeDisabled();
+  });
+
 });
 
 describe('joining a repository that already has a log', () => {
@@ -552,4 +758,5 @@ describe('joining a repository that already has a log', () => {
     expect(screen.getByText('Events are written under events/laptop/.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Yes, this is it' })).toBeNull();
   });
+
 });

@@ -1,5 +1,6 @@
 import {
   CalendarBridgeClient,
+  GoogleCalendarClient,
   WriteQueue,
   applyWriteback,
   dayStr,
@@ -41,15 +42,36 @@ export interface CalendarServiceOptions {
   now?: () => number;
   onEvents?: (events: BridgeEvent[]) => void;
   onError?: (message: string) => void;
+  /**
+   * How the service persists what Google hands back: refreshed tokens and the
+   * log calendar it adopted. Both are device-local settings.
+   */
+  onSave?: (patch: Partial<Settings>) => void;
 }
 
-export type CalendarMode = 'off' | 'bridge' | 'ics';
+/** The Google OAuth client this device signs in with. Supplied by the app. */
+export interface GoogleClientConfig {
+  clientId: string;
+  clientSecret?: string;
+}
 
+export type CalendarMode = 'off' | 'google' | 'bridge' | 'ics';
+
+/**
+ * Which calendar this device reads, in the order a person would expect: a
+ * Google account they signed into wins over a script they deployed earlier,
+ * which wins over a read-only feed. Signing out of Google falls back to
+ * whatever was there before.
+ */
 export function modeFor(settings: Settings): CalendarMode {
+  if (settings.calendar.google.refreshToken !== '') return 'google';
   if (settings.calendar.execUrl !== '' && settings.calendar.secret !== '') return 'bridge';
   if (settings.calendar.icsUrl !== '') return 'ics';
   return 'off';
 }
+
+/** A calendar that can be read and written to: Google directly, or the bridge. */
+type WritableCalendar = Pick<CalendarBridgeClient, 'listEvents' | 'writeLog' | 'deleteLog'>;
 
 export class CalendarService {
   private readonly store: Store;
@@ -58,6 +80,9 @@ export class CalendarService {
   private readonly nowFn: () => number;
   private readonly onEvents: ((events: BridgeEvent[]) => void) | undefined;
   private readonly onError: ((message: string) => void) | undefined;
+  private readonly onSave: ((patch: Partial<Settings>) => void) | undefined;
+  /** Set by the app once it knows which Google client this shell uses. */
+  googleClient: GoogleClientConfig | null = null;
 
   /** One write in flight per task, debounced, so an edit burst is one call. */
   private readonly queue: WriteQueue<WritebackAction[]>;
@@ -72,6 +97,7 @@ export class CalendarService {
     this.nowFn = options.now ?? Date.now;
     this.onEvents = options.onEvents;
     this.onError = options.onError;
+    this.onSave = options.onSave;
     this.queue = new WriteQueue<WritebackAction[]>(
       (taskId, actions) => this.write(taskId, actions),
       { onError: (_id, err) => this.onError?.(messageOf(err)) },
@@ -115,9 +141,9 @@ export class CalendarService {
     const from = startOfDay(this.nowFn(), settings.dayStartOffsetMs);
     try {
       this.publish(
-        mode === 'bridge'
-          ? await this.readBridge(settings, from)
-          : await this.readIcs(settings, from),
+        mode === 'ics'
+          ? await this.readIcs(settings, from)
+          : await this.writable(settings, mode).listEvents({ from, days: 1 }),
       );
     } catch (err) {
       // A calendar that cannot be read is not a reason to lose the tasks beside
@@ -131,12 +157,32 @@ export class CalendarService {
     this.onEvents?.(events);
   }
 
-  private async readBridge(settings: Settings, from: number): Promise<BridgeEvent[]> {
-    const client = new CalendarBridgeClient(this.http, {
-      execUrl: settings.calendar.execUrl,
-      secret: settings.calendar.secret,
+  /**
+   * The client for a mode that can write back. Google when signed in, with the
+   * tokens and the log calendar id written straight back to settings as they
+   * change, so the next client starts where this one left off.
+   */
+  private writable(settings: Settings, mode: 'google' | 'bridge'): WritableCalendar {
+    if (mode === 'bridge') {
+      return new CalendarBridgeClient(this.http, {
+        execUrl: settings.calendar.execUrl,
+        secret: settings.calendar.secret,
+      });
+    }
+    const google = settings.calendar.google;
+    const client = this.googleClient ?? { clientId: '' };
+    const save = (patch: Partial<Settings['calendar']['google']>): void => {
+      const current = this.readSettings().calendar;
+      this.onSave?.({ calendar: { ...current, google: { ...current.google, ...patch } } });
+    };
+    return new GoogleCalendarClient(this.http, {
+      client,
+      tokens: { accessToken: google.accessToken, refreshToken: google.refreshToken, expiresAt: google.expiresAt },
+      ...(google.logCalendarId === '' ? {} : { logCalendarId: google.logCalendarId }),
+      now: this.nowFn,
+      onTokens: tokens => save(tokens),
+      onLogCalendar: id => save({ logCalendarId: id }),
     });
-    return client.listEvents({ from, days: 1 });
   }
 
   private async readIcs(settings: Settings, from: number): Promise<BridgeEvent[]> {
@@ -153,7 +199,8 @@ export class CalendarService {
    */
   syncWriteback(state: State = this.store.getSnapshot().state): void {
     const settings = this.readSettings();
-    if (modeFor(settings) !== 'bridge') return;
+    const mode = modeFor(settings);
+    if (mode !== 'bridge' && mode !== 'google') return;
 
     for (const task of Object.values(state.tasks)) {
       const actions = planWriteback(task, {
@@ -170,14 +217,12 @@ export class CalendarService {
 
   private async write(taskId: string, actions: WritebackAction[]): Promise<void> {
     const settings = this.readSettings();
-    if (modeFor(settings) !== 'bridge') return;
+    const mode = modeFor(settings);
+    if (mode !== 'bridge' && mode !== 'google') return;
     const task = this.store.getSnapshot().state.tasks[taskId];
     if (task === undefined) return;
 
-    const client = new CalendarBridgeClient(this.http, {
-      execUrl: settings.calendar.execUrl,
-      secret: settings.calendar.secret,
-    });
+    const client = this.writable(settings, mode);
 
     const entries = actions.flatMap(a => (a.kind === 'write' ? a.entries : []));
     /*

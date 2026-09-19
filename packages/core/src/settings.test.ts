@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_SETTINGS, toSyncable, validateSettings } from './settings.js';
+import { EMPTY_GOOGLE_ACCESS } from './models.js';
 import type { Platform, HttpRequest, HttpResponse } from './platform.js';
 import type { Settings } from './models.js';
 import { replay } from './replay.js';
@@ -7,8 +8,19 @@ import type { Event } from './events.js';
 
 const filled: Settings = {
   github: { owner: 'an-owner', repo: 'a-repo', branch: 'master', token: 'ghp_secret' },
-  calendar: { execUrl: 'https://example.test/exec', secret: 'shared-shh', icsUrl: 'https://example.test/basic.ics' },
-  worker: { url: 'https://example.test/mcp/path-secret-1234', pathSecret: 'path-secret-1234' },
+  calendar: {
+    execUrl: 'https://example.test/exec',
+    secret: 'shared-shh',
+    icsUrl: 'https://example.test/basic.ics',
+    google: {
+      refreshToken: 'google-refresh-shh',
+      accessToken: 'google-access-shh',
+      expiresAt: 1_800_000_000_000,
+      email: 'someone@example.test',
+      logCalendarId: 'log-calendar@group.calendar.google.com',
+    },
+  },
+  worker: { url: 'https://example.test/mcp/path-secret-1234', pathSecret: 'path-secret-1234', base: 'https://example.test' },
   deviceId: 'device-alpha',
   deviceName: 'a laptop',
   theme: 'dark',
@@ -27,7 +39,17 @@ describe('toSyncable', () => {
 
   it('drops every secret and every device-local field', () => {
     const json = JSON.stringify(toSyncable(filled));
-    for (const secret of ['ghp_secret', 'shared-shh', 'path-secret-1234', 'device-alpha', 'a laptop']) {
+    for (const secret of [
+      'ghp_secret',
+      'shared-shh',
+      'path-secret-1234',
+      'device-alpha',
+      'a laptop',
+      'google-refresh-shh',
+      'google-access-shh',
+      'someone@example.test',
+      'log-calendar@group',
+    ]) {
       expect(json).not.toContain(secret);
     }
     expect(toSyncable(filled)).toEqual({
@@ -35,6 +57,9 @@ describe('toSyncable', () => {
       // that had to re-derive it could derive it differently.
       github: { owner: 'an-owner', repo: 'a-repo', branch: 'master' },
       calendar: { execUrl: 'https://example.test/exec', icsUrl: 'https://example.test/basic.ics' },
+      // The hostname syncs so every device can say the endpoint exists; the
+      // path secret that completes the URL does not.
+      worker: { base: 'https://example.test' },
       theme: 'dark',
       dayStartOffsetMs: 4 * 3600_000,
       idleThresholdMs: 12 * 60_000,
@@ -62,10 +87,12 @@ describe('settings events', () => {
     // token off replayed state should not compile, let alone return something.
     expect(state.settings.github).not.toHaveProperty('token');
     expect(state.settings.calendar).not.toHaveProperty('secret');
-    expect(state.settings).not.toHaveProperty('worker');
+    expect(state.settings.calendar).not.toHaveProperty('google');
+    expect(state.settings.worker).not.toHaveProperty('url');
+    expect(state.settings.worker).not.toHaveProperty('pathSecret');
     expect(state.settings).not.toHaveProperty('deviceId');
     expect(state.settings).not.toHaveProperty('deviceName');
-    for (const secret of ['ghp_secret', 'shared-shh', 'path-secret-1234', 'device-alpha']) {
+    for (const secret of ['ghp_secret', 'shared-shh', 'path-secret-1234', 'device-alpha', 'google-refresh-shh', 'google-access-shh']) {
       expect(JSON.stringify(state)).not.toContain(secret);
     }
   });
@@ -122,7 +149,26 @@ describe('validateSettings', () => {
     if (result.ok) {
       expect(result.value.github.token).toBe('');
       expect(result.value.theme).toBe('dark');
+      expect(result.value.worker.base).toBe('https://example.test');
+      expect(result.value.calendar.google).toEqual(EMPTY_GOOGLE_ACCESS);
     }
+  });
+
+  it('reads a settings file from a build before Google sign-in existed', () => {
+    // Every field added after v1 is optional with a default, and this device's
+    // own settings file from 0.6.0 is the case that matters.
+    const older = { calendar: { execUrl: 'https://example.test/exec', secret: 's', icsUrl: '' }, worker: { url: '', pathSecret: '' } };
+    const result = validateSettings(older);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.calendar.google).toEqual(EMPTY_GOOGLE_ACCESS);
+      expect(result.value.worker.base).toBe('');
+    }
+  });
+
+  it('refuses a Google access block of the wrong shape rather than half loading it', () => {
+    expect(validateSettings({ calendar: { google: 'yes' } }).ok).toBe(false);
+    expect(validateSettings({ calendar: { google: { expiresAt: 'soon' } } }).ok).toBe(false);
   });
 });
 

@@ -1,0 +1,5 @@
+{
+  "_comment": "The Google OAuth clients the apps sign in with. Public identifiers, not secrets: the Desktop client's secret is VITE_GOOGLE_DESKTOP_CLIENT_SECRET at build time. A fork registers its own project and replaces these; see docs/SETUP.md.",
+  "desktopClientId": "965210855153-8ldh568vp5kqumnc2haomoevk2vlfscm.apps.googleusercontent.com",
+  "androidClientId": "965210855153-sgppvtjuf6pjq257th7020icsnirr1b2.apps.googleusercontent.com"
+}
