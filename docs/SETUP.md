@@ -348,7 +348,9 @@ its own:
    the Google Calendar API, and publish the app.
 2. Under Clients, create a **Desktop app** client and an **Android** client
    (package `com.tohoot.app`, or your own, with the SHA-1 of the certificate
-   that signs your APK).
+   that signs your APK). On the Android client, open **Advanced settings** and
+   tick **Enable custom URI scheme**: Google leaves it off, and without it the
+   phone's sign-in ends on "Access blocked: request is invalid".
 3. Put both client ids in `google-oauth.json` at the repository root. The web
    build and the Android build both read it, so the client id the app signs in
    with and the URL scheme the phone registers cannot disagree.
