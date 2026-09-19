@@ -154,4 +154,18 @@ describe('DNS rebinding defence', () => {
     const res = await worker.fetch(post(`/mcp/${SECRET}`, LIST_TOOLS), env());
     expect(res.status).toBe(200);
   });
+
+  it("lets the app's own shells through, whose requests carry their own Origin", async () => {
+    // The desktop's HTTP plugin adds tauri://localhost (tauri.localhost on
+    // Windows) and the phone's WebView capacitor://localhost. The deploy
+    // check from the desktop was refused with 403 until these were allowed,
+    // and the app then threw the deploy away as failed.
+    for (const origin of ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'capacitor://localhost']) {
+      const res = await worker.fetch(post(`/mcp/${SECRET}`, LIST_TOOLS, { origin }), env());
+      expect(res.status, origin).toBe(200);
+    }
+    // And still not anyone else's page.
+    const res = await worker.fetch(post(`/mcp/${SECRET}`, LIST_TOOLS, { origin: 'https://evil.example.com' }), env());
+    expect(res.status).toBe(403);
+  });
 });

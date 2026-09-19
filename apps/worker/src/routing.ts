@@ -71,6 +71,16 @@ export function matchesMcpPath(pathname: string, secret: string): boolean {
 }
 
 /**
+ * The origins the app's own shells send. A Tauri window's requests carry
+ * `Origin: tauri://localhost` (or `http://tauri.localhost` on Windows), and
+ * a Capacitor WebView's `capacitor://localhost`, and the app calls the
+ * endpoint from both when it checks a deploy. The Origin check exists to stop
+ * a page on someone else's site driving the endpoint from a browser; these
+ * hostnames are nobody's site, and the path secret still guards the door.
+ */
+export const APP_ORIGIN_HOSTNAMES = ['localhost', 'tauri.localhost'];
+
+/**
  * The hostnames this deployment answers for.
  *
  * With none configured this falls back to the request's own host, which makes
