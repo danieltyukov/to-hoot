@@ -1,4 +1,4 @@
-export const VERSION = '0.7.5';
+export const VERSION = '0.8.0';
 
 export * from './models.js';
 export * from './events.js';

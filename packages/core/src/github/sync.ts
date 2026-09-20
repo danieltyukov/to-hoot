@@ -23,7 +23,7 @@ import { SCHEMA_VERSION, type Event } from '../events.js';
 import { DEVICE_ID_RULE, isValidDeviceId, ulid } from '../models.js';
 import { replay } from '../replay.js';
 import type { State } from '../state.js';
-import { isEmptyRepository, type RepoClient, type TreeFile } from './client.js';
+import { isEmptyRepository, type RepoClient, type TreeEntry, type TreeFile } from './client.js';
 import { SNAPSHOT_PATH, parseSnapshot, type SnapshotFile } from './snapshot.js';
 
 // One hydrator, shared with the Worker's snapshot backend. Two readers of the
@@ -118,6 +118,12 @@ interface Plan {
   compacted: boolean;
 }
 
+/** A blob a refresh has decided to read, and what to make of it once it has. */
+type WantedBlob =
+  | { entry: TreeEntry; kind: 'snapshot' }
+  | { entry: TreeEntry; kind: 'meta' }
+  | { entry: TreeEntry; kind: 'events'; deviceId: string };
+
 export class SyncEngine {
   /**
    * Events in the log the current snapshot does not cover. Refreshed whenever a
@@ -140,7 +146,7 @@ export class SyncEngine {
    * The head every cached field below was read from, and the head a write is
    * swapped against. `null` means the branch did not exist at that read.
    */
-  private head: string | null = null;
+  private currentHead: string | null = null;
   private files: EventFile[] = [];
   private events: Event[] = [];
   private meta: MetaFile = emptyMeta();
@@ -184,6 +190,24 @@ export class SyncEngine {
   }
 
   /**
+   * What the last read said, replayed onto its snapshot, with no request. A
+   * caller that has just pulled and wants the state does not need to ask the
+   * repository again whether anything changed in between.
+   */
+  state(): State {
+    return replay([...this.events], this.snapshotState);
+  }
+
+  /**
+   * The commit the last read saw, `null` for a repository with no commits
+   * yet. It moves when another device writes and when this one does, so a
+   * caller comparing two reads can tell whether there is anything new to take.
+   */
+  get head(): string | null {
+    return this.currentHead;
+  }
+
+  /**
    * The device registry as of the last read, copied so a caller cannot edit the
    * engine's own record of it. It is what `meta.json` said at the head, not a
    * live view: a device whose events are still only in the log and have never
@@ -221,7 +245,7 @@ export class SyncEngine {
     let attempts = 0;
     for (;;) {
       await this.refresh();
-      const planned = this.head;
+      const planned = this.currentHead;
       const plan = await this.plan(pending, batchPath);
       if (plan.files.length === 0) {
         return { status: 'unchanged', events: 0, compacted: false, attempts };
@@ -261,7 +285,7 @@ export class SyncEngine {
     for (;;) {
       await this.refresh();
       if (this.meta.devices[id] === undefined) return 'unchanged';
-      const planned = this.head;
+      const planned = this.currentHead;
       const devices: Record<string, DeviceRecord> = {};
       for (const [other, record] of Object.entries(this.meta.devices)) {
         if (other !== id) devices[other] = { ...record };
@@ -306,7 +330,7 @@ export class SyncEngine {
     for (;;) {
       await this.refresh();
       if (!this.compactionDue()) return false;
-      const planned = this.head;
+      const planned = this.currentHead;
       const plan = await this.plan([], '');
       if (plan.files.length === 0) return false;
       attempts += 1;
@@ -430,7 +454,7 @@ export class SyncEngine {
       // A repository with no commits yet is empty, not broken. The first push
       // creates the branch.
       if (!isEmptyRepository(err)) throw err;
-      this.head = null;
+      this.currentHead = null;
       this.adopt(undefined, [], emptyMeta(), []);
       return;
     }
@@ -443,15 +467,19 @@ export class SyncEngine {
     const copies: string[] = [];
     const live = new Set<string>();
 
+    // Decide what to read before reading any of it. The reads carry no
+    // dependency on one another, and each one is a round trip, so they go out
+    // together: a poll that finds three new files costs one round trip rather
+    // than three. Parsing happens afterwards, in path order, so the log is
+    // assembled the same way whatever order the answers arrived in.
+    const wanted: WantedBlob[] = [];
     for (const entry of entries) {
       if (entry.path === SNAPSHOT_PATH) {
-        live.add(entry.sha);
-        snapshot = parseSnapshot(await this.read(entry.sha));
+        wanted.push({ entry, kind: 'snapshot' });
         continue;
       }
       if (entry.path === META_PATH) {
-        live.add(entry.sha);
-        meta = parseMeta(await this.read(entry.sha));
+        wanted.push({ entry, kind: 'meta' });
         continue;
       }
       if (SNAPSHOT_COPY.test(entry.path)) {
@@ -462,8 +490,16 @@ export class SyncEngine {
       }
       const deviceId = deviceOfEventPath(entry.path);
       if (deviceId === undefined) continue; // anything else in the repository
-      live.add(entry.sha);
-      files.push({ path: entry.path, deviceId, events: parseEvents(await this.read(entry.sha)) });
+      wanted.push({ entry, kind: 'events', deviceId });
+    }
+    for (const { entry } of wanted) live.add(entry.sha);
+    await this.readAll([...live]);
+
+    for (const want of wanted) {
+      const text = this.blobs.get(want.entry.sha) ?? '';
+      if (want.kind === 'snapshot') snapshot = parseSnapshot(text);
+      else if (want.kind === 'meta') meta = parseMeta(text);
+      else files.push({ path: want.entry.path, deviceId: want.deviceId, events: parseEvents(text) });
     }
 
     for (const sha of [...this.blobs.keys()]) {
@@ -471,7 +507,7 @@ export class SyncEngine {
     }
 
     this.adopt(snapshot, files, meta, copies);
-    this.head = latest.sha;
+    this.currentHead = latest.sha;
     // Last, so a failure part way through re-reads next time instead of
     // believing it is up to date.
     this.etag = latest.etag;
@@ -490,12 +526,16 @@ export class SyncEngine {
       : this.events.filter(e => e.id > covers).length;
   }
 
-  private async read(sha: string): Promise<string> {
-    const cached = this.blobs.get(sha);
-    if (cached !== undefined) return cached;
-    const content = await this.client.getBlob(sha);
-    this.blobs.set(sha, content);
-    return content;
+  /**
+   * Fills the cache for every sha it does not hold yet, all at once. Distinct
+   * shas only, so two identical batches cost one fetch. Nothing is cached
+   * until every fetch has answered: a read that fails part way through leaves
+   * the cache as it was and the etag unset, so the next refresh tries again.
+   */
+  private async readAll(shas: string[]): Promise<void> {
+    const missing = [...new Set(shas)].filter(sha => !this.blobs.has(sha));
+    const fetched = await Promise.all(missing.map(sha => this.client.getBlob(sha)));
+    missing.forEach((sha, i) => this.blobs.set(sha, fetched[i]!));
   }
 
   /**
