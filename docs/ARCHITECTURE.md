@@ -153,11 +153,27 @@ When the ETag moves:
 
 returns every path and blob SHA in one request. Blobs are content-addressed and
 immutable, so a local SHA-to-content cache never needs invalidating and only
-genuinely new files are fetched.
+genuinely new files are fetched, and they are fetched together rather than one
+after another, so a poll that finds three new files costs one round trip.
 
-At one sync per minute per device that is roughly 240 requests an hour against a
-5,000 per hour primary limit and a 500 per hour content-generating secondary
-limit.
+The app keeps one engine, and with it the ETag, the blob cache and the resolved
+branch, for as long as the repository settings stay the same. A device on
+screen polls every ten seconds and a hidden one every minute, so a task added
+on another device, or by Claude, is on screen within about ten seconds. An idle
+poll is one free 304; a poll that finds something is three or four requests.
+Well inside the 5,000 per hour primary limit and the 500 per hour
+content-generating secondary limit.
+
+Writes are what the secondary limit actually counts, at three per commit. A
+change is pushed two seconds after it is made, so a burst of edits becomes one
+commit. A running timer is the exception: it banks a `timeDelta` every thirty
+seconds, and a commit per flush would be most of that hourly budget on one
+device and a moved head under every other device's every poll. So a running
+timer's own bookkeeping, its deltas and the calendar ledger that follows them,
+is held on the device and pushed with the next real change, when the timer
+stops, or after two minutes, whichever comes first. Nothing is at risk while it
+waits: it is on disk, and the total on another device is at most two minutes
+behind a timer that is still running.
 
 The Cloudflare Worker behind the claude.ai connector reads the same repository
 on a tighter budget: 50 subrequests and 10ms of CPU per request on the free

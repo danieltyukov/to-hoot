@@ -406,7 +406,9 @@ export default function App({
               onSave={patch => store.saveSettings(patch)}
               onSetTheme={t => store.setTheme(t)}
               syncStatus={syncStatus}
-              onSyncNow={() => sync.syncNow()}
+              // Everything, a running timer's held bookkeeping included: the
+              // button is a person asking for exactly that.
+              onSyncNow={() => sync.syncNow({ everything: true })}
               onForgetDevice={id => void sync.forgetDevice(id)}
               storageError={snapshot.storageError}
               onStartFreshLog={() => void store.startFreshLog()}

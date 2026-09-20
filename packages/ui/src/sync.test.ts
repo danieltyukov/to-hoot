@@ -1,10 +1,16 @@
 // @vitest-environment node
 import { DEFAULT_SETTINGS, cloneSettings, type FileStore, type Http, type Settings } from '@to-hoot/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { memoryStore } from './platform/browser.js';
-import { Store } from './store.js';
-import { SyncController } from './sync.js';
+import { FLUSH_MS, Store } from './store.js';
+import {
+  SYNC_AFTER_CHANGE_MS,
+  SYNC_EVERY_HIDDEN_MS,
+  SYNC_EVERY_MS,
+  SyncController,
+  TRACKING_PUSH_EVERY_MS,
+} from './sync.js';
 
 /*
  * These drive the real SyncEngine and the real GitHubClient against a Git Data
@@ -43,9 +49,9 @@ function gitApi({ defaultBranch = 'main', empty = true } = {}): {
     const rest = url.pathname.replace(/^\/repos\/[^/]+\/[^/]+/, '');
     calls.push(`${req.method ?? 'GET'} ${rest || '/'}`);
     const body = (): Record<string, never> => (req.body === undefined ? {} : JSON.parse(req.body));
-    const send = (status: number, value: unknown) => ({
+    const send = (status: number, value: unknown, headers: Record<string, string> = {}) => ({
       status,
-      headers: {} as Record<string, string>,
+      headers,
       text: async () => JSON.stringify(value),
     });
 
@@ -100,7 +106,12 @@ function gitApi({ defaultBranch = 'main', empty = true } = {}): {
       return send(200, {});
     }
     if (rest.startsWith('/commits')) {
-      return ref === null ? send(409, { message: 'empty' }) : send(200, [{ sha: ref }]);
+      if (ref === null) return send(409, { message: 'empty' });
+      // The etag is the head, which is what the real one amounts to: a poll
+      // that carries the current one is answered 304 with no body at all.
+      const etag = `"${ref}"`;
+      if (req.headers?.['if-none-match'] === etag) return send(304, null, { etag });
+      return send(200, [{ sha: ref }], { etag });
     }
     if (rest.startsWith('/git/trees/')) {
       return send(200, { truncated: false, tree: treeOf(rest.slice('/git/trees/'.length).split('?')[0]!) });
@@ -140,14 +151,18 @@ function settingsFor(overrides: Partial<Settings['github']> = {}): Settings {
   return s;
 }
 
-function deviceOn(http: Http, deviceId: string, settings: Settings) {
+function deviceOn(http: Http, deviceId: string, settings: Settings, extra: { visible?: () => boolean } = {}) {
   const store = new Store({ storage: null, vault: memoryStore(), files: memoryFiles() });
   store.saveSettings({ deviceId, deviceName: deviceId });
-  const sync = new SyncController({ store, http, settings: () => settings });
+  const sync = new SyncController({ store, http, settings: () => settings, ...extra });
   return { store, sync };
 }
 
 describe('SyncController', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('does nothing at all until it has somewhere to sync to', async () => {
     const api = gitApi();
     const settings = cloneSettings(DEFAULT_SETTINGS);
@@ -310,6 +325,200 @@ describe('SyncController', () => {
     // Bootstrapped through the Contents API, then the ordinary path.
     expect(api.calls.some(c => c.startsWith('PUT /contents/'))).toBe(true);
     expect(api.paths().some(p => p.startsWith('events/laptop/'))).toBe(true);
+  });
+
+  it('keeps what it read, so a poll that finds nothing new is one request', async () => {
+    // The whole point of the conditional GET: a 304 costs nothing against the
+    // rate limit and takes one round trip. That only holds if the engine that
+    // learned the etag is still the engine doing the next poll.
+    const api = gitApi({ empty: false });
+    const { store, sync } = deviceOn(api.http, 'laptop', settingsFor());
+    store.addTask('Solder the preamp');
+    await sync.syncNow();
+
+    api.calls.length = 0;
+    expect((await sync.syncNow()).phase).toBe('ok');
+    expect(api.calls).toEqual(['GET /commits']);
+  });
+
+  it('reads only what another device added, not the whole repository again', async () => {
+    const api = gitApi({ empty: false });
+    const settings = settingsFor();
+    const laptop = deviceOn(api.http, 'laptop', settings);
+    const phone = deviceOn(api.http, 'phone', settings);
+    laptop.store.addTask('Solder the preamp');
+    await laptop.sync.syncNow();
+    await phone.sync.syncNow();
+
+    phone.store.addTask('Buy solder');
+    await phone.sync.syncNow();
+
+    api.calls.length = 0;
+    await laptop.sync.syncNow();
+    expect(Object.values(laptop.store.getSnapshot().state.tasks).map(t => t.title).sort()).toEqual([
+      'Buy solder',
+      'Solder the preamp',
+    ]);
+    // The head moved, so the tree is re-read, and then the phone's files and
+    // nothing else: the branch is not resolved again and the laptop's own file
+    // is not fetched a second time.
+    const theirs = api.paths().filter(p => p.startsWith('events/phone/')).length;
+    expect(theirs).toBeGreaterThan(0);
+    expect(api.calls.filter(c => c === 'GET /')).toEqual([]);
+    expect(api.calls.filter(c => c.startsWith('GET /git/blobs/'))).toHaveLength(theirs);
+  });
+
+  it('starts over when the repository it syncs to changes', async () => {
+    const api = gitApi({ empty: false });
+    const settings = settingsFor();
+    const { store, sync } = deviceOn(api.http, 'laptop', settings);
+    store.addTask('Solder the preamp');
+    await sync.syncNow();
+
+    settings.github.repo = 'to-hoot-data-2';
+    api.calls.length = 0;
+    await sync.syncNow();
+    // A different repository means a different branch to resolve and a
+    // different head to read. Nothing cached from the old one applies.
+    expect(api.calls[0]).toBe('GET /');
+  });
+
+  it('follows a sync with another when a change landed while it ran', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const api = gitApi({ empty: false });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let gated = true;
+    // Held at the first write, which is after the run has decided what to
+    // push. A change made now is one this run will not carry.
+    const http: Http = async req => {
+      if (gated && req.method === 'POST' && req.url.endsWith('/git/trees')) {
+        gated = false;
+        await gate;
+      }
+      return api.http(req);
+    };
+    const { store, sync } = deviceOn(http, 'laptop', settingsFor());
+    store.addTask('Solder the preamp');
+    const first = sync.syncNow();
+    await vi.waitFor(() => expect(gated).toBe(false));
+
+    store.addTask('Order the enclosure');
+    sync.soon();
+    vi.advanceTimersByTime(SYNC_AFTER_CHANGE_MS);
+    release();
+    await first;
+    expect(api.paths().filter(p => p.startsWith('events/laptop/'))).toHaveLength(1);
+    // Nobody asks again. The controller noticed the change on its own.
+    await vi.waitFor(() => expect(store.pending()).toHaveLength(0));
+    expect(api.paths().filter(p => p.startsWith('events/laptop/'))).toHaveLength(2);
+  });
+
+  it('holds a running timer\'s bookkeeping rather than committing every flush', async () => {
+    // A timer flushes a timeDelta every FLUSH_MS. Committing each one is a
+    // commit every half minute per device, which is most of GitHub's hourly
+    // budget for writes and keeps every other device's poll from ever being a
+    // 304. The time is not lost: it is pushed with the next real change, when
+    // the timer stops, or after TRACKING_PUSH_EVERY_MS at the latest.
+    const api = gitApi({ empty: false });
+    let clock = new Date(2026, 7, 23, 9, 0, 0).getTime();
+    const now = () => clock;
+    const store = new Store({ now, storage: null, vault: memoryStore(), files: memoryFiles() });
+    store.saveSettings({ deviceId: 'laptop' });
+    const sync = new SyncController({ store, http: api.http, settings: () => settings, now });
+    const settings = settingsFor();
+    const id = store.addTask('Solder the preamp');
+    await sync.syncNow();
+    const commits = () => api.calls.filter(c => c === 'POST /git/commits').length;
+    const before = commits();
+
+    store.start(id);
+    clock += FLUSH_MS;
+    store.tick();
+    expect(store.pending()).toHaveLength(1);
+    let status = await sync.syncNow();
+    expect(commits()).toBe(before);
+    // Not a backlog: nothing is waiting that should have gone.
+    expect(status.phase).toBe('ok');
+    expect(status.pending).toBe(0);
+    expect(status.detail).toBe('Everything is synced.');
+
+    // A real change takes the held time with it.
+    store.addTask('Order the enclosure');
+    status = await sync.syncNow();
+    expect(commits()).toBe(before + 1);
+    expect(store.pending()).toHaveLength(0);
+
+    // Stopping is what makes the total final, so it goes at once.
+    clock += FLUSH_MS;
+    store.tick();
+    await sync.syncNow();
+    expect(commits()).toBe(before + 1);
+    store.stop();
+    await sync.syncNow();
+    expect(commits()).toBe(before + 2);
+    expect(store.pending()).toHaveLength(0);
+
+    // Left running, the time still reaches the repository on its own.
+    store.start(id);
+    clock += FLUSH_MS;
+    store.tick();
+    await sync.syncNow();
+    expect(commits()).toBe(before + 2);
+    clock += TRACKING_PUSH_EVERY_MS;
+    store.tick();
+    await sync.syncNow();
+    expect(commits()).toBe(before + 3);
+    expect(store.pending()).toHaveLength(0);
+  });
+
+  it('pushes held bookkeeping when asked to sync everything', async () => {
+    const api = gitApi({ empty: false });
+    let clock = new Date(2026, 7, 23, 9, 0, 0).getTime();
+    const now = () => clock;
+    const store = new Store({ now, storage: null, vault: memoryStore(), files: memoryFiles() });
+    store.saveSettings({ deviceId: 'laptop' });
+    const settings = settingsFor();
+    const sync = new SyncController({ store, http: api.http, settings: () => settings, now });
+    const id = store.addTask('Solder the preamp');
+    await sync.syncNow();
+    store.start(id);
+    clock += FLUSH_MS;
+    store.tick();
+    const before = api.calls.filter(c => c === 'POST /git/commits').length;
+    await sync.syncNow({ everything: true });
+    expect(api.calls.filter(c => c === 'POST /git/commits')).toHaveLength(before + 1);
+    expect(store.pending()).toHaveLength(0);
+  });
+
+  it('polls often while the app is visible and rarely while it is hidden', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const api = gitApi({ empty: false });
+    let visible = true;
+    const { sync } = deviceOn(api.http, 'laptop', settingsFor(), { visible: () => visible });
+    // The device's own settings event goes first, so every tick below is a
+    // poll that finds nothing: one conditional request each.
+    await sync.syncNow();
+    api.calls.length = 0;
+    const polls = () => api.calls.filter(c => c === 'GET /commits').length;
+    const stop = sync.start();
+
+    await vi.advanceTimersByTimeAsync(SYNC_EVERY_MS);
+    expect(polls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SYNC_EVERY_MS);
+    expect(polls()).toBe(2);
+
+    visible = false;
+    await vi.advanceTimersByTimeAsync(SYNC_EVERY_MS);
+    // The tick that was already scheduled fires, and the next one is slow.
+    expect(polls()).toBe(3);
+    await vi.advanceTimersByTimeAsync(SYNC_EVERY_HIDDEN_MS - SYNC_EVERY_MS);
+    expect(polls()).toBe(3);
+    await vi.advanceTimersByTimeAsync(SYNC_EVERY_MS);
+    expect(polls()).toBe(4);
+    stop();
   });
 
   it('joins a sync already in flight instead of racing it', async () => {

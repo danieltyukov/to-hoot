@@ -110,11 +110,14 @@ forget the Claude endpoint's `worker` entry while the endpoint is still deployed
 
 ### When it syncs
 
-On its own, and opportunistically: once the log has loaded, once a minute, when
-the app comes back to the foreground, and shortly after anything changes. You
-never have to press anything. There is a **Sync now** button in Settings, Sync,
-beside the status line, and it is there for reassurance rather than because sync
-needs it.
+On its own, and opportunistically: once the log has loaded, every ten seconds
+while the app is on screen and once a minute while it is hidden, when the app
+comes back to the foreground, and a couple of seconds after anything changes.
+A task added on your phone, or by Claude, is on the desktop within about ten
+seconds. You never have to press anything. There is a **Sync now** button in
+Settings, Sync, beside the status line, and it is there for reassurance rather
+than because sync needs it; it also pushes a running timer's time at once,
+which otherwise travels every couple of minutes rather than every flush.
 
 Nothing fights the platform for background execution, because it does not have
 to. Every event carries its own timestamp and device, and tracked time carries an

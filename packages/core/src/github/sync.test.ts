@@ -32,6 +32,9 @@ class FakeRepo implements RepoClient {
   /** The real client reads the ref once per attempt, so this counts attempts. */
   getRefCalls = 0;
   blobReads: string[] = [];
+  /** Blob reads in flight at once, at the busiest moment. */
+  maxBlobsInFlight = 0;
+  private blobsInFlight = 0;
   /** Runs inside a commit, before the head is compared: the TOCTOU window. */
   beforeCommit?: () => void;
   /** Makes the polling read fail, to stand in for a 409 or a revoked token. */
@@ -64,6 +67,12 @@ class FakeRepo implements RepoClient {
 
   async getBlob(sha: string): Promise<string> {
     this.blobReads.push(sha);
+    // A real blob read is a round trip. Yielding to the event loop is what lets
+    // two reads overlap, which is what `maxBlobsInFlight` measures.
+    this.blobsInFlight += 1;
+    this.maxBlobsInFlight = Math.max(this.maxBlobsInFlight, this.blobsInFlight);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    this.blobsInFlight -= 1;
     const content = this.bySha.get(sha);
     if (content === undefined) throw new Error(`no blob ${sha}`);
     return content;
@@ -221,6 +230,20 @@ describe('SyncEngine', () => {
     const second = await engine.pull();
     expect(second).toEqual(first);
     expect(gh.blobReads.length).toBe(readsAfterFirst);
+  });
+
+  it('fetches the files a read needs at once, not one after another', async () => {
+    // Every new file is a round trip, and a device polls after every commit
+    // another device makes. Serial round trips at a third of a second each
+    // are what made a sync take seconds; the fetches carry no dependency on
+    // each other, so they go out together.
+    gh.blob(...eventFile('dev-a', [addTask('t1', 'one')]));
+    gh.blob(...eventFile('dev-b', [addTask('t2', 'two', { deviceId: 'dev-b' })]));
+    gh.blob(...eventFile('dev-c', [addTask('t3', 'three', { deviceId: 'dev-c' })]));
+    gh.blob('meta.json', JSON.stringify({ schemaVersion: 1, devices: {} }));
+    const pulled = await engine.pull();
+    expect(pulled.map(e => e.entityId).sort()).toEqual(['t1', 't2', 't3']);
+    expect(gh.maxBlobsInFlight).toBe(4);
   });
 
   it('fetches a blob once, because a sha names its content forever', async () => {
