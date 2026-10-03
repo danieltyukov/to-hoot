@@ -42,9 +42,9 @@ function setup(
   });
   // Past the wizard. First run is covered separately, below.
   if (!options.firstRun) store.finishSetup();
-  // Before the render, deliberately: the calendar reads once on mount and then
-  // on a ten minute timer, so settings that arrive afterwards are settings the
-  // first read never sees.
+  // Before the render, so the calendar's first read on mount already sees
+  // them. Settings that arrive later trigger a read of their own; the test
+  // "reads the calendar as soon as its settings arrive" covers that path.
   if (options.settings !== undefined) store.saveSettings(options.settings);
   const utils = render(<App store={store} http={options.http} platform={options.platform} />);
 
@@ -801,6 +801,22 @@ describe('tracking a meeting straight off the timeline', () => {
 
   const meetingTask = (store: Store) =>
     Object.values(store.getSnapshot().state.tasks).find(t => t.calendarEventId === MEETING.id);
+
+  it('reads the calendar as soon as its settings arrive, not ten minutes later', async () => {
+    // The shells load settings from an async store, so on a real launch they
+    // arrive after the calendar's first read on mount, and so does a calendar
+    // connected from Settings. Either way the day has to appear then.
+    const { http } = withMeeting();
+    const { store } = setup({ http });
+    expect(screen.queryByRole('button', { name: /Track time on Technical Updates/ })).toBeNull();
+
+    act(() =>
+      store.saveSettings({
+        calendar: { ...store.getSnapshot().settings.calendar, execUrl: 'https://script.google.com/macros/s/AK/exec', secret: 'x'.repeat(40) },
+      }),
+    );
+    expect(await screen.findByRole('button', { name: /Track time on Technical Updates/ }, { timeout: 3000 })).toBeInTheDocument();
+  });
 
   it('creates the task and starts its timer on one press', async () => {
     const { user, store, block } = await openWithMeeting();

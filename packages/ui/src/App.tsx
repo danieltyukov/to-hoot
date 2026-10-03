@@ -57,15 +57,13 @@ export interface AppProps {
   store?: Store;
   /** The shell's transport. Defaults to fetch, which the browser build uses. */
   http?: Http;
-  /** Absolute path to the built MCP server, for the command the wizard prints. */
-  mcpServerPath?: string;
   /**
    * The shell. Used for the resume signal, for the window a desktop draws no
    * title bar for, and for opening a link somewhere that is not this window.
    * Absent in tests and in SSR.
    */
   platform?:
-    | Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'>
+    | Pick<Platform, 'onResume' | 'window' | 'openUrl' | 'kind' | 'oauthLoopback' | 'oauthScheme' | 'agents'>
     | undefined;
   /** The sync controller. Injectable so a test can watch when a sync is asked for. */
   sync?: SyncController;
@@ -92,7 +90,6 @@ function startOfDay(now: number, offsetMs: number): number {
 export default function App({
   store: injected,
   http = browserHttp,
-  mcpServerPath,
   platform,
   sync: injectedSync,
 }: AppProps = {}) {
@@ -176,6 +173,28 @@ export default function App({
   calendar.googleClient = googleClientFor(platform?.kind);
 
   useEffect(() => calendar.start(), [calendar]);
+  /*
+   * Read again the moment the calendar's settings change. The first read runs
+   * on mount, and on every launch of a shell that is before the settings have
+   * come back from its async store, so it saw no calendar at all and the day
+   * stayed empty until the ten minute timer; connecting a calendar in Settings
+   * waited for the same timer. Only what decides where the day is read from
+   * is in the key: a refreshed access token is not a reason to read again.
+   */
+  const { calendar: calendarSettings, dayStartOffsetMs } = snapshot.settings;
+  const calendarSource = [
+    calendarSettings.icsUrl,
+    calendarSettings.execUrl,
+    calendarSettings.secret,
+    calendarSettings.google.refreshToken !== '',
+    dayStartOffsetMs,
+  ].join('\n');
+  const readSource = useRef(calendarSource);
+  useEffect(() => {
+    if (readSource.current === calendarSource) return;
+    readSource.current = calendarSource;
+    void calendar.refresh();
+  }, [calendar, calendarSource]);
   useEffect(() => {
     calendar.syncWriteback(snapshot.state);
   }, [calendar, snapshot.state]);
@@ -345,7 +364,6 @@ export default function App({
             settings={snapshot.settings}
             onSave={patch => store.saveSettings(patch)}
             onDone={() => store.finishSetup()}
-            mcpServerPath={mcpServerPath}
             openUrl={platform?.openUrl}
             deviceKind={platform?.kind}
             platform={platform}
@@ -415,8 +433,7 @@ export default function App({
               onExport={() => store.exportJson()}
               onImport={text => store.importJson(text)}
               onClose={() => setShowSettings(false)}
-              mcpServerPath={mcpServerPath}
-              openUrl={platform?.openUrl}
+                openUrl={platform?.openUrl}
               deviceKind={platform?.kind}
               platform={platform}
             />
