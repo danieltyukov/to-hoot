@@ -5,16 +5,16 @@
 // one of them the same way. What differs is only where each agent keeps its
 // list of servers and how it spells one entry, which is this file.
 //
-// The desktop shell decides *where* (an agent id resolves to a file in Rust,
-// so the webview cannot name an arbitrary path). This file decides *what*: the
-// key and the entry, and the same entry rendered as a snippet for anyone who
-// would rather paste it.
+// The desktop shell decides *where* (an agent id resolves to a file and a key
+// in Rust, so the webview cannot name an arbitrary path), installs the server,
+// and refuses any entry that would run something else. This file decides how
+// each agent spells the entry, and renders the same entry as a snippet for
+// anyone who would rather paste it. The keys here are for the snippets; the
+// shell has its own copy, and a test on each side holds them.
 
-import { VERSION, type AgentId, type Http, type LocalServer, type Settings } from '@to-hoot/core';
+import type { AgentId, LocalServer, Settings } from '@to-hoot/core';
 
-import type { Check } from './setup.js';
-
-/** The name the server has in every agent's config. */
+/** The name the server has in every agent's config. The shell writes it too. */
 export const SERVER_NAME = 'to-hoot';
 
 /** What an entry points at: the deployed endpoint, or the local stdio server. */
@@ -150,23 +150,38 @@ export function snippetFor(agent: AgentSpec, target: McpTarget): string {
 export const TOKEN_PLACEHOLDER = '<a GitHub token that can read and write the data repository>';
 
 /**
- * The local server's entry: node, the bundled server, and the data repository
- * as environment, which is all the stdio server reads its configuration from.
+ * The installed server's entry: node, the bundled server, and the path of the
+ * app's own settings file, which the server reads the data repository and its
+ * token from when it starts. The token is not in the entry: it stays in one
+ * owner-only file instead of in every agent's config, some of which sync to a
+ * cloud account, and signing in again reaches every agent at once.
  */
-export function localTarget(
-  github: Settings['github'],
-  server: Pick<LocalServer, 'path' | 'node'>,
-  token: string = github.token,
-): Extract<McpTarget, { kind: 'local' }> {
+export function installedTarget(server: LocalServer): Extract<McpTarget, { kind: 'local' }> {
+  return {
+    kind: 'local',
+    command: server.node ?? 'node',
+    args: [server.path],
+    env: { TO_HOOT_SETTINGS: server.settings },
+  };
+}
+
+/** Where the stdio server is in a checkout, after `npm run build -w @to-hoot/mcp`. */
+export const CHECKOUT_SERVER = 'apps/mcp/dist/index.js';
+
+/**
+ * The entry for a server run from a checkout, written by hand: the data
+ * repository as environment, with the token left for the person to fill in.
+ */
+export function checkoutTarget(github: Settings['github']): Extract<McpTarget, { kind: 'local' }> {
   const env: Record<string, string> = {
-    TO_HOOT_GITHUB_OWNER: github.owner,
-    TO_HOOT_GITHUB_REPO: github.repo,
-    TO_HOOT_GITHUB_TOKEN: token,
+    TO_HOOT_GITHUB_OWNER: github.owner || '<owner>',
+    TO_HOOT_GITHUB_REPO: github.repo || '<repository>',
+    TO_HOOT_GITHUB_TOKEN: TOKEN_PLACEHOLDER,
   };
   // Unset means the repository's default branch, which is what the server
   // falls back to; an empty value would be the same mistake spelled out.
   if (github.branch !== '') env['TO_HOOT_GITHUB_BRANCH'] = github.branch;
-  return { kind: 'local', command: server.node ?? 'node', args: [server.path], env };
+  return { kind: 'local', command: 'node', args: [CHECKOUT_SERVER], env };
 }
 
 /** The oldest Node the stdio server's SDK supports. */
@@ -176,44 +191,6 @@ export function nodeTooOld(version: string | null): boolean {
   if (version === null) return false;
   const major = Number.parseInt(version, 10);
   return Number.isFinite(major) && major < MIN_NODE_MAJOR;
-}
-
-/*
- * The stdio server, as one file.
- *
- * The release bundles `apps/mcp` with every dependency into a single module,
- * the same way it bundles the Worker, so an installed app can run the local
- * server without a checkout or an npm install. The app downloads the copy for
- * its own version, which is the server it was tested against.
- */
-export const MCP_BUNDLE_ASSET = 'to-hoot-mcp.mjs';
-
-export function mcpBundleUrl(version: string = VERSION): string {
-  return `https://github.com/danieltyukov/to-hoot/releases/download/v${version}/${MCP_BUNDLE_ASSET}`;
-}
-
-export async function fetchMcpBundle(http: Http, url: string = mcpBundleUrl()): Promise<Check<string>> {
-  let res: { status: number; text: () => Promise<string> };
-  try {
-    res = await http({ url, method: 'GET', headers: { accept: 'application/javascript, */*' } });
-  } catch (err) {
-    return { status: 'error', detail: `Could not download the local server: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  if (res.status === 404) {
-    return {
-      status: 'error',
-      detail: `No local server is published for version ${VERSION}.`,
-      hint: 'A release builds one. Until then, deploy the endpoint below, or build apps/mcp from a checkout.',
-    };
-  }
-  if (res.status !== 200) return { status: 'error', detail: `The release answered ${res.status}.` };
-  const text = await res.text();
-  // The bundle starts with a node shebang and names itself in its startup
-  // line; a sign-in page or a release listing does neither.
-  if (!text.startsWith('#!/usr/bin/env node') || !text.includes('to-hoot mcp')) {
-    return { status: 'error', detail: 'What came back is not the to-hoot server.' };
-  }
-  return { status: 'ok', detail: `Downloaded ${Math.round(text.length / 1024)} KB.`, value: text };
 }
 
 /**

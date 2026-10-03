@@ -1,14 +1,13 @@
 // @vitest-environment node
-import { DEFAULT_SETTINGS, VERSION } from '@to-hoot/core';
+import { DEFAULT_SETTINGS } from '@to-hoot/core';
 import { describe, expect, it } from 'vitest';
 
 import {
   AGENTS,
-  MCP_BUNDLE_ASSET,
+  TOKEN_PLACEHOLDER,
   agentById,
-  fetchMcpBundle,
-  localTarget,
-  mcpBundleUrl,
+  checkoutTarget,
+  installedTarget,
   nodeTooOld,
   snippetFor,
   targetKey,
@@ -18,7 +17,8 @@ import {
 const URL_ = 'https://to-hoot-mcp.someone.workers.dev/mcp/abc';
 const remote: McpTarget = { kind: 'remote', url: URL_ };
 const github = { ...DEFAULT_SETTINGS.github, owner: 'someone', repo: 'to-hoot-data', token: 'gho_x' };
-const local = localTarget(github, { path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/bin/node' });
+const SETTINGS = '/home/someone/.local/share/com.tohoot.app/to-hoot.json';
+const local = installedTarget({ path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/bin/node', nodeVersion: '22.3.0', settings: SETTINGS });
 
 describe('the agent catalogue', () => {
   it('has one entry per agent the shell can write, with unique ids', () => {
@@ -38,8 +38,8 @@ describe('the agent catalogue', () => {
     expect(remoteOf('opencode')).toEqual({ type: 'remote', url: URL_, enabled: true });
   });
 
-  it('spells a local entry with node, the server, and the repository as environment', () => {
-    const env = { TO_HOOT_GITHUB_OWNER: 'someone', TO_HOOT_GITHUB_REPO: 'to-hoot-data', TO_HOOT_GITHUB_TOKEN: 'gho_x' };
+  it('spells a local entry with node, the server, and the app settings it reads, never the token', () => {
+    const env = { TO_HOOT_SETTINGS: SETTINGS };
     const plain = { command: '/usr/bin/node', args: ['/data/mcp/to-hoot-mcp.mjs'], env };
     expect(agentById('claude-code').entry(local)).toEqual({ type: 'stdio', ...plain });
     expect(agentById('codex').entry(local)).toEqual(plain);
@@ -52,11 +52,20 @@ describe('the agent catalogue', () => {
     });
   });
 
-  it('names a branch only when there is one, and falls back to node on the PATH', () => {
-    expect(local.env).not.toHaveProperty('TO_HOOT_GITHUB_BRANCH');
-    const branched = localTarget({ ...github, branch: 'trunk' }, { path: '/s.mjs', node: null });
-    expect(branched.env['TO_HOOT_GITHUB_BRANCH']).toBe('trunk');
-    expect(branched.command).toBe('node');
+  it('falls back to node on the PATH when none was found', () => {
+    expect(installedTarget({ path: '/s.mjs', node: null, nodeVersion: null, settings: SETTINGS }).command).toBe('node');
+  });
+
+  it('writes a checkout entry by hand with a placeholder where the token goes', () => {
+    const bare = checkoutTarget(github);
+    expect(bare.args).toEqual(['apps/mcp/dist/index.js']);
+    expect(bare.env).toEqual({
+      TO_HOOT_GITHUB_OWNER: 'someone',
+      TO_HOOT_GITHUB_REPO: 'to-hoot-data',
+      TO_HOOT_GITHUB_TOKEN: TOKEN_PLACEHOLDER,
+    });
+    expect(JSON.stringify(bare)).not.toContain('gho_x');
+    expect(checkoutTarget({ ...github, branch: 'trunk' }).env['TO_HOOT_GITHUB_BRANCH']).toBe('trunk');
   });
 
   it('identifies an entry by its URL or its program', () => {
@@ -82,15 +91,18 @@ describe('snippets', () => {
         'args = ["/data/mcp/to-hoot-mcp.mjs"]',
         '',
         '[mcp_servers.to-hoot.env]',
-        'TO_HOOT_GITHUB_OWNER = "someone"',
-        'TO_HOOT_GITHUB_REPO = "to-hoot-data"',
-        'TO_HOOT_GITHUB_TOKEN = "gho_x"',
+        `TO_HOOT_SETTINGS = "${SETTINGS}"`,
       ].join('\n'),
     );
   });
 
   it('escapes a Windows path for TOML', () => {
-    const win = localTarget(github, { path: 'C:\\Users\\me\\to-hoot-mcp.mjs', node: 'C:\\Program Files\\nodejs\\node.exe' });
+    const win = installedTarget({
+      path: 'C:\\Users\\me\\to-hoot-mcp.mjs',
+      node: 'C:\\Program Files\\nodejs\\node.exe',
+      nodeVersion: '22.0.0',
+      settings: 'C:\\Users\\me\\AppData\\Roaming\\com.tohoot.app\\to-hoot.json',
+    });
     expect(snippetFor(agentById('codex'), win)).toContain('command = "C:\\\\Program Files\\\\nodejs\\\\node.exe"');
   });
 });
@@ -101,23 +113,5 @@ describe('node', () => {
     expect(nodeTooOld('20.0.0')).toBe(false);
     expect(nodeTooOld('22.3.0')).toBe(false);
     expect(nodeTooOld(null)).toBe(false);
-  });
-});
-
-describe('the local server bundle', () => {
-  const http = (status: number, text: string) => async () => ({ status, headers: {}, text: async () => text });
-
-  it('is the release asset for this version', () => {
-    expect(mcpBundleUrl()).toBe(`https://github.com/danieltyukov/to-hoot/releases/download/v${VERSION}/${MCP_BUNDLE_ASSET}`);
-  });
-
-  it('accepts the bundle and refuses anything else', async () => {
-    const bundle = '#!/usr/bin/env node\nconsole.error("to-hoot mcp: serving")';
-    expect(await fetchMcpBundle(http(200, bundle))).toMatchObject({ status: 'ok', value: bundle });
-    expect(await fetchMcpBundle(http(200, '<html>sign in</html>'))).toMatchObject({ status: 'error' });
-    expect(await fetchMcpBundle(http(404, 'Not Found'))).toMatchObject({
-      status: 'error',
-      detail: `No local server is published for version ${VERSION}.`,
-    });
   });
 });

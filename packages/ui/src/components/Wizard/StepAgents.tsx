@@ -5,10 +5,8 @@ import {
   AGENTS,
   CHATGPT_CONNECTORS,
   MIN_NODE_MAJOR,
-  SERVER_NAME,
-  TOKEN_PLACEHOLDER,
-  fetchMcpBundle,
-  localTarget,
+  checkoutTarget,
+  installedTarget,
   nodeTooOld,
   snippetFor,
   targetKey,
@@ -57,9 +55,6 @@ export interface StepAgentsProps {
   /** The shell, for whether a sign-in can come back to it, and the agents' config files. */
   platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'agents'> | undefined;
 }
-
-/** Where the stdio server is in a checkout, for snippets written in a browser. */
-const CHECKOUT_SERVER = 'apps/mcp/dist/index.js';
 
 type Stage = { status: FlowStatus; detail?: string; hint?: string };
 
@@ -326,7 +321,7 @@ export function StepAgents({ http, settings, onSave, openUrl, platform }: StepAg
       </p>
 
       <h3 className="micro">Agents on this computer</h3>
-      <LocalAgents http={http} settings={settings} githubReady={githubReady} platform={platform} />
+      <LocalAgents settings={settings} githubReady={githubReady} platform={platform} />
 
       <hr className="step-rule" />
 
@@ -544,12 +539,10 @@ const isUrl = (target: string): boolean => /^https?:\/\//i.test(target);
  * other way round.
  */
 function LocalAgents({
-  http,
   settings,
   githubReady,
   platform,
 }: {
-  http: Http;
   settings: Settings;
   githubReady: boolean;
   platform?: Pick<Platform, 'agents'> | undefined;
@@ -558,15 +551,27 @@ function LocalAgents({
   const endpoint = settings.worker.url;
   const [entries, setEntries] = useState<Partial<Record<AgentId, AgentEntry>>>({});
   const [rows, setRows] = useState<Partial<Record<AgentId, Stage>>>({});
-  /** The local server once installed this session, so seven presses download it once. */
-  const installed = useRef<LocalServer | null>(null);
+  /** The last install's answer, for the by-hand snippet. */
+  const [installed, setInstalled] = useState<LocalServer | null>(null);
+  /**
+   * An install in flight, so presses on several rows at once share it. Each
+   * press after it settles asks again: the shell downloads only when the copy
+   * it has is for another version, and looks for node every time, so a person
+   * who installs Node.js and presses Add again is not told it is missing.
+   */
+  const installing = useRef<Promise<LocalServer> | null>(null);
+
+  // What a row last reported describes the endpoint it was added for. A new
+  // endpoint makes that out of date, and the row falls back to what the file
+  // says, which is where a stale entry shows.
+  useEffect(() => setRows({}), [endpoint]);
 
   useEffect(() => {
     if (configs === undefined) return;
     let live = true;
     for (const agent of AGENTS) {
       configs
-        .inspect(agent.id, agent.key, SERVER_NAME)
+        .inspect(agent.id)
         .then(entry => {
           if (live) setEntries(e => ({ ...e, [agent.id]: entry }));
         })
@@ -582,17 +587,21 @@ function LocalAgents({
   const ensureServer = useCallback(async (): Promise<
     { ok: true; server: LocalServer } | { ok: false; detail: string; hint?: string | undefined }
   > => {
-    if (installed.current !== null) return { ok: true, server: installed.current };
     if (configs === undefined) return { ok: false, detail: 'This device cannot run agents.' };
-    const bundle = await fetchMcpBundle(http);
-    if (bundle.status === 'error') return { ok: false, detail: bundle.detail, hint: bundle.hint };
+    installing.current ??= configs.installServer().finally(() => {
+      installing.current = null;
+    });
     try {
-      installed.current = await configs.installServer(bundle.value);
-      return { ok: true, server: installed.current };
+      const server = await installing.current;
+      setInstalled(server);
+      return { ok: true, server };
     } catch (err) {
-      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+      const detail = err instanceof Error ? err.message : String(err);
+      return /no local server is published/.test(detail)
+        ? { ok: false, detail, hint: 'A release builds one. Until then, deploy the endpoint below.' }
+        : { ok: false, detail };
     }
-  }, [configs, http]);
+  }, [configs]);
 
   const add = async (agent: AgentSpec): Promise<void> => {
     if (configs === undefined) return;
@@ -601,13 +610,13 @@ function LocalAgents({
     if (endpoint !== '') {
       target = { kind: 'remote', url: endpoint };
     } else {
-      setRow(agent.id, { status: 'running', detail: 'Downloading the local server for this version.' });
+      setRow(agent.id, { status: 'running', detail: 'Installing the local server for this version.' });
       const server = await ensureServer();
       if (!server.ok) {
         setRow(agent.id, { status: 'error', detail: server.detail, hint: server.hint });
         return;
       }
-      target = localTarget(settings.github, server.server);
+      target = installedTarget(server.server);
       if (server.server.node === null) {
         warning = `No Node.js was found on this computer. Install Node.js ${MIN_NODE_MAJOR} or newer and add it again, or deploy the endpoint below.`;
       } else if (nodeTooOld(server.server.nodeVersion)) {
@@ -616,7 +625,7 @@ function LocalAgents({
     }
     setRow(agent.id, { status: 'running', detail: `Writing it into ${agent.name}’s settings.` });
     try {
-      const path = await configs.add(agent.id, agent.key, SERVER_NAME, agent.entry(target));
+      const path = await configs.add(agent.id, agent.entry(target));
       setEntries(e => ({
         ...e,
         [agent.id]: { path, installed: e[agent.id]?.installed ?? true, present: true, target: targetKey(target) },
@@ -638,7 +647,9 @@ function LocalAgents({
   const manualTarget: McpTarget =
     endpoint !== ''
       ? { kind: 'remote', url: endpoint }
-      : localTarget(settings.github, { path: installed.current?.path ?? CHECKOUT_SERVER, node: installed.current?.node ?? null }, TOKEN_PLACEHOLDER);
+      : installed !== null
+        ? installedTarget(installed)
+        : checkoutTarget(settings.github);
 
   const intro =
     endpoint !== ''
@@ -665,9 +676,12 @@ function LocalAgents({
               entry.target !== null &&
               (endpoint !== '' ? entry.target !== endpoint : isUrl(entry.target));
             const added = entry?.present === true && !stale;
-            const status: FlowStatus = row?.status ?? (added ? 'ok' : 'idle');
+            // A row's own report wins, except an old success over an entry
+            // the file now shows is stale.
+            const report = row?.status === 'ok' && stale ? undefined : row;
+            const status: FlowStatus = report?.status ?? (added ? 'ok' : 'idle');
             const detail =
-              row?.detail ??
+              report?.detail ??
               (stale
                 ? endpoint !== ''
                   ? 'Points somewhere else. Add it again to use your endpoint.'
@@ -691,14 +705,14 @@ function LocalAgents({
                   </p>
                   <p className="agent-detail" role="status" data-status={status === 'idle' ? undefined : status}>
                     {detail}
-                    {row?.hint === undefined ? null : <span className="test-hint">{row.hint}</span>}
+                    {report?.hint === undefined ? null : <span className="test-hint">{report.hint}</span>}
                   </p>
                 </div>
                 <button
                   type="button"
                   className="button agent-add"
                   aria-label={`${added || stale ? 'Add again to' : 'Add to'} ${agent.name}`}
-                  disabled={row?.status === 'running' || (!githubReady && endpoint === '')}
+                  disabled={report?.status === 'running' || (!githubReady && endpoint === '')}
                   onClick={() => void add(agent)}
                 >
                   {added || stale ? 'Add again' : 'Add'}
@@ -729,9 +743,11 @@ function LocalAgents({
         </div>
         <p className="field-hint">
           Merge this into <span className="mono">{manualAgent.file}</span>.
-          {manualTarget.kind === 'local'
-            ? ' Put a GitHub token that can read and write the data repository where the placeholder is.'
-            : ' The URL is a credential: keep the file to yourself.'}
+          {manualTarget.kind === 'remote'
+            ? ' The URL is a credential: keep the file to yourself.'
+            : installed !== null
+              ? ' The server reads your repository and token from the app’s own settings, so none of it is in the entry.'
+              : ' This runs the server from a checkout of the repository. Put a GitHub token that can read and write the data repository where the placeholder is.'}
         </p>
         <Copyable text={snippetFor(manualAgent, manualTarget)} label={`Copy the ${manualAgent.name} entry`} />
       </Reveal>

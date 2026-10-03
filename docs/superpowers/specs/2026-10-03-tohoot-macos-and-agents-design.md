@@ -79,24 +79,30 @@ keeping everything else in the file as it was:
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` | `serverUrl` | `command, args, env` |
 | opencode | `~/.config/opencode/opencode.json` | `mcp` | `type: remote, url` | `type: local, command[], environment` |
 
-The Rust side owns *where*: an agent id resolves to a file and a format
-(JSON, or TOML for Codex through `toml_edit`, which keeps comments and order),
-using Tauri's own home and config directories, so the webview can only ever
-name a known file. It also reports whether the agent's folder exists, which is
-how a row says "found on this computer". The TypeScript side owns *what*: the
-key and the entry shape per agent, in `packages/ui/src/agents.ts`, which is
-also what renders the copyable snippet for anyone who would rather paste.
-A file that is not valid JSON or TOML is refused, never overwritten.
+The Rust side is the authority on everything that could run a program: an
+agent id resolves to a file, a format (JSON, or TOML for Codex through
+`toml_edit`, which keeps comments and order) and a key, using Tauri's own home
+and config directories; the entry is always named `to-hoot`; the stdio server
+is downloaded by Rust, not handed over by the webview; and an entry is refused
+unless it is an https endpoint URL or exactly node, that server and the app's
+settings file. It also reports whether the agent's folder exists, which is how
+a row says "found on this computer". The TypeScript side decides how each agent
+spells the entry, in `packages/ui/src/agents.ts`, which is also what renders the
+copyable snippet for anyone who would rather paste. A file that is not valid
+JSON or TOML is refused, never overwritten; JSON keeps its key order, and
+fields a person added to the entry by hand survive an Add again.
 
 **What an entry points at.** The deployed endpoint when there is one, since it
 needs nothing installed. Otherwise the local stdio server, which no longer
 needs a checkout: the release ships it as one bundled file,
 `to-hoot-mcp.mjs`, and the app downloads the copy for its own version into its
-data folder, the same way it already fetches the Worker. The entry runs it with
-the absolute path of `node` (found on `PATH` and in the usual install places,
-because an editor launched from the Dock does not inherit a shell's `PATH`) and
-passes the data repository and token as `TO_HOOT_GITHUB_*` variables. With no
-Node found, the row says to install Node 20 or deploy the endpoint.
+data folder. The entry runs it with the absolute path of `node` (found on
+`PATH` and in the usual install places, because an editor launched from the
+Dock does not inherit a shell's `PATH`) and names the app's own settings file in
+`TO_HOOT_SETTINGS`, from which the server reads the data repository and token at
+start. The token is never in an agent's config. With no Node found, the row
+says to install Node 20 or deploy the endpoint, and looks again on the next
+press.
 
 **In the browser and on a phone.** The deploy flow is unchanged. Its last step
 becomes "Add it to your assistant": the endpoint URL, then how to add it in

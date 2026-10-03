@@ -112,5 +112,7 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg   # needs both
 ```
 
 **Agents.** `src-tauri/src/agents.rs` writes the app's MCP server into each
-agent's own config file. It decides which file an agent id means, and the web
-layer decides what goes in it, so the window cannot name an arbitrary path.
+agent's own config file. It decides which file and key an agent id means,
+downloads the local server itself, and refuses any entry that is not an https
+endpoint or exactly node plus that server plus the app's settings file, so the
+window can neither name a path nor choose a program for an agent to run.

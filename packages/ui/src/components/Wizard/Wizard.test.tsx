@@ -46,7 +46,7 @@ function fakeAgents(over: Partial<AgentConfigs> = {}): AgentConfigs {
   return {
     add: async agent => `/home/someone/${agent}`,
     inspect: async agent => ({ path: `/home/someone/${agent}`, installed: false, present: false, target: null }),
-    installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/bin/node', nodeVersion: '22.0.0' }),
+    installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/bin/node', nodeVersion: '22.0.0', settings: '/data/to-hoot.json' }),
     ...over,
   };
 }
@@ -672,10 +672,10 @@ describe('Wizard', () => {
     // What each agent's `mcp add` does, done by the app: one entry in its own
     // config. With an endpoint deployed every entry is remote, so an installed
     // app needs nothing else on the machine.
-    const added: Array<[string, string, string, unknown]> = [];
+    const added: Array<[string, unknown]> = [];
     const agents = fakeAgents({
-      add: async (agent, key, name, entry) => {
-        added.push([agent, key, name, entry]);
+      add: async (agent, entry) => {
+        added.push([agent, entry]);
         return `/home/someone/${agent}.json`;
       },
     });
@@ -693,70 +693,73 @@ describe('Wizard', () => {
     await user.click(screen.getByRole('button', { name: 'Add to VS Code' }));
     await waitFor(() => expect(added).toHaveLength(4));
     expect(added).toEqual([
-      ['claude-code', 'mcpServers', 'to-hoot', { type: 'http', url }],
-      ['codex', 'mcp_servers', 'to-hoot', { url }],
-      ['gemini-cli', 'mcpServers', 'to-hoot', { httpUrl: url }],
-      ['vscode', 'servers', 'to-hoot', { type: 'http', url }],
+      ['claude-code', { type: 'http', url }],
+      ['codex', { url }],
+      ['gemini-cli', { httpUrl: url }],
+      ['vscode', { type: 'http', url }],
     ]);
     expect(screen.getByText(/Added to \/home\/someone\/codex\.json\. Codex picks it up/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add again to Codex' })).toBeInTheDocument();
   });
 
-  it('installs the local server once and points agents at it when nothing is deployed', async () => {
+  it('installs the local server and points agents at it when nothing is deployed', async () => {
     const added: unknown[] = [];
-    const installs: string[] = [];
+    let installs = 0;
     const agents = fakeAgents({
-      add: async (_agent, _key, _name, entry) => {
+      add: async (_agent, entry) => {
         added.push(entry);
         return '/home/someone/.cursor/mcp.json';
       },
-      installServer: async source => {
-        installs.push(source);
-        return { path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/local/bin/node', nodeVersion: '22.3.0' };
+      installServer: async () => {
+        installs += 1;
+        return { path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/local/bin/node', nodeVersion: '22.3.0', settings: '/data/to-hoot.json' };
       },
     });
-    const { user, seen } = setup(
-      [[/releases\/download\/v[^/]+\/to-hoot-mcp\.mjs$/, { text: '#!/usr/bin/env node\nconsole.error("to-hoot mcp: serving")' }]],
-      {
-        platform: { kind: 'desktop', agents },
-        initial: s => {
-          s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
-        },
+    const { user } = setup([], {
+      platform: { kind: 'desktop', agents },
+      initial: s => {
+        s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
       },
-    );
+    });
     await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Add to Cursor' }));
     await waitFor(() => expect(added).toHaveLength(1));
     await user.click(screen.getByRole('button', { name: 'Add to Windsurf' }));
     await waitFor(() => expect(added).toHaveLength(2));
 
-    const env = { TO_HOOT_GITHUB_OWNER: 'someone', TO_HOOT_GITHUB_REPO: 'to-hoot-data', TO_HOOT_GITHUB_TOKEN: 'gho_x' };
+    // The app's settings file, not the token: the token is never in an agent's config.
+    const env = { TO_HOOT_SETTINGS: '/data/to-hoot.json' };
+    expect(JSON.stringify(added)).not.toContain('gho_x');
     expect(added).toEqual([
       { command: '/usr/local/bin/node', args: ['/data/mcp/to-hoot-mcp.mjs'], env },
       { command: '/usr/local/bin/node', args: ['/data/mcp/to-hoot-mcp.mjs'], env },
     ]);
-    // Downloaded and installed once for the two presses.
-    expect(installs).toHaveLength(1);
-    expect(seen.filter(r => r.url.endsWith('/to-hoot-mcp.mjs'))).toHaveLength(1);
+    // Asked each time, so node is looked for again on every press.
+    expect(installs).toBe(2);
   });
 
   it('says so when there is no node to run the local server', async () => {
+    // And asks again on the next press, so installing Node.js and pressing
+    // Add again is what fixes it, without leaving the screen.
+    let node: string | null = null;
     const agents = fakeAgents({
-      installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node: null, nodeVersion: null }),
+      installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node, nodeVersion: node === null ? null : '22.3.0', settings: '/data/to-hoot.json' }),
     });
-    const { user } = setup(
-      [[/to-hoot-mcp\.mjs$/, { text: '#!/usr/bin/env node\nconsole.error("to-hoot mcp: serving")' }]],
-      {
-        platform: { kind: 'desktop', agents },
-        initial: s => {
-          s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
-        },
+    const { user } = setup([], {
+      platform: { kind: 'desktop', agents },
+      initial: s => {
+        s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
       },
-    );
+    });
     await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Add to Claude Code' }));
     await waitFor(() => expect(screen.getByText(/but it will not start yet/)).toBeInTheDocument());
     expect(screen.getByText(/No Node\.js was found on this computer/)).toBeInTheDocument();
+
+    node = '/opt/homebrew/bin/node';
+    await user.click(screen.getByRole('button', { name: 'Add again to Claude Code' }));
+    await waitFor(() => expect(screen.getByText(/Claude Code picks it up/)).toBeInTheDocument());
+    expect(screen.queryByText(/No Node\.js was found/)).toBeNull();
   });
 
   it('shows which agents are here, and an entry that points at the wrong place', async () => {

@@ -283,7 +283,10 @@ remote and points at it, so nothing runs on your computer. Without one, the
 entry runs the local stdio server. An installed app has no checkout, so the
 release ships that server as one bundled file, `to-hoot-mcp.mjs`; the app
 downloads the copy for its own version into its data folder and writes an entry
-that runs it with Node.js. It needs Node.js 20 or newer. The app looks for
+that runs it with Node.js. The entry carries no token: it names the app's own
+settings file in `TO_HOOT_SETTINGS`, and the server reads the data repository
+and the token from there each time it starts, so signing in again in the app
+reaches every agent. It needs Node.js 20 or newer. The app looks for
 `node` on the `PATH` and in the usual install places (Homebrew, `/usr/local`,
 Volta, fnm, nvm), because an editor started from the Dock or a launcher does
 not inherit a terminal's `PATH`, and writes the absolute path it found. A row
@@ -303,9 +306,10 @@ the repository:
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository |
-| `TO_HOOT_GITHUB_REPO` | yes | The data repository |
-| `TO_HOOT_GITHUB_TOKEN` | yes | A token that can read and write it |
+| `TO_HOOT_SETTINGS` | no | The desktop app's settings file. The repository, token and branch are read from it; any of the variables below still wins |
+| `TO_HOOT_GITHUB_OWNER` | yes, unless `TO_HOOT_SETTINGS` | Owner of the data repository |
+| `TO_HOOT_GITHUB_REPO` | yes, unless `TO_HOOT_SETTINGS` | The data repository |
+| `TO_HOOT_GITHUB_TOKEN` | yes, unless `TO_HOOT_SETTINGS` | A token that can read and write it |
 | `TO_HOOT_GITHUB_BRANCH` | no | The branch to use. Unset means the repository's own default |
 | `TO_HOOT_DEVICE_ID` | no | One path segment, unique per device. Defaults to `mcp-<hostname>` |
 | `TO_HOOT_STATE_DIR` | no | Where a running timer is kept. Defaults to `~/.to-hoot` |

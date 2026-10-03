@@ -159,17 +159,28 @@ export interface LocalServer {
   node: string | null;
   /** `node --version` without the `v`, when there is a node. */
   nodeVersion: string | null;
+  /**
+   * The app's own settings file, which holds the data repository and its
+   * token. An agent's entry names this file instead of carrying the token.
+   */
+  settings: string;
 }
 
 export interface AgentConfigs {
   /**
-   * Adds or replaces `name` under `key` in the agent's own config file, keeping
-   * everything else in it, and answers with the file written.
+   * Adds or updates the app's `to-hoot` entry in the agent's own config file,
+   * keeping everything else in it, and answers with the file written. The
+   * shell refuses an entry that is not an https endpoint or exactly the
+   * installed local server: the window never chooses a program to run.
    */
-  add(agent: AgentId, key: string, name: string, entry: Record<string, unknown>): Promise<string>;
-  inspect(agent: AgentId, key: string, name: string): Promise<AgentEntry>;
-  /** Writes the stdio server's source into the app's data folder. */
-  installServer(source: string): Promise<LocalServer>;
+  add(agent: AgentId, entry: Record<string, unknown>): Promise<string>;
+  inspect(agent: AgentId): Promise<AgentEntry>;
+  /**
+   * Puts this version's stdio server in the app's data folder (downloaded by
+   * the shell from the release, not handed over by the window) and finds a
+   * node to run it with.
+   */
+  installServer(): Promise<LocalServer>;
 }
 
 export interface Platform {

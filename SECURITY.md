@@ -30,7 +30,7 @@ shared account, no server holding anything on your behalf, and no telemetry.
 | Apps Script `/exec` URL, if you use the bridge | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
 | Worker URL, if you pressed Add beside an agent with the endpoint deployed | Also in that agent's own config file (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json` and so on, listed in `docs/SETUP.md`) as the `to-hoot` server entry, exactly where its own `mcp add` would put it | That agent on that machine |
-| GitHub token, if you pressed Add beside an agent with no endpoint | In that agent's config file, as `TO_HOOT_GITHUB_TOKEN` in the local server's environment, which is how every stdio MCP server is given a credential | That agent on that machine |
+| GitHub token, if you pressed Add beside an agent with no endpoint | Not in the agent's config. The entry names the app's own settings file (`TO_HOOT_SETTINGS`), and the local server reads the repository and token from it when it starts | The local server, on that machine |
 | Android release keystore | Outside the repository, and in Actions secrets as base64 for CI | Signing releases |
 
 **Tokens are per device and never sync.** They are deliberately kept out of the
@@ -123,16 +123,28 @@ server for agents on your computer is a local process with no network
 listener, and everything else in the app works without either.
 
 **Agent config files.** Pressing Add writes one entry into a file the agent
-owns and leaves the rest of it as it was; a file that does not parse is
-refused rather than rewritten. The write goes to a temporary file that is then
-renamed over the original, so a crash cannot leave half a config behind. The
-new file keeps the old one's permissions, and a file the app creates is
-readable by its owner only, because what goes in it is a credential either way.
-Which file an agent id names is decided in the desktop shell's Rust code, not
-in the web layer, so the window cannot ask for an arbitrary path to be
-written. The local server itself is the release's `to-hoot-mcp.mjs` for the
-app's own version, downloaded from this repository's releases over HTTPS and
-kept in the app's data folder; it is not minified, so it can be read.
+owns and leaves the rest of it as it was, key order and any fields you added
+to the entry by hand included; a file that does not parse is refused rather
+than rewritten. The write goes to a temporary file, created readable by its
+owner alone, that is then renamed over the original, so a crash cannot leave
+half a config behind; the file ends up with group and other access removed,
+because an endpoint URL is a credential.
+
+The desktop shell's Rust code is the authority on everything that could run a
+program. It decides which file and key an agent id means, names the entry
+`to-hoot`, downloads the local server itself (the release's `to-hoot-mcp.mjs`
+for the app's own version, over HTTPS from this repository's releases, kept in
+the app's data folder and not minified, so it can be read), and refuses any
+entry that is not either an https endpoint URL or exactly node, that server and
+the app's settings file. A window that went wrong could at worst point an agent
+at a different endpoint; it cannot choose a program for an agent to run.
+
+The local server's entry carries no token. It names the app's settings file,
+which already holds the token on this device and which the app narrows to
+owner-only access when it installs the server; the server reads the
+repository and the token from it each time it starts. So the token is not
+copied into every agent's config (VS Code, for one, can sync its `mcp.json` to
+a cloud account), and signing in again in the app reaches every agent.
 
 ## Google Calendar
 

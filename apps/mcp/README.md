@@ -9,6 +9,7 @@ read from the environment.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
+| `TO_HOOT_SETTINGS` | no | The desktop app's settings file (`to-hoot.json` in its data folder). Owner, repository, token and branch are read from it when the server starts; a variable below still wins. This is what the app writes into an agent's config, so the token is never in it. |
 | `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository. |
 | `TO_HOOT_GITHUB_REPO` | yes | The data repository. |
 | `TO_HOOT_GITHUB_TOKEN` | yes | Fine-grained token with Contents read and write on that repository alone. |

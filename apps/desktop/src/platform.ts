@@ -299,14 +299,15 @@ function oauthLoopback(): CallbackListener {
 }
 
 /**
- * The agents' config files, through the shell. Which file an agent id means is
- * decided in Rust (`agents.rs`), so nothing here can name an arbitrary path;
- * what goes into the file is decided by the app.
+ * The agents' config files, through the shell. Rust (`agents.rs`) decides which
+ * file and key an agent id means, downloads the server itself, and refuses any
+ * entry that is not an endpoint URL or exactly that server, so nothing here can
+ * name a path or a program; the app decides how each agent spells the entry.
  */
 const agents: AgentConfigs = {
-  add: (agent, key, name, entry) => invoke<string>('agent_add', { agent, key, name, entry }),
-  inspect: (agent, key, name) => invoke<AgentEntry>('agent_inspect', { agent, key, name }),
-  installServer: source => invoke<LocalServer>('agent_server_install', { source }),
+  add: (agent, entry) => invoke<string>('agent_add', { agent, entry }),
+  inspect: agent => invoke<AgentEntry>('agent_inspect', { agent }),
+  installServer: () => invoke<LocalServer>('agent_server_install'),
 };
 
 /**
