@@ -115,8 +115,18 @@ describe('parseConfig', () => {
       expect(missing.ok).toBe(false);
       if (!missing.ok) expect(missing.error).toContain(SETTINGS);
 
-      const broken = parseConfig({ TO_HOOT_SETTINGS: SETTINGS }, files({ [SETTINGS]: '{"settings": "not json' }));
+      // A broken file is reported without quoting it: the parser's message
+      // would carry the start of the text, and the text holds the token.
+      const broken = parseConfig(
+        { TO_HOOT_SETTINGS: SETTINGS },
+        files({ [SETTINGS]: '{"settings": "{\\"github\\":{\\"token\\":\\"gho_secret' }),
+      );
       expect(broken.ok).toBe(false);
+      if (!broken.ok) {
+        expect(broken.error).toContain('not valid JSON');
+        expect(broken.error).not.toContain('gho_secret');
+      }
+      if (!missing.ok) expect(missing.error).toContain('ENOENT');
     });
   });
 });

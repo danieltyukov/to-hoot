@@ -5,7 +5,8 @@
 //! This side is the authority on everything that could run code. An agent id
 //! resolves to one file, its format and the key servers live under; the entry
 //! is always named `to-hoot`; the stdio server is downloaded here, from this
-//! version's release, never handed over by the webview; and an entry is
+//! version's release, never handed over by the webview, into a folder the
+//! webview cannot write to; and an entry is
 //! accepted only if it is an https endpoint URL or exactly node, that server
 //! and the app's settings file. So a webview that went wrong can point an
 //! agent at an endpoint at worst, and never at a program of its choosing. The
@@ -418,11 +419,10 @@ pub fn agent_inspect<R: Runtime>(app: AppHandle<R>, agent: Agent) -> Result<Entr
 #[tauri::command]
 pub fn agent_add<R: Runtime>(app: AppHandle<R>, agent: Agent, entry: Value) -> Result<String, String> {
     let dirs = dirs(&app)?;
-    let data = data_dir(&app)?;
     let allowed = Allowed {
         node: find_node(std::env::var_os("PATH"), &dirs.home).map(|p| p.display().to_string()),
-        server: data.join(SERVER_DIR).join(SERVER_FILE).display().to_string(),
-        settings: data.join(SETTINGS_FILE).display().to_string(),
+        server: server_dir(&app)?.join(SERVER_FILE).display().to_string(),
+        settings: data_dir(&app)?.join(SETTINGS_FILE).display().to_string(),
     };
     check_entry(&entry, &allowed)?;
     let location = agent.location(&dirs);
@@ -467,19 +467,32 @@ fn data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|err| format!("no data directory: {err}"))
 }
 
+/// Where the server lives: the app's cache folder, not its data folder.
+///
+/// The window may write anywhere under the data folder (the event log lives
+/// there, through the fs plugin's `appdata` write scope), so a server kept
+/// there could be rewritten by the window after the entry that runs it was
+/// checked, which would undo the whole point of checking it. The cache folder
+/// is read-only to the window on every system: `~/.cache/<id>` on Linux,
+/// `~/Library/Caches/<id>` on macOS, and the local rather than the roaming
+/// AppData on Windows. A cache may be cleared; pressing Add downloads it again.
+fn server_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().app_cache_dir().map_err(|err| format!("no cache directory: {err}"))?.join(SERVER_DIR))
+}
+
 /// The bundle starts with node's shebang and names itself in its startup line;
 /// an error page or a release listing does neither.
 pub fn looks_like_server(text: &str) -> bool {
     text.starts_with("#!/usr/bin/env node") && text.contains("to-hoot mcp")
 }
 
-/// Puts this version's stdio server in the app's data folder, downloading it
+/// Puts this version's stdio server in the app's cache folder, downloading it
 /// only when the copy there is for another version, and finds a node to run it
 /// with, every time, so installing Node.js and pressing Add again works.
 #[tauri::command]
 pub async fn agent_server_install<R: Runtime>(app: AppHandle<R>) -> Result<LocalServer, String> {
     let data = data_dir(&app)?;
-    let dir = data.join(SERVER_DIR);
+    let dir = server_dir(&app)?;
     let path = dir.join(SERVER_FILE);
     let marker = dir.join(SERVER_VERSION_FILE);
     let version = env!("CARGO_PKG_VERSION");

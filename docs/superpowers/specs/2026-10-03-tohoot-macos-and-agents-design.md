@@ -96,7 +96,7 @@ fields a person added to the entry by hand survive an Add again.
 needs nothing installed. Otherwise the local stdio server, which no longer
 needs a checkout: the release ships it as one bundled file,
 `to-hoot-mcp.mjs`, and the app downloads the copy for its own version into its
-data folder. The entry runs it with the absolute path of `node` (found on
+cache folder, which, unlike its data folder, the window has no write access to. The entry runs it with the absolute path of `node` (found on
 `PATH` and in the usual install places, because an editor launched from the
 Dock does not inherit a shell's `PATH`) and names the app's own settings file in
 `TO_HOOT_SETTINGS`, from which the server reads the data repository and token at

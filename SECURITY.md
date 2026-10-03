@@ -134,10 +134,18 @@ The desktop shell's Rust code is the authority on everything that could run a
 program. It decides which file and key an agent id means, names the entry
 `to-hoot`, downloads the local server itself (the release's `to-hoot-mcp.mjs`
 for the app's own version, over HTTPS from this repository's releases, kept in
-the app's data folder and not minified, so it can be read), and refuses any
+the app's cache folder and not minified, so it can be read), and refuses any
 entry that is not either an https endpoint URL or exactly node, that server and
-the app's settings file. A window that went wrong could at worst point an agent
-at a different endpoint; it cannot choose a program for an agent to run.
+the app's settings file. The cache folder matters: the window may write under
+the app's data folder, where the event log lives, so a server kept there could
+be rewritten after its entry was checked; the cache folder is outside every
+path the window can write to on all three systems. A window that went wrong
+could at worst point an agent at a different endpoint; it cannot choose a
+program for an agent to run.
+
+The server never quotes the settings file in an error. A file that does not
+parse is reported as such and no more, because the parser's own message would
+carry the start of the text, which holds the token, into the agent's logs.
 
 The local server's entry carries no token. It names the app's settings file,
 which already holds the token on this device and which the app narrows to

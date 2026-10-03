@@ -76,7 +76,12 @@ function fromAppSettings(path: string, readFile: (path: string) => string): Resu
     const settings = typeof vault.settings === 'string' ? (JSON.parse(vault.settings) as { github?: AppGitHub }) : undefined;
     github = settings?.github;
   } catch (err) {
-    return { ok: false, error: `could not read the ToHoot settings at ${path}: ${err instanceof Error ? err.message : String(err)}` };
+    // Never the parser's own message: V8 quotes the start of the text it
+    // failed on, and this text holds the token, which would land in whatever
+    // log the agent keeps of its servers' stderr.
+    const code = (err as { code?: unknown } | null)?.code;
+    const why = err instanceof SyntaxError ? 'it is not valid JSON' : typeof code === 'string' ? code : 'it could not be read';
+    return { ok: false, error: `could not read the ToHoot settings at ${path}: ${why}` };
   }
   const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
   return {

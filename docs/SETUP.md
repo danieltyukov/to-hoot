@@ -282,8 +282,8 @@ next time it starts.
 remote and points at it, so nothing runs on your computer. Without one, the
 entry runs the local stdio server. An installed app has no checkout, so the
 release ships that server as one bundled file, `to-hoot-mcp.mjs`; the app
-downloads the copy for its own version into its data folder and writes an entry
-that runs it with Node.js. The entry carries no token: it names the app's own
+downloads the copy for its own version into its cache folder (one the app's
+window cannot write to) and writes an entry that runs it with Node.js. The entry carries no token: it names the app's own
 settings file in `TO_HOOT_SETTINGS`, and the server reads the data repository
 and the token from there each time it starts, so signing in again in the app
 reaches every agent. It needs Node.js 20 or newer. The app looks for
