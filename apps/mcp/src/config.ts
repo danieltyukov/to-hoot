@@ -1,7 +1,15 @@
 // Everything account-specific arrives through the environment, so a clone of
 // this repository is pointed at its owner's data by configuration alone and
 // nothing here is hardcoded to one person's accounts.
+//
+// Or through the desktop app's own settings file, named by TO_HOOT_SETTINGS.
+// That is how the app registers this server with an agent: the agent's config
+// holds a path, not the GitHub token, so the token stays in one owner-only
+// file on this machine instead of in every agent's settings (some of which,
+// VS Code's for one, can sync to a cloud account). The token is read at start,
+// so signing in again in the app reaches every agent without adding it again.
 
+import { readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 
@@ -48,7 +56,56 @@ function defaultDeviceId(): string {
   return host === undefined || host === '' ? 'mcp' : `mcp-${host}`;
 }
 
-export function parseConfig(env: Env): Result<Config> {
+/** What the desktop app keeps about the data repository. */
+interface AppGitHub {
+  owner?: unknown;
+  repo?: unknown;
+  token?: unknown;
+  branch?: unknown;
+}
+
+/**
+ * The repository settings out of the desktop app's store file. The store is
+ * tauri-plugin-store's JSON, where every value is a string and the settings
+ * are one JSON document under `settings`.
+ */
+function fromAppSettings(path: string, readFile: (path: string) => string): Result<Env> {
+  let github: AppGitHub | undefined;
+  try {
+    const vault = JSON.parse(readFile(path)) as { settings?: unknown };
+    const settings = typeof vault.settings === 'string' ? (JSON.parse(vault.settings) as { github?: AppGitHub }) : undefined;
+    github = settings?.github;
+  } catch (err) {
+    // Never the parser's own message: V8 quotes the start of the text it
+    // failed on, and this text holds the token, which would land in whatever
+    // log the agent keeps of its servers' stderr.
+    const code = (err as { code?: unknown } | null)?.code;
+    const why = err instanceof SyntaxError ? 'it is not valid JSON' : typeof code === 'string' ? code : 'it could not be read';
+    return { ok: false, error: `could not read the ToHoot settings at ${path}: ${why}` };
+  }
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  return {
+    ok: true,
+    value: {
+      TO_HOOT_GITHUB_OWNER: str(github?.owner),
+      TO_HOOT_GITHUB_REPO: str(github?.repo),
+      TO_HOOT_GITHUB_TOKEN: str(github?.token),
+      TO_HOOT_GITHUB_BRANCH: str(github?.branch),
+    },
+  };
+}
+
+export function parseConfig(env: Env, readFile: (path: string) => string = p => readFileSync(p, 'utf8')): Result<Config> {
+  const settingsPath = read(env, 'TO_HOOT_SETTINGS');
+  if (settingsPath !== undefined) {
+    const app = fromAppSettings(settingsPath, readFile);
+    if (!app.ok) return app;
+    // An explicit variable still wins, key by key.
+    const merged: Env = { ...app.value };
+    for (const [key, value] of Object.entries(env)) if (read(env, key) !== undefined) merged[key] = value;
+    env = merged;
+  }
+
   const missing: string[] = [];
   const require_ = (key: string): string => {
     const value = read(env, key);
@@ -60,7 +117,13 @@ export function parseConfig(env: Env): Result<Config> {
   const repo = require_('TO_HOOT_GITHUB_REPO');
   const token = require_('TO_HOOT_GITHUB_TOKEN');
   if (missing.length > 0) {
-    return { ok: false, error: `set ${missing.join(', ')} before starting the server` };
+    return {
+      ok: false,
+      error:
+        settingsPath === undefined
+          ? `set ${missing.join(', ')} before starting the server`
+          : `the ToHoot settings at ${settingsPath} have no data repository yet: connect sync in the ToHoot app first`,
+    };
   }
 
   const deviceId = read(env, 'TO_HOOT_DEVICE_ID') ?? defaultDeviceId();

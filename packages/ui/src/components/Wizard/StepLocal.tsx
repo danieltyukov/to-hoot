@@ -30,8 +30,10 @@ export function StepLocal() {
           </p>
         </li>
         <li>
-          <span className="micro">Claude</span>
-          <p className="prose">Lets Claude read and change your tasks for you.</p>
+          <span className="micro">Agents</span>
+          <p className="prose">
+            Lets Claude, ChatGPT, Codex, Gemini or any other MCP agent read and change your tasks.
+          </p>
         </li>
       </ul>
 

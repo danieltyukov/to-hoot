@@ -17,12 +17,16 @@
 // non-protocol line to stdout, which no source-level test can observe.
 
 import { execFileSync, spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 const appDir = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+// The same server bundled into one file, which is what the release publishes
+// and what an installed app registers with an agent.
+const bundled = fileURLToPath(new URL('../dist/to-hoot-mcp.mjs', import.meta.url));
 
 interface Exchange {
   stdout: string;
@@ -31,11 +35,11 @@ interface Exchange {
   unparsable: string[];
 }
 
-/** Drives one 2025-era exchange against the built entry point. */
-function drive(): Promise<Exchange> {
+/** Drives one 2025-era exchange against a built entry point. */
+function drive(script: string, cwd: string = repoRoot): Promise<Exchange> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entry], {
-      cwd: repoRoot,
+    const child = spawn(process.execPath, [script], {
+      cwd,
       env: {
         ...process.env,
         TO_HOOT_GITHUB_OWNER: 'someone',
@@ -96,6 +100,7 @@ function drive(): Promise<Exchange> {
 }
 
 let exchange: Exchange;
+let bundleExchange: Exchange;
 
 beforeAll(async () => {
   // ALWAYS build, never "build if missing". Building only when the artifact is
@@ -103,7 +108,11 @@ beforeAll(async () => {
   // passes, which is precisely the stale-artifact failure it exists to catch.
   // `tsc -b` is incremental, so when nothing changed this costs a stat sweep.
   execFileSync('npx', ['tsc', '-b', appDir], { cwd: repoRoot, stdio: 'inherit' });
-  exchange = await drive();
+  execFileSync(process.execPath, ['bundle.mjs'], { cwd: appDir, stdio: 'inherit' });
+  // The bundle runs from the system temp folder, far from any node_modules,
+  // which is where an installed app keeps it: if it still imported anything
+  // it did not inline, this is where that would show.
+  [exchange, bundleExchange] = await Promise.all([drive(entry), drive(bundled, tmpdir())]);
 }, 120_000);
 
 describe('the built dist/index.js', () => {
@@ -123,5 +132,14 @@ describe('the built dist/index.js', () => {
     const listed = exchange.messages.find(m => m.id === 2);
     expect(listed?.error).toBeUndefined();
     expect(listed?.result?.tools).toHaveLength(15);
+  });
+});
+
+describe('the bundled to-hoot-mcp.mjs', () => {
+  it('runs with nothing installed beside it and serves all fifteen tools', () => {
+    expect(bundleExchange.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
+    expect(bundleExchange.unparsable).toEqual([]);
+    expect(bundleExchange.messages.find(m => m.id === 1)?.error).toBeUndefined();
+    expect(bundleExchange.messages.find(m => m.id === 2)?.result?.tools).toHaveLength(15);
   });
 });

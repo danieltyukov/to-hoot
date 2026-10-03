@@ -241,16 +241,16 @@
     border-color var(--dur-quick) var(--ease);
 }
 
-.flow-step[data-status='running'] .flow-mark {
+:is(.flow-step, .agent-row)[data-status='running'] .flow-mark {
   border-color: var(--accent);
 }
 
-.flow-step[data-status='ok'] .flow-mark {
+:is(.flow-step, .agent-row)[data-status='ok'] .flow-mark {
   border-color: var(--success);
   background-color: var(--success);
 }
 
-.flow-step[data-status='error'] .flow-mark {
+:is(.flow-step, .agent-row)[data-status='error'] .flow-mark {
   border-color: var(--danger);
 }
 

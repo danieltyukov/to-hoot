@@ -36,7 +36,7 @@ import type { Store } from './store.js';
  * nothing moved, and a 304 costs nothing against GitHub's primary rate limit
  * and one round trip of time. The price of polling often is therefore only
  * the request itself, and what it buys is that a task added on the phone, or
- * by Claude, is on the laptop's screen in seconds rather than in a minute.
+ * by an agent, is on the laptop's screen in seconds rather than in a minute.
  */
 export const SYNC_EVERY_MS = 10_000;
 

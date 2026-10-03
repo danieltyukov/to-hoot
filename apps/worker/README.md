@@ -1,6 +1,8 @@
 # to-hoot MCP endpoint (Cloudflare Worker)
 
-The same fifteen tools the stdio server offers, reachable from claude.ai. The
+The same fifteen tools the stdio server offers, reachable from any assistant
+that takes a remote MCP server URL: Claude and ChatGPT on the web and on a
+phone, and every client that speaks streamable HTTP. The
 list, and how projects and tags can be named by title, is in
 [`apps/mcp/README.md`](../mcp/README.md). Deploy it yourself; nothing here is
 tied to one account.
@@ -27,7 +29,9 @@ npx wrangler deploy
 ```
 
 Then add `https://<name>.<subdomain>.workers.dev/mcp/<secret>` as a custom
-connector in Claude, with authentication set to none.
+connector in Claude or ChatGPT, with authentication set to none, or as a remote
+server in any other MCP client. It answers protocol versions 2024-11-05 through
+2025-11-25.
 
 ## Why it is shaped this way
 

@@ -4,18 +4,18 @@ import type { Http, Platform, PlatformKind, Settings } from '@to-hoot/core';
 import { OwlMark } from '../../icons/OwlMark.js';
 import { Wordmark } from '../Wordmark.js';
 import { StepCalendar } from './StepCalendar.js';
-import { StepClaude } from './StepClaude.js';
+import { StepAgents } from './StepAgents.js';
 import { StepLocal } from './StepLocal.js';
 import { StepSync } from './StepSync.js';
 import './Wizard.css';
 
-export type StepId = 'local' | 'sync' | 'calendar' | 'claude';
+export type StepId = 'local' | 'sync' | 'calendar' | 'agents';
 
 export const STEPS: ReadonlyArray<{ id: StepId; title: string }> = [
   { id: 'local', title: 'Welcome' },
   { id: 'sync', title: 'Sync' },
   { id: 'calendar', title: 'Calendar' },
-  { id: 'claude', title: 'Claude' },
+  { id: 'agents', title: 'Agents' },
 ];
 
 export interface WizardProps {
@@ -24,14 +24,12 @@ export interface WizardProps {
   /** Merged into settings and written to the platform store, never to the log. */
   onSave: (patch: Partial<Settings>) => void;
   onDone: () => void;
-  /** Absolute path to the built MCP server, for the generated command. */
-  mcpServerPath?: string;
   /** The shell's way of opening a link, where the host will not follow one. */
   openUrl?: ((url: string) => Promise<void>) | undefined;
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
   /** The shell, for how a sign-in comes back to it. */
-  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'> | undefined;
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'agents'> | undefined;
 }
 
 /*
@@ -57,7 +55,6 @@ export function Wizard({
   settings,
   onSave,
   onDone,
-  mcpServerPath,
   openUrl,
   deviceKind,
   platform,
@@ -77,16 +74,7 @@ export function Wizard({
     calendar: (
       <StepCalendar http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
     ),
-    claude: (
-      <StepClaude
-        http={http}
-        settings={settings}
-        onSave={onSave}
-        mcpServerPath={mcpServerPath}
-        openUrl={openUrl}
-        platform={platform}
-      />
-    ),
+    agents: <StepAgents http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />,
   };
 
   return (
@@ -123,14 +111,12 @@ export function Wizard({
         </div>
 
         <footer className="wizard-foot">
-          <button
-            type="button"
-            className="button"
-            onClick={() => setAt(i => Math.max(0, i - 1))}
-            disabled={at === 0}
-          >
-            Back
-          </button>
+          {/* Not drawn on the first step, where it could only ever be disabled. */}
+          {at === 0 ? null : (
+            <button type="button" className="button" onClick={() => setAt(i => Math.max(0, i - 1))}>
+              Back
+            </button>
+          )}
           <span className="wizard-spacer" />
           {/* Skipping is a first-class action, not an escape hatch in small
               print. Everything after step one is genuinely optional. */}

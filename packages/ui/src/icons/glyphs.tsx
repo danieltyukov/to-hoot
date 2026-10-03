@@ -251,7 +251,7 @@ export function PlusGlyph(props: GlyphProps) {
 
 /*
  * The three connections in Settings. A cloud for sync (the data lives in a
- * repository somewhere else), a calendar page, and a spark for Claude.
+ * repository somewhere else), a calendar page, and a spark for the agents.
  */
 export function SyncGlyph(props: GlyphProps) {
   return (

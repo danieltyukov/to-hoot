@@ -205,6 +205,87 @@
   flex-wrap: wrap;
 }
 
+/*
+ * The agents on this computer: one panel, a row per agent, the mark and the
+ * name at the leading edge and the button at the trailing one. A list rather
+ * than seven flow steps, because the rows are alternatives to pick from and
+ * not an order to go through.
+ */
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.agent-row + .agent-row {
+  border-top: 1px solid var(--border);
+}
+
+/* Level with the name rather than centred on a row the detail may wrap. */
+.agent-row .flow-mark {
+  align-self: flex-start;
+  margin-top: 1px;
+}
+
+.agent-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.agent-found {
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: var(--ls-micro);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.agent-detail {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  /* A config path is one long word, and it must not push the button out. */
+  overflow-wrap: anywhere;
+}
+
+.agent-detail[data-status='ok'] {
+  color: var(--success);
+}
+
+.agent-detail[data-status='error'] {
+  color: var(--danger);
+}
+
+.agent-add {
+  min-width: 84px;
+  justify-content: center;
+}
+
 .wizard-foot {
   display: flex;
   align-items: center;

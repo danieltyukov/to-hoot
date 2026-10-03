@@ -29,7 +29,8 @@ shared account, no server holding anything on your behalf, and no telemetry.
 | Apps Script shared secret, if you use the bridge | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
 | Apps Script `/exec` URL, if you use the bridge | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
-| Worker URL, if you pressed Add to Claude Code | Also in `~/.claude.json`, Claude Code's own config, as the `to-hoot` server entry, exactly where `claude mcp add` would put it | Claude Code on that machine |
+| Worker URL, if you pressed Add beside an agent with the endpoint deployed | Also in that agent's own config file (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json` and so on, listed in `docs/SETUP.md`) as the `to-hoot` server entry, exactly where its own `mcp add` would put it | That agent on that machine |
+| GitHub token, if you pressed Add beside an agent with no endpoint | Not in the agent's config. The entry names the app's own settings file (`TO_HOOT_SETTINGS`), and the local server reads the repository and token from it when it starts | The local server, on that machine |
 | Android release keystore | Outside the repository, and in Actions secrets as base64 for CI | Signing releases |
 
 **Tokens are per device and never sync.** They are deliberately kept out of the
@@ -97,9 +98,10 @@ Generate it with at least 32 random characters:
 openssl rand -base64 32 | tr -d '/+=' | cut -c1-32
 ```
 
-To revoke, generate a new path secret in Settings, Claude and press Deploy
+To revoke, generate a new path secret in Settings, Agents and press Deploy
 again, or run `wrangler secret put MCP_PATH_SECRET` with a new value, then
-update the connector in Claude. The old URL 404s from the next request onward.
+update the connector in your assistant and press Add again beside each agent.
+The old URL 404s from the next request onward.
 
 The deploy from Settings signs in with Cloudflare through the same public OAuth
 client wrangler uses, with PKCE, and the redirect lands on the desktop app's
@@ -117,8 +119,40 @@ are allowed so the app can check a deploy; a page served from a local port would
 also pass that check, and still needs the path secret.
 
 If you do not want a capability URL at all, skip the Worker. The stdio MCP
-server for Claude Code is a local process with no network listener, and
-everything else in the app works without either.
+server for agents on your computer is a local process with no network
+listener, and everything else in the app works without either.
+
+**Agent config files.** Pressing Add writes one entry into a file the agent
+owns and leaves the rest of it as it was, key order and any fields you added
+to the entry by hand included; a file that does not parse is refused rather
+than rewritten. The write goes to a temporary file, created readable by its
+owner alone, that is then renamed over the original, so a crash cannot leave
+half a config behind; the file ends up with group and other access removed,
+because an endpoint URL is a credential.
+
+The desktop shell's Rust code is the authority on everything that could run a
+program. It decides which file and key an agent id means, names the entry
+`to-hoot`, downloads the local server itself (the release's `to-hoot-mcp.mjs`
+for the app's own version, over HTTPS from this repository's releases, kept in
+the app's cache folder and not minified, so it can be read), and refuses any
+entry that is not either an https endpoint URL or exactly node, that server and
+the app's settings file. The cache folder matters: the window may write under
+the app's data folder, where the event log lives, so a server kept there could
+be rewritten after its entry was checked; the cache folder is outside every
+path the window can write to on all three systems. A window that went wrong
+could at worst point an agent at a different endpoint; it cannot choose a
+program for an agent to run.
+
+The server never quotes the settings file in an error. A file that does not
+parse is reported as such and no more, because the parser's own message would
+carry the start of the text, which holds the token, into the agent's logs.
+
+The local server's entry carries no token. It names the app's settings file,
+which already holds the token on this device and which the app narrows to
+owner-only access when it installs the server; the server reads the
+repository and the token from it each time it starts. So the token is not
+copied into every agent's config (VS Code, for one, can sync its `mcp.json` to
+a cloud account), and signing in again in the app reaches every agent.
 
 ## Google Calendar
 

@@ -36,7 +36,9 @@ import type {
   Platform,
   Unsubscribe,
   WindowFrame,
-  ClaudeCodeEntry,
+  AgentConfigs,
+  AgentEntry,
+  LocalServer,
 } from '@to-hoot/core';
 
 /**
@@ -218,7 +220,18 @@ async function idleSeconds(): Promise<number> {
 }
 
 /**
+ * Whether this is macOS. WKWebView reports itself as Safari on a Mac, and
+ * this is the one question the adapter needs the OS for, so the user agent is
+ * enough and no plugin is pulled in to ask it.
+ */
+const macos = /Macintosh|Mac OS X/.test(navigator.userAgent);
+
+/**
  * The window controls, and the grab that moves the window.
+ *
+ * On macOS the window keeps its native frame with an overlay title bar
+ * (`tauri.macos.conf.json`), so the traffic lights sit at the leading edge of
+ * the app's own bar and `nativeControls` tells the app to draw none of its own.
  *
  * The window is created with `decorations: false` (tauri.conf.json), so there
  * is no native title bar: none of GTK's, and none of the compositor's. The app
@@ -254,6 +267,7 @@ const frame: WindowFrame = {
     };
   },
   startDragging: () => getCurrentWindow().startDragging(),
+  ...(macos ? { nativeControls: 'leading' as const } : {}),
 };
 
 /**
@@ -285,12 +299,25 @@ function oauthLoopback(): CallbackListener {
 }
 
 /**
+ * The agents' config files, through the shell. Rust (`agents.rs`) decides which
+ * file and key an agent id means, downloads the server itself, and refuses any
+ * entry that is not an endpoint URL or exactly that server, so nothing here can
+ * name a path or a program; the app decides how each agent spells the entry.
+ */
+const agents: AgentConfigs = {
+  add: (agent, entry) => invoke<string>('agent_add', { agent, entry }),
+  inspect: agent => invoke<AgentEntry>('agent_inspect', { agent }),
+  installServer: () => invoke<LocalServer>('agent_server_install'),
+};
+
+/**
  * Hands a URL to the desktop's own browser, through the OS.
  *
  * An anchor in this window is not a link to anywhere: the window is the
  * application, so following one either navigates the app away from itself or,
  * with this CSP, does nothing at all. The plugin runs the open in Rust through
- * xdg-open, and `capabilities/default.json` fixes which URLs it will accept.
+ * the OS's own opener (xdg-open, `open` on macOS, ShellExecute on Windows), and
+ * `capabilities/default.json` fixes which URLs it will accept.
  */
 async function openUrl(url: string): Promise<void> {
   await openExternal(url);
@@ -305,10 +332,7 @@ export const platform: Platform = {
   cancelNotification,
   onResume,
   idleSeconds,
-  claudeCode: {
-    add: (name, server) => invoke<string>('claude_code_add', { name, server }),
-    inspect: name => invoke<ClaudeCodeEntry>('claude_code_inspect', { name }),
-  },
+  agents,
   window: frame,
   openUrl,
   oauthLoopback,

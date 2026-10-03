@@ -6,7 +6,7 @@
     <title>ToHoot</title>
     <meta
       name="description"
-      content="A task list that tracks time against the day you actually had. Linux, Windows and Android, synced through a private GitHub repository you own, reachable from Claude. Free to run, with no account and no server."
+      content="A task list that tracks time against the day you actually had. Linux, Windows, macOS and Android, synced through a private GitHub repository you own, reachable from Claude, ChatGPT, Codex, Gemini and any other MCP agent. Free to run, with no account and no server."
     />
     <link rel="icon" href="../packages/ui/public/favicon.svg" type="image/svg+xml" />
     <link rel="canonical" href="https://danieltyukov.github.io/to-hoot/" />
@@ -42,7 +42,7 @@
             <circle cx="21.75" cy="17" r="2.8" fill="currentColor" />
             <path d="M14.1,16.6 L17.9,16.6 L16,21 Z" fill="currentColor" />
           </svg>
-          <h1 class="wordmark">to-h<i class="wordmark-eye">o</i><i class="wordmark-eye">o</i>t</h1>
+          <h1 class="wordmark">ToH<i class="wordmark-eye">o</i><i class="wordmark-eye">o</i>t</h1>
         </div>
 
         <button type="button" id="theme" class="toggle" aria-pressed="false">
@@ -58,8 +58,9 @@
     <main id="main">
       <div class="wrap">
         <p class="lede">
-          A task list that tracks time against the day you actually had. One list on your Linux
-          or Windows desktop and your Android phone, synced through a private repository you own.
+          A task list that tracks time against the day you actually had. One list on your Linux,
+          Windows or macOS desktop and your Android phone, synced through a private repository you
+          own.
         </p>
 
         <p class="actions">
@@ -72,13 +73,18 @@
           <a class="btn" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/ToHoot_x64-setup.exe">
             Download for Windows
           </a>
+          <a class="btn" href="https://github.com/danieltyukov/to-hoot/releases/latest/download/ToHoot_universal.dmg">
+            Download for macOS
+          </a>
         </p>
         <p class="note">
           The AppImage runs anywhere: <code>chmod +x</code> and go. A <code>.deb</code> and an
           <code>.msi</code> are on the
           <a href="https://github.com/danieltyukov/to-hoot/releases/latest">releases page</a>. The
           Linux builds are made on Ubuntu 22.04 so they run on older systems too; the Windows
-          installer is not code-signed, so SmartScreen asks once.
+          installer is not code-signed, so SmartScreen asks once. The macOS build runs on Apple
+          Silicon and Intel; it is not notarized, so the first launch needs Open Anyway in System
+          Settings, Privacy and Security.
         </p>
       </div>
 
@@ -151,11 +157,12 @@
               export from, because it was never anywhere else.
             </dd>
 
-            <dt>Ask Claude to add a task from anywhere.</dt>
+            <dt>Ask any agent to add a task, from anywhere.</dt>
             <dd>
               An MCP server offers fifteen tools over the same log: tasks, timers, projects and
-              tags, by name. A task Claude adds is one event appended to the log,
-              indistinguishable from one you typed.
+              tags, by name. Claude, ChatGPT, Codex, Gemini CLI, Cursor and VS Code all speak MCP,
+              and one press in the app adds it to each agent on your computer. A task an agent adds
+              is one event appended to the log, indistinguishable from one you typed.
             </dd>
           </dl>
         </section>
@@ -209,7 +216,7 @@
                 </tr>
                 <tr>
                   <th scope="row">Cloudflare Workers Free</th>
-                  <td>Optional MCP endpoint for Claude on the web</td>
+                  <td>Optional MCP endpoint for assistants on the web</td>
                   <td>100,000 requests a day on <code>workers.dev</code></td>
                   <td>HTTP error, never a bill</td>
                 </tr>
@@ -228,9 +235,10 @@
           <p class="micro">Set up</p>
           <h2 id="setup">Four steps, and only the first one is required</h2>
           <p>
-            The app walks through these as a first-run wizard you can resume or skip, and every
-            step ends in a Test connection button that makes a real call and reports the actual
-            error. This is the same sequence, so the page and the app cannot disagree.
+            The app walks through these as a first-run wizard you can resume or skip. Every
+            connection does the real operation and shows it happening, line by line, and reports
+            the actual error when one fails. This is the same sequence, so the page and the app
+            cannot disagree.
           </p>
 
           <ol class="steps">
@@ -244,9 +252,9 @@
             <li>
               <h3>Sync</h3>
               <p>
-                Paste a GitHub fine-grained token with Contents read and write on one repository.
-                The app offers to create the private data repository for you, writes a commit and
-                reads it back before saying it worked, then asks you to name the device.
+                Press Sign in with GitHub and enter the code it shows on github.com. The app finds
+                or creates the private data repository, names the device, and writes a commit and
+                reads it back before saying it worked. A fine-grained token still works instead.
               </p>
             </li>
             <li>
@@ -259,11 +267,12 @@
               </p>
             </li>
             <li>
-              <h3>Claude</h3>
+              <h3>Agents</h3>
               <p>
-                Optional. One command registers the local MCP server with Claude Code. For Claude
-                on the web and on your phone, press Sign in and deploy: the app signs in with your
-                free Cloudflare account, uploads the endpoint, and hands you the URL to add as a
+                Optional. Press Add beside Claude Code, Codex, Gemini CLI, Cursor, VS Code, Windsurf
+                or opencode, and the app writes itself into that agent's settings. For Claude or
+                ChatGPT on the web and on your phone, press Sign in and deploy: the app signs in with
+                your free Cloudflare account, uploads the endpoint, and hands you the URL to add as a
                 connector. Skipping this changes nothing else.
               </p>
             </li>

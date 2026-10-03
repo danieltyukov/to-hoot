@@ -27,7 +27,15 @@ body {
   font-size: var(--fs-base);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  /*
+   * Not optimizeLegibility. Chromium and WebKitGTK on Linux round every glyph
+   * advance to a whole pixel unless told otherwise, and the sans has a 0.2em
+   * space, so at 13px a space rounded to almost nothing ("Usethecommand") and
+   * tracked capitals picked up gaps ("TIT LE"). geometricPrecision turns off
+   * hinting and positions glyphs at subpixel precision, which is what macOS,
+   * Windows and Android do already; it keeps kerning and ligatures on.
+   */
+  text-rendering: geometricPrecision;
   overscroll-behavior: none;
 }
 
@@ -68,6 +76,9 @@ textarea,
 select {
   font: inherit;
   color: inherit;
+  /* The browser's own sheet sets this back to auto on form controls, so
+     without it every button keeps the collapsed spacing body no longer has. */
+  text-rendering: inherit;
 }
 
 button {

@@ -10,8 +10,8 @@ removed later from Settings without disturbing the ones you already did.
 1. [Local only](#1-local-only), no accounts.
 2. [Sync](#2-sync), a private GitHub repository you own, one button.
 3. [Calendar](#3-calendar), a sign-in with Google, one button.
-4. [Claude](#4-claude), MCP over stdio, and an endpoint that signs in with
-   Cloudflare and deploys itself, one button.
+4. [Agents](#4-agents), one press per agent on your computer, and an endpoint
+   for assistants on the web that signs in with Cloudflare and deploys itself.
 
 Every connection in the app does the real operation and shows it happening,
 line by line, rather than checking that a URL looks like a URL. A setup flow that
@@ -106,14 +106,14 @@ A device you no longer use stays on that list until you press **Forget** beside
 it. Forgetting removes it from the repository's registry and nothing else: the
 tasks and time it recorded are in the log and stay there, on every device. A
 device that writes again afterwards reappears, which is what happens if you
-forget the Claude endpoint's `worker` entry while the endpoint is still deployed.
+forget the endpoint's `worker` entry while the endpoint is still deployed.
 
 ### When it syncs
 
 On its own, and opportunistically: once the log has loaded, every ten seconds
 while the app is on screen and once a minute while it is hidden, when the app
 comes back to the foreground, and a couple of seconds after anything changes.
-A task added on your phone, or by Claude, is on the desktop within about ten
+A task added on your phone, or by an agent, is on the desktop within about ten
 seconds. You never have to press anything. There is a **Sync now** button in
 Settings, Sync, beside the status line, and it is there for reassurance rather
 than because sync needs it; it also pushes a running timer's time at once,
@@ -239,62 +239,93 @@ Writing the same block twice leaves one event: every written event carries a
 `toHootId` of `<taskId>::<day>` for the first stretch and `<taskId>::<day>::<n>`
 for the rest, and a re-sync updates by that key rather than inserting.
 
-## 4. Claude
+## 4. Agents
 
-Optional, and additive: skipping it changes nothing else. Two paths, and you can
-take either, both, or neither.
+Optional, and additive: skipping it changes nothing else. MCP is an open
+protocol, and every agent that speaks it gets the same fifteen tools over the
+same event log: Claude, ChatGPT, Codex, Gemini CLI, Cursor, VS Code, Windsurf,
+opencode and any other client. Two paths, and you can take either, both, or
+neither.
 
-Both expose the same fifteen tools over the same event log: `list_tasks`,
-`search_tasks`, `today`, `add_task`, `update_task`, `complete_task`,
-`start_timer`, `stop_timer`, `log_time`, `list_projects`, `add_project`,
-`update_project`, `list_tags`, `add_tag` and `update_tag`. Tasks take project
-and tag names as well as ids, and a name nothing matches is created in the same
-batch as the task. A change Claude makes is one event appended to the log,
-indistinguishable from one you made in the app.
+The tools are `list_tasks`, `search_tasks`, `today`, `add_task`,
+`update_task`, `complete_task`, `start_timer`, `stop_timer`, `log_time`,
+`list_projects`, `add_project`, `update_project`, `list_tags`, `add_tag` and
+`update_tag`. Tasks take project and tag names as well as ids, and a name
+nothing matches is created in the same batch as the task. A change an agent
+makes is one event appended to the log, indistinguishable from one you made in
+the app.
 
-### Claude Code
+### Agents on your computer
 
-One button on the desktop: **Add to Claude Code** writes a `to-hoot` server into
-Claude Code's own config file, `~/.claude.json`, which is what `claude mcp add`
-does from a terminal. Everything else in that file is left as it was. With the
-endpoint deployed, the entry points Claude Code at the endpoint over HTTP, the
-same one Claude on the web uses, so an installed app needs no checkout and no
-build on the machine. Without an endpoint it points at the local stdio server
-below. Claude Code picks the entry up the next time it starts, and the step
-says so when the endpoint has changed since the entry was written.
+**Settings, Agents** lists every agent the desktop app knows how to configure,
+says which ones it found on this computer, and has an **Add** button beside
+each. A press writes one `to-hoot` entry into that agent's own config file,
+which is what the agent's own `mcp add` command does from a terminal, and
+leaves everything else in the file as it was. A file that does not parse (a
+VS Code `mcp.json` with comments in it, say) is left alone and the row says so.
 
-The command is still there under **Use the command instead**, and it is the
-only way in a browser tab or on a phone, which cannot write the file:
+| Agent | File | Remote entry | Local entry |
+|---|---|---|---|
+| Claude Code | `~/.claude.json`, under `mcpServers` | `type: http`, `url` | `type: stdio`, `command`, `args`, `env` |
+| Codex | `~/.codex/config.toml` (or `$CODEX_HOME`), under `mcp_servers` | `url` | `command`, `args`, `env` |
+| Gemini CLI | `~/.gemini/settings.json`, under `mcpServers` | `httpUrl` | `command`, `args`, `env` |
+| Cursor | `~/.cursor/mcp.json`, under `mcpServers` | `url` | `command`, `args`, `env` |
+| VS Code | `Code/User/mcp.json` in the config folder, under `servers` | `type: http`, `url` | `type: stdio`, `command`, `args`, `env` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json`, under `mcpServers` | `serverUrl` | `command`, `args`, `env` |
+| opencode | `~/.config/opencode/opencode.json`, under `mcp` | `type: remote`, `url` | `type: local`, `command`, `environment` |
 
-```
-npm run build -w @to-hoot/core && npm run build -w @to-hoot/mcp
-claude mcp add to-hoot -- node /absolute/path/to/to-hoot/apps/mcp/dist/index.js
-```
+VS Code's config folder is `~/.config` on Linux, `~/Library/Application
+Support` on macOS and `%APPDATA%` on Windows. Each agent picks the entry up the
+next time it starts.
 
-The app generates that second line with the right absolute path already in it.
+**What the entry points at.** With the endpoint below deployed, every entry is
+remote and points at it, so nothing runs on your computer. Without one, the
+entry runs the local stdio server. An installed app has no checkout, so the
+release ships that server as one bundled file, `to-hoot-mcp.mjs`; the app
+downloads the copy for its own version into its cache folder (one the app's
+window cannot write to) and writes an entry that runs it with Node.js. The entry carries no token: it names the app's own
+settings file in `TO_HOOT_SETTINGS`, and the server reads the data repository
+and the token from there each time it starts, so signing in again in the app
+reaches every agent. It needs Node.js 20 or newer. The app looks for
+`node` on the `PATH` and in the usual install places (Homebrew, `/usr/local`,
+Volta, fnm, nvm), because an editor started from the Dock or a launcher does
+not inherit a terminal's `PATH`, and writes the absolute path it found. A row
+says so if it found none, or one too old. A row also says so when its entry
+points at the other kind of target than the one you have now, for instance
+after you deploy the endpoint, and **Add again** fixes it.
+
+**By hand.** **Add it by hand instead**, under the list, shows the entry for any
+agent as text to merge into its file. It is the only way in a browser tab, which
+cannot write files. The local entry shown there carries a placeholder where the
+token goes. From a checkout, the server is `apps/mcp/dist/index.js` after
+`npm run build -w @to-hoot/core && npm run build -w @to-hoot/mcp`, or one file
+after `npm run bundle -w @to-hoot/mcp`.
 
 The server reads its configuration from the environment, never from a file in
 the repository:
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `TO_HOOT_GITHUB_OWNER` | yes | Owner of the data repository |
-| `TO_HOOT_GITHUB_REPO` | yes | The data repository |
-| `TO_HOOT_GITHUB_TOKEN` | yes | A token that can read and write it |
+| `TO_HOOT_SETTINGS` | no | The desktop app's settings file. The repository, token and branch are read from it; any of the variables below still wins |
+| `TO_HOOT_GITHUB_OWNER` | yes, unless `TO_HOOT_SETTINGS` | Owner of the data repository |
+| `TO_HOOT_GITHUB_REPO` | yes, unless `TO_HOOT_SETTINGS` | The data repository |
+| `TO_HOOT_GITHUB_TOKEN` | yes, unless `TO_HOOT_SETTINGS` | A token that can read and write it |
 | `TO_HOOT_GITHUB_BRANCH` | no | The branch to use. Unset means the repository's own default |
 | `TO_HOOT_DEVICE_ID` | no | One path segment, unique per device. Defaults to `mcp-<hostname>` |
 | `TO_HOOT_STATE_DIR` | no | Where a running timer is kept. Defaults to `~/.to-hoot` |
 
 A blank value counts as unset, so an empty token fails by name instead of as a
-401 from GitHub.
+401 from GitHub. Every agent on one computer shares the device id and the timer
+file, so a timer started from Codex can be stopped from Claude Code.
 
-### Claude on the web and on your phone, over a Worker
+### Assistants on the web and on your phone, over a Worker
 
-Neither can reach a program on your machine, so they need a public URL, which
+Claude and ChatGPT on the web and on a phone cannot reach a program on your
+machine, so they need a public URL, which
 means a free Cloudflare account with no payment method on it. The Worker is
 stateless and holds nothing but the secrets you set on it.
 
-The endpoint deploys from **Settings, Claude**, with one press:
+The endpoint deploys from **Settings, Agents**, with one press:
 
 1. **Sign in and deploy.** The browser opens on Cloudflare's own sign-in, using
    the same public OAuth client wrangler uses. Approve it and come back. The app
@@ -304,20 +335,29 @@ The endpoint deploys from **Settings, Claude**, with one press:
    address, asks the new endpoint for its tools, and then revokes the token it
    signed in with. If your account can deploy to more than one Cloudflare
    account, it asks which before uploading.
-2. **Add it to Claude.** Copy the endpoint and open Customize, Connectors, Add
-   custom connector. Paste the URL and leave the second step empty: this
-   endpoint has no authentication to configure. The same connector then works
-   in Claude on the web and in the Claude app on your phone. This is the one
-   step that stays manual, because Claude has no way for an app to add a
-   connector on your behalf.
+2. **Add it to your assistant.** Copy the endpoint, then:
+   - **Claude.** Open Customize, Connectors, Add custom connector. Paste the URL
+     and leave authentication empty: this endpoint has none to configure. The
+     same connector then works in Claude on the web, in the desktop app and in
+     the Claude app on your phone.
+   - **ChatGPT.** Turn on developer mode under Settings, Apps and Connectors,
+     Advanced settings, then create a connector with the URL and no
+     authentication. Developer mode is what lets a connector use tools that
+     write, which adding a task is.
+   - **Anything else** that accepts a remote MCP server URL over streamable
+     HTTP takes the same URL. The endpoint answers protocol versions from
+     2024-11-05 to 2025-11-25.
+
+   This is the one step that stays manual, because neither assistant has a way
+   for an app to add a connector on your behalf.
 
 Cloudflare sends the sign-in back to `localhost:8976` and nowhere else, so this
 is a desktop button, and the phone does not show it. The phone learns the
-endpoint's hostname through sync and its Claude step says "Endpoint deployed"
+endpoint's hostname through sync and its Agents step says "Endpoint deployed"
 with the hostname, or tells you to deploy from the desktop until then. The
 path secret that makes the URL a credential stays on the device that deployed
-it, so the URL is copied into Claude from the desktop; the connector then
-serves the Claude app on the phone as well.
+it, so the URL is copied into your assistant from the desktop; the connector
+then serves its app on the phone as well.
 
 An API token still works, under **Path secret and token options**: the button
 there opens the dashboard's token page with the two permissions prefilled
@@ -344,11 +384,11 @@ Two behaviours are worth knowing before you rely on it:
 
 - The Worker reads the prebuilt snapshot plus the event files written since the
   last compaction, up to 32 of them, so what the desktop wrote a minute ago is
-  visible to Claude on the web. The devices compact the log once it reaches 30
+  visible to an assistant on the web. The devices compact the log once it reaches 30
   files or 500 events, which is what keeps that tail short.
 - The running timer lives in the isolate, which Cloudflare can recycle between
   two requests. `stop_timer` refuses rather than guessing when the start is gone,
-  and tells Claude to use `log_time` instead.
+  and tells the agent to use `log_time` instead.
 
 ## Running a fork
 

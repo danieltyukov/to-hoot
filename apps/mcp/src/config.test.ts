@@ -75,4 +75,58 @@ describe('parseConfig', () => {
 
     expect(result.value.timerFile).toBe('/var/tmp/to-hoot/timer.json');
   });
+
+  describe('the desktop app\'s settings file', () => {
+    // The vault tauri-plugin-store writes: every value is a string, and the
+    // settings are one JSON document inside the "settings" key.
+    const vault = (github: Record<string, string>): string =>
+      JSON.stringify({ settings: JSON.stringify({ github, deviceId: 'desktop' }), 'setup-done': 'true' });
+    const files = (map: Record<string, string>) => (path: string): string => {
+      const text = map[path];
+      if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      return text;
+    };
+    const SETTINGS = '/home/someone/.local/share/com.tohoot.app/to-hoot.json';
+
+    it('reads the repository and token from it, so no agent config has to hold the token', () => {
+      const read = files({ [SETTINGS]: vault({ owner: 'someone', repo: 'to-hoot-data', token: 'gho_device', branch: 'trunk' }) });
+      const result = parseConfig({ TO_HOOT_SETTINGS: SETTINGS }, read);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.github).toMatchObject({ owner: 'someone', repo: 'to-hoot-data', token: 'gho_device', branch: 'trunk' });
+    });
+
+    it('lets an explicit variable win over the file', () => {
+      const read = files({ [SETTINGS]: vault({ owner: 'someone', repo: 'to-hoot-data', token: 'gho_device', branch: '' }) });
+      const result = parseConfig({ TO_HOOT_SETTINGS: SETTINGS, TO_HOOT_GITHUB_REPO: 'other-data' }, read);
+      expect(result.ok && result.value.github.repo).toBe('other-data');
+      expect(result.ok && result.value.github.branch).toBeUndefined();
+    });
+
+    it('says what is wrong when the app has not connected sync, or the file is not there', () => {
+      const unsynced = parseConfig(
+        { TO_HOOT_SETTINGS: SETTINGS },
+        files({ [SETTINGS]: vault({ owner: '', repo: '', token: '', branch: '' }) }),
+      );
+      expect(unsynced.ok).toBe(false);
+      if (!unsynced.ok) expect(unsynced.error).toContain('connect sync in the ToHoot app');
+
+      const missing = parseConfig({ TO_HOOT_SETTINGS: SETTINGS }, files({}));
+      expect(missing.ok).toBe(false);
+      if (!missing.ok) expect(missing.error).toContain(SETTINGS);
+
+      // A broken file is reported without quoting it: the parser's message
+      // would carry the start of the text, and the text holds the token.
+      const broken = parseConfig(
+        { TO_HOOT_SETTINGS: SETTINGS },
+        files({ [SETTINGS]: '{"settings": "{\\"github\\":{\\"token\\":\\"gho_secret' }),
+      );
+      expect(broken.ok).toBe(false);
+      if (!broken.ok) {
+        expect(broken.error).toContain('not valid JSON');
+        expect(broken.error).not.toContain('gho_secret');
+      }
+      if (!missing.ok) expect(missing.error).toContain('ENOENT');
+    });
+  });
 });

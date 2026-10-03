@@ -16,6 +16,7 @@
 //                                                    Android 7, the only place these are still read
 //   node_modules/.cache/to-hoot-icons/desktop-1024.png
 //                                                    what `tauri icon` takes as its input
+//   apps/desktop/src-tauri/icons/tray-template.png   the macOS menu bar icon
 //
 // The face is three subpaths on a 32-unit grid, byte for byte the eyes and
 // beak `OwlIcon.tsx` and the favicon cut out of their disc. `marks.test.ts`
@@ -151,6 +152,19 @@ for (const [dir, px] of [['mdpi', 48], ['hdpi', 72], ['xhdpi', 96], ['xxhdpi', 1
   render(legacySvg(false), px, join(res, `mipmap-${dir}/ic_launcher.png`));
   render(legacySvg(true), px, join(res, `mipmap-${dir}/ic_launcher_round.png`));
 }
+
+/*
+ * The macOS menu bar icon: the app icon's disc with the face cut out, in black
+ * on clear. macOS draws it as a template image, tinting the black to suit the
+ * bar, so the colour here is ignored and only the shape and the alpha count.
+ * 64px, because the bar scales it to 18pt and a Retina bar wants 36px or more.
+ */
+const DISC = 'M2.4,16 a13.6,13.6 0 1,0 27.2,0 a13.6,13.6 0 1,0 -27.2,0 Z ';
+const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="64" height="64">
+  <path fill="#000" fill-rule="evenodd" d="${DISC}${FACE}"/>
+</svg>
+`;
+render(traySvg, 64, join(repo, 'apps/desktop/src-tauri/icons/tray-template.png'));
 
 render(desktopSvg, 1024, join(cache, 'desktop-1024.png'));
 console.log(`\nNow: cd apps/desktop && npx tauri icon ${join(cache, 'desktop-1024.png')}`);

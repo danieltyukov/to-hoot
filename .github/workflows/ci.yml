@@ -76,6 +76,63 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  desktop:
+    name: Desktop shell on ${{ matrix.os }}
+    # The Rust shell's own tests, on every desktop it ships for. Most of the
+    # shell is the same everywhere, and the parts that are not (idle time, the
+    # menu bar icon, where each agent keeps its config) only compile on their
+    # own system, so this is what shows a macOS or Windows mistake on the pull
+    # request rather than on the tag. Pull requests only: three desktop builds
+    # on every push to every branch would be slow for no gain.
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the WebKitGTK toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/desktop/src-tauri/target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-test-${{ runner.os }}-
+
+      - run: npm ci
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # The shell embeds the staged web assets at compile time, so a test build
+      # needs them as much as a release does.
+      - name: Stage the web assets
+        run: npm run stage
+        working-directory: apps/desktop
+
+      - name: Rust tests
+        run: cargo test --locked
+        working-directory: apps/desktop/src-tauri
+
   site:
     name: Site build
     runs-on: ubuntu-latest

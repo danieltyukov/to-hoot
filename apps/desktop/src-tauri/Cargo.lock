@@ -3439,6 +3439,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",
@@ -4350,7 +4351,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "to-hoot-desktop"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4363,6 +4364,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
+ "toml_edit 0.25.13+spec-1.1.0",
  "windows-sys 0.59.0",
  "x11rb",
 ]
@@ -4519,6 +4521,7 @@ dependencies = [
  "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

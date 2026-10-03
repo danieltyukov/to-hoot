@@ -83,6 +83,20 @@ cd apps/desktop; npm install; npx tauri build --bundles nsis,msi
 `tauri.windows.conf.json` is merged over `tauri.conf.json` on Windows, which is
 where the product becomes "ToHoot" for the installer and the Start menu.
 
+**Desktop on macOS.** Needs the Rust toolchain from rustup and the Xcode command
+line tools (`xcode-select --install`). Then:
+
+```
+cd apps/desktop && npm install && npm run dev                  # a window
+npx tauri build --bundles app,dmg                               # this Mac's architecture
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npx tauri build --target universal-apple-darwin --bundles app,dmg   # what the release ships
+```
+
+`tauri.macos.conf.json` is merged over `tauri.conf.json` there: the product is
+"ToHoot", the identifier is `com.tohoot.desktop`, the window keeps the traffic
+lights over the app's own title bar, and the bundle is ad-hoc signed.
+
 **Mobile.** Needs JDK 21 and the Android SDK:
 
 ```
@@ -124,7 +138,10 @@ Describe the change and why it is right, not the process that produced it.
 ## CI
 
 `.github/workflows/ci.yml` runs typecheck, unit tests and Playwright on every
-push and pull request, and builds `site/` in a second job. The site build is
+push and pull request, and builds `site/` in a second job. On pull requests a
+third job runs the desktop shell's Rust tests on Linux, Windows and macOS,
+because the parts of the shell that differ by system (idle time, the macOS menu
+bar icon, where each agent keeps its config) compile only on their own. The site build is
 there because the site imports `packages/ui/src/tokens.css` from outside its own
 root, so moving or renaming that file breaks it, and a pull request should say
 so rather than the next deploy discovering it. CI needs no secrets, so it runs
@@ -134,9 +151,11 @@ on forks.
 push to `main`. Pages must be set to "GitHub Actions" as its source, once, in
 the repository settings.
 
-`.github/workflows/release.yml` runs on a `v*` tag and attaches three artifacts
-to a GitHub Release: the signed APK, the `.deb` and the `.AppImage`. It reads
-four repository secrets, all of them Android signing material:
+`.github/workflows/release.yml` runs on a `v*` tag and attaches nine artifacts
+to a GitHub Release: the signed APK, the `.deb`, the `.AppImage`, the Windows
+`.exe` and `.msi`, the universal macOS `.dmg`, the bundled Worker and the bundled
+stdio server. The desktop builds read `GOOGLE_DESKTOP_CLIENT_SECRET` for Sign in
+with Google; the APK reads four more, all of them Android signing material:
 
 | Secret | Value |
 |---|---|

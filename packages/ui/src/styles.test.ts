@@ -145,6 +145,15 @@ describe('the rules the component tests lean on', () => {
   const row = FILES.find(f => f.name.endsWith('TaskRow.css'))!.css;
   const tokens = FILES.find(f => f.name === TOKENS)!.css;
 
+  it('positions glyphs at subpixel precision, so Linux keeps its word spaces', () => {
+    // optimizeLegibility let Chromium and WebKitGTK on Linux round each
+    // advance to a whole pixel, and the sans's 0.2em space rounded to nothing.
+    expect(base).toMatch(/\nbody\s*\{[^}]*text-rendering:\s*geometricPrecision/);
+    expect(base).not.toMatch(/text-rendering:\s*optimizeLegibility/);
+    // Form controls do not inherit it on their own: the UA sheet resets them.
+    expect(base).toMatch(/button,\s*\ninput,\s*\ntextarea,\s*\nselect\s*\{[^}]*text-rendering:\s*inherit/);
+  });
+
   it('makes .tabular mean tabular numerals', () => {
     // The other half of TaskRow's jitter test: jsdom will not compute
     // font-variant-numeric, so the class and its meaning are checked separately.
