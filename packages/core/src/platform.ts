@@ -95,6 +95,13 @@ export interface WindowFrame {
    */
   close(): Promise<void>;
   isMaximized(): Promise<boolean>;
+  /**
+   * Set when the OS draws the window buttons itself, at the leading edge of
+   * the title bar: macOS, where the traffic lights sit over the app's own bar.
+   * The app then draws no controls of its own and leaves room for the OS's.
+   * Absent means the app draws all three at the trailing edge.
+   */
+  nativeControls?: 'leading';
   /** Fires after the window is maximised or restored, by any means. */
   onMaximizedChange(cb: (maximized: boolean) => void): Unsubscribe;
   /**
@@ -126,23 +133,43 @@ export interface CallbackListener {
   waitForCallback(cancelled?: () => boolean): Promise<string>;
 }
 
-/** One server as Claude Code's config spells it: http with a URL, or stdio with a command. */
-export type ClaudeCodeServer =
-  | { type: 'http'; url: string }
-  | { type: 'stdio'; command: string; args: string[] };
+/**
+ * The agents whose config files the desktop shell can write. An agent is any
+ * program that speaks MCP: the shell knows where each one keeps its settings,
+ * and the app knows what one entry in them looks like.
+ */
+export type AgentId = 'claude-code' | 'codex' | 'gemini-cli' | 'cursor' | 'vscode' | 'windsurf' | 'opencode';
 
-export interface ClaudeCodeEntry {
+export interface AgentEntry {
   /** The config file, for the settings screen to name. */
   path: string;
+  /** Whether the agent looks installed on this machine. */
+  installed: boolean;
+  /** Whether the file already has an entry under the name asked about. */
   present: boolean;
-  /** The URL of an http entry or the command of a stdio one. */
+  /** The URL of a remote entry or the program of a local one. */
   target: string | null;
 }
 
-export interface ClaudeCodeConfig {
-  /** Adds or replaces the named server and answers with the file written. */
-  add(name: string, server: ClaudeCodeServer): Promise<string>;
-  inspect(name: string): Promise<ClaudeCodeEntry>;
+/** The bundled stdio server, put somewhere stable, and a node to run it. */
+export interface LocalServer {
+  /** Absolute path of the server file. */
+  path: string;
+  /** Absolute path of a `node` executable, or null when none was found. */
+  node: string | null;
+  /** `node --version` without the `v`, when there is a node. */
+  nodeVersion: string | null;
+}
+
+export interface AgentConfigs {
+  /**
+   * Adds or replaces `name` under `key` in the agent's own config file, keeping
+   * everything else in it, and answers with the file written.
+   */
+  add(agent: AgentId, key: string, name: string, entry: Record<string, unknown>): Promise<string>;
+  inspect(agent: AgentId, key: string, name: string): Promise<AgentEntry>;
+  /** Writes the stdio server's source into the app's data folder. */
+  installServer(source: string): Promise<LocalServer>;
 }
 
 export interface Platform {
@@ -168,11 +195,11 @@ export interface Platform {
    */
   oauthScheme?(scheme: string): CallbackListener;
   /**
-   * Claude Code's own config file, for registering the app's MCP server the
-   * way `claude mcp add` would. Desktop only: that file lives in the home
-   * directory of the machine Claude Code runs on.
+   * The config files of the agents installed here, for registering the app's
+   * MCP server the way each agent's own `mcp add` would. Desktop only: those
+   * files live in the home directory of the machine the agents run on.
    */
-  claudeCode?: ClaudeCodeConfig;
+  agents?: AgentConfigs;
   http: Http;
   /** Settings, and nothing larger. See `files` for the log. */
   store: KeyValueStore;

@@ -12,7 +12,7 @@ import { CalendarGlyph, CloudDeviceGlyph, DesktopGlyph, PhoneGlyph, SparkGlyph, 
 import { modeFor } from '../../calendar.js';
 import type { SyncDevice, SyncStatus } from '../../sync.js';
 import { StepCalendar } from '../Wizard/StepCalendar.js';
-import { StepClaude } from '../Wizard/StepClaude.js';
+import { StepAgents } from '../Wizard/StepAgents.js';
 import { StepSync } from '../Wizard/StepSync.js';
 import './Settings.css';
 
@@ -27,13 +27,12 @@ export interface SettingsProps {
   onExport: () => string;
   onImport: (text: string) => { ok: true; added: number } | { ok: false; error: string };
   onClose: () => void;
-  mcpServerPath?: string;
   /** The shell's way of opening a link, where the host will not follow one. */
   openUrl?: ((url: string) => Promise<void>) | undefined;
   /** What the shell says it is, which is what names this device. */
   deviceKind?: PlatformKind | undefined;
   /** The shell, for how a sign-in comes back to it. */
-  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'claudeCode'> | undefined;
+  platform?: Pick<Platform, 'kind' | 'oauthLoopback' | 'oauthScheme' | 'agents'> | undefined;
   syncStatus?: SyncStatus | null;
   onSyncNow?: () => void;
   /** Removes a device from the repository's registry. Its events stay. */
@@ -69,7 +68,6 @@ export function Settings({
   onExport,
   onImport,
   onClose,
-  mcpServerPath,
   openUrl,
   deviceKind,
   platform,
@@ -144,26 +142,19 @@ export function Settings({
         </Card>
 
         <Card
-          id="claude"
+          id="agents"
           glyph={<SparkGlyph />}
-          title="Claude"
+          title="Agents"
           status={
             settings.worker.url !== ''
               ? 'Endpoint deployed'
               : settings.worker.base !== ''
                 ? 'Endpoint deployed from another device'
-                : 'Claude Code only, no endpoint yet'
+                : 'No endpoint yet'
           }
           connected={settings.worker.url !== '' || settings.worker.base !== ''}
         >
-          <StepClaude
-            http={http}
-            settings={settings}
-            onSave={onSave}
-            mcpServerPath={mcpServerPath}
-            openUrl={openUrl}
-            platform={platform}
-          />
+          <StepAgents http={http} settings={settings} onSave={onSave} openUrl={openUrl} platform={platform} />
         </Card>
 
         {synced ? (

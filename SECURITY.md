@@ -29,7 +29,8 @@ shared account, no server holding anything on your behalf, and no telemetry.
 | Apps Script shared secret, if you use the bridge | Platform store, and a Script Property named `TO_HOOT_SECRET` in your own Apps Script project | Your Apps Script deployment |
 | Apps Script `/exec` URL, if you use the bridge | Platform store | Your Google account |
 | Worker path secret | Platform store, and a Worker secret in your own Cloudflare account | Your Worker |
-| Worker URL, if you pressed Add to Claude Code | Also in `~/.claude.json`, Claude Code's own config, as the `to-hoot` server entry, exactly where `claude mcp add` would put it | Claude Code on that machine |
+| Worker URL, if you pressed Add beside an agent with the endpoint deployed | Also in that agent's own config file (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json` and so on, listed in `docs/SETUP.md`) as the `to-hoot` server entry, exactly where its own `mcp add` would put it | That agent on that machine |
+| GitHub token, if you pressed Add beside an agent with no endpoint | In that agent's config file, as `TO_HOOT_GITHUB_TOKEN` in the local server's environment, which is how every stdio MCP server is given a credential | That agent on that machine |
 | Android release keystore | Outside the repository, and in Actions secrets as base64 for CI | Signing releases |
 
 **Tokens are per device and never sync.** They are deliberately kept out of the
@@ -97,9 +98,10 @@ Generate it with at least 32 random characters:
 openssl rand -base64 32 | tr -d '/+=' | cut -c1-32
 ```
 
-To revoke, generate a new path secret in Settings, Claude and press Deploy
+To revoke, generate a new path secret in Settings, Agents and press Deploy
 again, or run `wrangler secret put MCP_PATH_SECRET` with a new value, then
-update the connector in Claude. The old URL 404s from the next request onward.
+update the connector in your assistant and press Add again beside each agent.
+The old URL 404s from the next request onward.
 
 The deploy from Settings signs in with Cloudflare through the same public OAuth
 client wrangler uses, with PKCE, and the redirect lands on the desktop app's
@@ -117,8 +119,20 @@ are allowed so the app can check a deploy; a page served from a local port would
 also pass that check, and still needs the path secret.
 
 If you do not want a capability URL at all, skip the Worker. The stdio MCP
-server for Claude Code is a local process with no network listener, and
-everything else in the app works without either.
+server for agents on your computer is a local process with no network
+listener, and everything else in the app works without either.
+
+**Agent config files.** Pressing Add writes one entry into a file the agent
+owns and leaves the rest of it as it was; a file that does not parse is
+refused rather than rewritten. The write goes to a temporary file that is then
+renamed over the original, so a crash cannot leave half a config behind. The
+new file keeps the old one's permissions, and a file the app creates is
+readable by its owner only, because what goes in it is a credential either way.
+Which file an agent id names is decided in the desktop shell's Rust code, not
+in the web layer, so the window cannot ask for an arbitrary path to be
+written. The local server itself is the release's `to-hoot-mcp.mjs` for the
+app's own version, downloaded from this repository's releases over HTTPS and
+kept in the app's data folder; it is not minified, so it can be read.
 
 ## Google Calendar
 

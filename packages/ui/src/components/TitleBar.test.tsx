@@ -20,6 +20,15 @@ describe('TitleBar', () => {
     ]);
   });
 
+  it('draws no controls of its own where the OS draws them, and leaves them room', () => {
+    // macOS: the traffic lights sit over the leading end of the strip.
+    const { frame } = fakeFrame();
+    const { container } = render(<TitleBar frame={{ ...frame, nativeControls: 'leading' }} title="Today" />);
+    expect(screen.queryByRole('group', { name: 'Window' })).toBeNull();
+    expect(container.querySelector('.titlebar')).toHaveAttribute('data-native-controls', 'leading');
+    expect(container.querySelector('.brand-word')).toHaveTextContent('ToHoot');
+  });
+
   it('keeps the title out of the reading order', () => {
     // It names what the panes underneath already head. Announced, it would say
     // the same word twice before anything with content in it.

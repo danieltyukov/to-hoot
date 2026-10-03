@@ -25,10 +25,12 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-store = "2"
-# For editing Claude Code's own config file in place: read what is there,
-# add one server, write it back. Tauri already pulls both in.
+# For editing each agent's own config file in place: read what is there, add
+# one server, write it back. Tauri already pulls serde in; toml_edit is for
+# Codex's config.toml, and keeps the person's comments and ordering intact.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml_edit = "0.25"
 
 # Pure Rust X11 client, so the OS idle query needs no C headers at build time.
 [target.'cfg(target_os = "linux")'.dependencies]

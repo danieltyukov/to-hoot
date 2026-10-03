@@ -31,10 +31,16 @@ export interface TitleBarProps {
  * Rendered only when the shell hands over a `WindowFrame`, which is the same
  * condition the controls themselves use. A browser tab and an Android activity
  * have chrome already.
+ *
+ * On macOS the OS draws the traffic lights itself, over the leading end of this
+ * strip (`nativeControls: 'leading'`). The strip then draws no controls of its
+ * own and starts the brand after the lights, which is where every Mac
+ * application with a unified title bar puts its first item.
  */
 export function TitleBar({ frame, title }: TitleBarProps) {
+  const native = frame.nativeControls === 'leading';
   return (
-    <header className="titlebar" data-window-drag="">
+    <header className="titlebar" data-window-drag="" data-native-controls={native ? 'leading' : undefined}>
       <div className="titlebar-brand">
         <OwlMark size={18} label={null} className="brand-mark" />
         <Wordmark className="brand-word" />
@@ -51,7 +57,7 @@ export function TitleBar({ frame, title }: TitleBarProps) {
         <span>ToHoot</span>
       </p>
 
-      <WindowControls frame={frame} />
+      {native ? null : <WindowControls frame={frame} />}
     </header>
   );
 }

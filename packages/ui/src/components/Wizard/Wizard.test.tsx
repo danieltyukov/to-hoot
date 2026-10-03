@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DEFAULT_SETTINGS, cloneSettings, type Http, type Settings } from '@to-hoot/core';
+import { DEFAULT_SETTINGS, cloneSettings, type AgentConfigs, type Http, type Settings } from '@to-hoot/core';
 import { describe, expect, it, vi } from 'vitest';
 import APPS_SCRIPT_SOURCE from 'virtual:apps-script-source';
 
@@ -41,6 +41,16 @@ function transport(routes: Route[]): { http: Http; seen: Array<{ url: string; bo
   return { http, seen };
 }
 
+/** An agents config that records nothing and finds nothing, unless told otherwise. */
+function fakeAgents(over: Partial<AgentConfigs> = {}): AgentConfigs {
+  return {
+    add: async agent => `/home/someone/${agent}`,
+    inspect: async agent => ({ path: `/home/someone/${agent}`, installed: false, present: false, target: null }),
+    installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/bin/node', nodeVersion: '22.0.0' }),
+    ...over,
+  };
+}
+
 /** The shell a sign-in can come back to, or none, plus what it opened. */
 interface Shell {
   platform?: WizardProps['platform'];
@@ -75,7 +85,6 @@ function setup(routes: Route[] = [], shell: Shell = {}) {
             worker: { ...prev.worker, ...patch.worker },
           }));
         }}
-        mcpServerPath="/home/someone/to-hoot/apps/mcp/dist/index.js"
         openUrl={shell.openUrl}
         platform={shell.platform}
       />
@@ -405,20 +414,36 @@ describe('Wizard', () => {
     expect(await resultText()).toContain('Read 1 events. This feed is read-only.');
   });
 
-  it('prints the mcp command with this machine own path', async () => {
-    const { user, container } = setup();
-    await go(user, 'claude');
-    const blocks = [...container.querySelectorAll('.copyable-text')].map(el => el.textContent);
-    expect(blocks[0]).toBe(
-      'claude mcp add to-hoot -- node /home/someone/to-hoot/apps/mcp/dist/index.js',
-    );
+  it('hands a browser a snippet to paste, with the token left for the person to fill in', async () => {
+    // A browser cannot write any agent's config, so the snippet is open from
+    // the start. It carries the server's environment, which the stdio server
+    // refuses to start without, but never the token itself.
+    const { user, container } = setup([], {
+      initial: s => {
+        s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_secret' };
+      },
+    });
+    await go(user, 'agents');
+    const snippet = JSON.parse(container.querySelector('.copyable-text')!.textContent!) as {
+      mcpServers: { 'to-hoot': { type: string; command: string; args: string[]; env: Record<string, string> } };
+    };
+    expect(snippet.mcpServers['to-hoot']).toMatchObject({
+      type: 'stdio',
+      command: 'node',
+      args: ['apps/mcp/dist/index.js'],
+      env: { TO_HOOT_GITHUB_OWNER: 'someone', TO_HOOT_GITHUB_REPO: 'to-hoot-data' },
+    });
+    expect(container.textContent).not.toContain('gho_secret');
+
+    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    expect(container.querySelector('.copyable-text')!.textContent).toMatch(/^\[mcp_servers\.to-hoot\]\ncommand = "node"/);
   });
 
   it('runs a real tools/list against the deployed endpoint', async () => {
     const { user, seen } = setup([
       [/workers\.dev/, { body: { result: { tools: [{ name: 'list_tasks' }] } } }],
     ]);
-    await go(user, 'claude');
+    await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     await user.type(
       screen.getByLabelText('Worker URL'),
@@ -437,7 +462,7 @@ describe('Wizard', () => {
     const { user, seen } = setup([
       [/workers\.dev/, { body: { result: { tools: [{ name: 'list_tasks' }] } } }],
     ]);
-    await go(user, 'claude');
+    await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Path secret and token options' }));
     const secret = (screen.getByLabelText('Path secret') as HTMLInputElement).value;
     expect(secret).not.toBe('');
@@ -454,7 +479,7 @@ describe('Wizard', () => {
 
   it('links out to the places the steps send you', async () => {
     const { user, container } = setup();
-    await go(user, 'claude');
+    await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Path secret and token options' }));
     await user.click(screen.getByRole('button', { name: 'Deploy with wrangler instead' }));
     const links = [...container.querySelectorAll('a.link-button')].map(a => a.getAttribute('href'));
@@ -462,6 +487,7 @@ describe('Wizard', () => {
     expect(links.some(href => href?.startsWith('https://dash.cloudflare.com/profile/api-tokens?'))).toBe(true);
     expect(links).toContain('https://dash.cloudflare.com');
     expect(links).toContain('https://claude.ai/customize/connectors');
+    expect(links).toContain('https://chatgpt.com/#settings/Connectors');
     // Every one opens away from the app, which is the only thing that makes
     // sense in a window that is itself the application.
     for (const link of container.querySelectorAll('a.link-button')) {
@@ -472,7 +498,7 @@ describe('Wizard', () => {
 
   it('gives every control a name the mobile suite can address it by', async () => {
     const { user, container } = setup();
-    for (const step of ['local', 'sync', 'calendar', 'claude']) {
+    for (const step of ['local', 'sync', 'calendar', 'agents']) {
       await go(user, step);
       const names: string[] = [];
       for (const control of container.querySelectorAll('button, input, select, textarea')) {
@@ -608,10 +634,10 @@ describe('Wizard', () => {
         },
       },
     );
-    await go(user, 'claude');
+    await go(user, 'agents');
     await user.click(screen.getByRole('button', { name: 'Sign in and deploy' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy the endpoint and open Claude' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy and open Claude' })).toBeInTheDocument());
     const auth = new URL(shell.opened[0]!);
     expect(auth.origin + auth.pathname).toBe('https://dash.cloudflare.com/oauth2/auth');
     expect(auth.searchParams.get('redirect_uri')).toBe('http://localhost:8976/oauth/callback');
@@ -637,70 +663,142 @@ describe('Wizard', () => {
         s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
       },
     });
-    await go(user, 'claude');
+    await go(user, 'agents');
     expect(screen.getByText(/Deployed from another device at https:\/\/to-hoot-mcp\.someone\.workers\.dev/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Sign in and deploy/ })).toBeDisabled();
   });
 
-  it('registers with Claude Code in one press, pointing at the endpoint when there is one', async () => {
-    // What `claude mcp add` does, done by the app: one entry in Claude Code's
-    // own config. With an endpoint deployed it is an http entry, so an
-    // installed app needs no checkout and no build on the machine.
-    const added: Array<{ name: string; server: unknown }> = [];
-    const claudeCode = {
-      add: async (name: string, server: unknown) => {
-        added.push({ name, server });
-        return '/home/someone/.claude.json';
-      },
-      inspect: async () => ({ path: '/home/someone/.claude.json', present: false, target: null }),
-    };
-    const { user } = setup([], {
-      platform: { kind: 'desktop', claudeCode },
-      initial: s => {
-        s.worker = { url: 'https://to-hoot-mcp.someone.workers.dev/mcp/abc', pathSecret: 'abc', base: 'https://to-hoot-mcp.someone.workers.dev' };
+  it('adds the endpoint to any agent in one press, in that agent\'s own spelling', async () => {
+    // What each agent's `mcp add` does, done by the app: one entry in its own
+    // config. With an endpoint deployed every entry is remote, so an installed
+    // app needs nothing else on the machine.
+    const added: Array<[string, string, string, unknown]> = [];
+    const agents = fakeAgents({
+      add: async (agent, key, name, entry) => {
+        added.push([agent, key, name, entry]);
+        return `/home/someone/${agent}.json`;
       },
     });
-    await go(user, 'claude');
-    await user.click(screen.getByRole('button', { name: 'Add to Claude Code' }));
-    await waitFor(() => expect(screen.getByText('Registered with Claude Code')).toBeInTheDocument());
-    expect(added).toEqual([
-      { name: 'to-hoot', server: { type: 'http', url: 'https://to-hoot-mcp.someone.workers.dev/mcp/abc' } },
-    ]);
-    expect(screen.getByText(/Registered in \/home\/someone\/\.claude\.json/)).toBeInTheDocument();
-  });
-
-  it('points Claude Code at the local server when nothing is deployed, and shows what is registered', async () => {
-    const added: unknown[] = [];
-    const claudeCode = {
-      add: async (_name: string, server: unknown) => {
-        added.push(server);
-        return '/home/someone/.claude.json';
+    const url = 'https://to-hoot-mcp.someone.workers.dev/mcp/abc';
+    const { user } = setup([], {
+      platform: { kind: 'desktop', agents },
+      initial: s => {
+        s.worker = { url, pathSecret: 'abc', base: 'https://to-hoot-mcp.someone.workers.dev' };
       },
-      inspect: async () => ({ path: '/home/someone/.claude.json', present: true, target: 'node' }),
-    };
-    const { user } = setup([], { platform: { kind: 'desktop', claudeCode } });
-    await go(user, 'claude');
-    // Already registered, as the file says, and pointing where it should.
-    await waitFor(() => expect(screen.getByText('Registered with Claude Code')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: 'Add to Claude Code again' }));
+    });
+    await go(user, 'agents');
+    await user.click(screen.getByRole('button', { name: 'Add to Claude Code' }));
+    await user.click(screen.getByRole('button', { name: 'Add to Codex' }));
+    await user.click(screen.getByRole('button', { name: 'Add to Gemini CLI' }));
+    await user.click(screen.getByRole('button', { name: 'Add to VS Code' }));
+    await waitFor(() => expect(added).toHaveLength(4));
+    expect(added).toEqual([
+      ['claude-code', 'mcpServers', 'to-hoot', { type: 'http', url }],
+      ['codex', 'mcp_servers', 'to-hoot', { url }],
+      ['gemini-cli', 'mcpServers', 'to-hoot', { httpUrl: url }],
+      ['vscode', 'servers', 'to-hoot', { type: 'http', url }],
+    ]);
+    expect(screen.getByText(/Added to \/home\/someone\/codex\.json\. Codex picks it up/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add again to Codex' })).toBeInTheDocument();
+  });
+
+  it('installs the local server once and points agents at it when nothing is deployed', async () => {
+    const added: unknown[] = [];
+    const installs: string[] = [];
+    const agents = fakeAgents({
+      add: async (_agent, _key, _name, entry) => {
+        added.push(entry);
+        return '/home/someone/.cursor/mcp.json';
+      },
+      installServer: async source => {
+        installs.push(source);
+        return { path: '/data/mcp/to-hoot-mcp.mjs', node: '/usr/local/bin/node', nodeVersion: '22.3.0' };
+      },
+    });
+    const { user, seen } = setup(
+      [[/releases\/download\/v[^/]+\/to-hoot-mcp\.mjs$/, { text: '#!/usr/bin/env node\nconsole.error("to-hoot mcp: serving")' }]],
+      {
+        platform: { kind: 'desktop', agents },
+        initial: s => {
+          s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
+        },
+      },
+    );
+    await go(user, 'agents');
+    await user.click(screen.getByRole('button', { name: 'Add to Cursor' }));
     await waitFor(() => expect(added).toHaveLength(1));
-    expect(added[0]).toEqual({ type: 'stdio', command: 'node', args: ['/home/someone/to-hoot/apps/mcp/dist/index.js'] });
+    await user.click(screen.getByRole('button', { name: 'Add to Windsurf' }));
+    await waitFor(() => expect(added).toHaveLength(2));
+
+    const env = { TO_HOOT_GITHUB_OWNER: 'someone', TO_HOOT_GITHUB_REPO: 'to-hoot-data', TO_HOOT_GITHUB_TOKEN: 'gho_x' };
+    expect(added).toEqual([
+      { command: '/usr/local/bin/node', args: ['/data/mcp/to-hoot-mcp.mjs'], env },
+      { command: '/usr/local/bin/node', args: ['/data/mcp/to-hoot-mcp.mjs'], env },
+    ]);
+    // Downloaded and installed once for the two presses.
+    expect(installs).toHaveLength(1);
+    expect(seen.filter(r => r.url.endsWith('/to-hoot-mcp.mjs'))).toHaveLength(1);
   });
 
-  it('keeps the terminal command where the shell cannot write the config', async () => {
+  it('says so when there is no node to run the local server', async () => {
+    const agents = fakeAgents({
+      installServer: async () => ({ path: '/data/mcp/to-hoot-mcp.mjs', node: null, nodeVersion: null }),
+    });
+    const { user } = setup(
+      [[/to-hoot-mcp\.mjs$/, { text: '#!/usr/bin/env node\nconsole.error("to-hoot mcp: serving")' }]],
+      {
+        platform: { kind: 'desktop', agents },
+        initial: s => {
+          s.github = { owner: 'someone', repo: 'to-hoot-data', branch: '', token: 'gho_x' };
+        },
+      },
+    );
+    await go(user, 'agents');
+    await user.click(screen.getByRole('button', { name: 'Add to Claude Code' }));
+    await waitFor(() => expect(screen.getByText(/but it will not start yet/)).toBeInTheDocument());
+    expect(screen.getByText(/No Node\.js was found on this computer/)).toBeInTheDocument();
+  });
+
+  it('shows which agents are here, and an entry that points at the wrong place', async () => {
+    const url = 'https://to-hoot-mcp.someone.workers.dev/mcp/new';
+    const agents = fakeAgents({
+      inspect: async agent =>
+        agent === 'codex'
+          ? { path: '/home/someone/.codex/config.toml', installed: true, present: true, target: 'https://old.workers.dev/mcp/x' }
+          : agent === 'cursor'
+            ? { path: '/home/someone/.cursor/mcp.json', installed: true, present: true, target: url }
+            : agent === 'gemini-cli'
+              ? { path: '/home/someone/.gemini/settings.json', installed: true, present: false, target: null }
+              : { path: `/home/someone/${agent}`, installed: false, present: false, target: null },
+    });
+    const { user, container } = setup([], {
+      platform: { kind: 'desktop', agents },
+      initial: s => {
+        s.worker = { url, pathSecret: 'new', base: 'https://to-hoot-mcp.someone.workers.dev' };
+      },
+    });
+    await go(user, 'agents');
+    const row = (id: string): HTMLElement => container.querySelector(`[data-agent="${id}"]`)!;
+    await waitFor(() => expect(row('cursor')).toHaveAttribute('data-status', 'ok'));
+    expect(row('codex').textContent).toContain('Points somewhere else');
+    expect(row('codex')).toHaveAttribute('data-status', 'idle');
+    expect(row('gemini-cli').textContent).toContain('Found on this computer');
+    expect(row('windsurf').textContent).toContain('Not found on this computer');
+  });
+
+  it('offers a snippet where the shell cannot write the config', async () => {
     const { user, container } = setup();
-    await go(user, 'claude');
-    expect(screen.queryByRole('button', { name: /Add to Claude Code/ })).toBeNull();
-    expect(container.textContent).toContain('claude mcp add to-hoot');
+    await go(user, 'agents');
+    expect(screen.queryByRole('button', { name: /^Add to / })).toBeNull();
+    expect(container.textContent).toContain('"mcpServers"');
   });
 
-  it('shows a phone only what a phone can do with Claude', async () => {
-    // No terminal command, no deploy button it cannot press: the phone reports
-    // what the desktop deployed, once the hostname has synced, and points at
-    // Claude's connector page.
+  it('shows a phone only what a phone can do with an agent', async () => {
+    // No agent configs, no deploy button it cannot press: the phone reports
+    // what the desktop deployed, once the hostname has synced.
     const { user, container } = setup([], { platform: { kind: 'android' } });
-    await go(user, 'claude');
-    expect(container.textContent).not.toContain('claude mcp add');
+    await go(user, 'agents');
+    expect(container.textContent).not.toContain('mcpServers');
     expect(screen.queryByRole('button', { name: /Sign in and deploy/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deploy with wrangler instead' })).toBeNull();
     expect(screen.getByText('Deploy it from the desktop')).toBeInTheDocument();
@@ -717,7 +815,7 @@ describe('Wizard', () => {
         s.worker = { url: '', pathSecret: '', base: 'https://to-hoot-mcp.someone.workers.dev' };
       },
     });
-    await go(user, 'claude');
+    await go(user, 'agents');
     expect(screen.getByText('Endpoint deployed')).toBeInTheDocument();
     expect(screen.getByText(/Deployed from the desktop at https:\/\/to-hoot-mcp\.someone\.workers\.dev/)).toBeInTheDocument();
   });

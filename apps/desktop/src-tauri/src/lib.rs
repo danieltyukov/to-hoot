@@ -2,7 +2,7 @@
 //! the web layer cannot provide for itself (HTTP that is not subject to CORS,
 //! a durable key-value store, and OS notifications).
 
-mod claude_code;
+mod agents;
 mod idle;
 mod oauth;
 
@@ -51,7 +51,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     TrayIconBuilder::with_id("tray")
-        .icon(app.default_window_icon().cloned().expect("bundled icon"))
+        .icon(tray_icon(app))
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("ToHoot")
         .menu(&menu)
         // Deliberately no `on_tray_icon_event`. Linux delivers no click events
@@ -82,6 +83,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
 
     Ok(())
+}
+
+/// The menu bar on macOS draws template images: black and clear, tinted by the
+/// system to match the bar, the way every other icon up there is drawn. A
+/// colour icon would be the one thing in the bar that ignores dark mode. The
+/// Linux and Windows trays show the app icon as it is.
+///
+/// Decoded at compile time, so the shell carries no PNG decoder for one icon.
+#[cfg(target_os = "macos")]
+fn tray_icon(_app: &AppHandle) -> tauri::image::Image<'static> {
+    tauri::include_image!("icons/tray-template.png")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tray_icon(app: &AppHandle) -> tauri::image::Image<'static> {
+    app.default_window_icon().cloned().expect("bundled icon").to_owned()
 }
 
 /// Sets the environment WebKitGTK needs before anything creates a webview.
@@ -133,8 +150,9 @@ pub fn run() {
             idle_seconds,
             oauth::oauth_listen,
             oauth::oauth_cancel,
-            claude_code::claude_code_add,
-            claude_code::claude_code_inspect
+            agents::agent_inspect,
+            agents::agent_add,
+            agents::agent_server_install
         ])
         .setup(|app| {
             build_tray(app.handle())?;
@@ -149,13 +167,34 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start the ToHoot desktop shell");
+        .build(tauri::generate_context!())
+        .expect("failed to start the ToHoot desktop shell")
+        .run(|app, event| {
+            // A click on the Dock icon. Closing the window only hid it, so
+            // without this the Dock icon of a running app would do nothing.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                focus_main(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The menu bar icon is drawn on macOS only, but checked everywhere: a path
+    /// or a PNG the macro cannot read would otherwise fail the build on the one
+    /// platform nobody here builds on.
+    #[test]
+    fn the_menu_bar_icon_decodes() {
+        let icon = tauri::include_image!("icons/tray-template.png");
+        assert_eq!((icon.width(), icon.height()), (64, 64));
+        // A template is black and clear: every pixel's colour is black.
+        assert!(icon.rgba().chunks(4).all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0));
+    }
 
     /// Both halves of the rule, since getting either wrong is silent: a missing
     /// variable is a blank window on NVIDIA, and overwriting an explicit one

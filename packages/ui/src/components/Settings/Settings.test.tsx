@@ -44,7 +44,7 @@ describe('Settings', () => {
       el.getAttribute('data-section'),
     );
     // No Devices card until sync is configured: there is nothing to list.
-    expect(sections).toEqual(['sync', 'calendar', 'claude', 'appearance', 'tracking', 'data']);
+    expect(sections).toEqual(['sync', 'calendar', 'agents', 'appearance', 'tracking', 'data']);
   });
 
   it('lists every device writing to the repository once sync is configured', async () => {
@@ -287,7 +287,7 @@ describe('Settings', () => {
   it('gives every control in settings an accessible name', async () => {
     const { user, container } = setup();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    for (const section of ['Sync', 'Calendar', 'Claude', 'Appearance', 'Data']) {
+    for (const section of ['Sync', 'Calendar', 'Agents', 'Appearance', 'Data']) {
       await user.click(screen.getByRole('button', { name: new RegExp(`^${section}`) }));
       for (const control of container.querySelectorAll('button, input, select, textarea')) {
         expect(control, `${section}: ${control.outerHTML.slice(0, 80)}`).toHaveAccessibleName();
@@ -496,7 +496,7 @@ describe('when the log on disk cannot be read', () => {
     expect(store.getSnapshot().settings.worker.url).toBe('');
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    const claude = screen.getByRole('button', { name: /^Claude/ });
+    const claude = screen.getByRole('button', { name: /^Agents/ });
     expect(claude.textContent).toContain('Endpoint deployed from another device');
   });
 

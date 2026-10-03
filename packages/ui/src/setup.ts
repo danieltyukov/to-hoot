@@ -815,11 +815,6 @@ export async function testIcs(http: Http, url: string): Promise<Check<number>> {
   }
 }
 
-/** The exact command, with this machine's path in it, ready to paste. */
-export function mcpAddCommand(serverPath: string): string {
-  return `claude mcp add to-hoot -- node ${serverPath}`;
-}
-
 /** The wrangler commands, in the order they have to be run, with values filled in. */
 export function wranglerCommands(input: {
   pathSecret: string;
@@ -1226,7 +1221,7 @@ export function suggestDeviceName(kind: PlatformKind | undefined, taken: readonl
 }
 
 /*
- * The Claude endpoint, deployed from the app.
+ * The MCP endpoint, deployed from the app.
  *
  * Wrangler is a terminal on a computer with this repository checked out, and
  * that is the wrong shape for a phone. Cloudflare's own API takes the same

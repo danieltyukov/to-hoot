@@ -7,11 +7,15 @@
     "to-hoot-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "bundle": "tsc -b && node bundle.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
     "@to-hoot/core": "*",
     "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }

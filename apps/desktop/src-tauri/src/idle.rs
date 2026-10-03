@@ -58,7 +58,33 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+mod platform {
+    // Declared here rather than pulled in through a crate: one function, two
+    // integer arguments, and CoreGraphics is linked into every macOS app
+    // already.
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(source: i32, event_type: u32) -> f64;
+    }
+
+    /// `kCGEventSourceStateCombinedSessionState`: input from every source in
+    /// this login session, which is what "the person is at the keyboard" means.
+    const COMBINED_SESSION: i32 = 0;
+    /// `kCGAnyInputEventType`, `~0`: any kind of input event at all.
+    const ANY_INPUT: u32 = u32::MAX;
+
+    /// Seconds since the last keyboard, mouse or trackpad input, from the same
+    /// counter the screensaver and display sleep use.
+    pub fn seconds() -> Option<f64> {
+        // SAFETY: a pure query on two plain integers; it reads a counter the
+        // window server keeps and has no preconditions.
+        let s = unsafe { CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION, ANY_INPUT) };
+        (s.is_finite() && s >= 0.0).then_some(s)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
     pub fn seconds() -> Option<f64> {
         None

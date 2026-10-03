@@ -27,7 +27,6 @@ import {
   joinOrCreateRepo,
   listCloudflareAccounts,
   listRepos,
-  mcpAddCommand,
   multipartBody,
   pollDeviceLogin,
   readRepo,
@@ -571,12 +570,6 @@ describe('testIcs', () => {
 });
 
 describe('the generated commands', () => {
-  it('puts this machine absolute path in the mcp command', () => {
-    expect(mcpAddCommand('/home/someone/to-hoot/apps/mcp/dist/index.js')).toBe(
-      'claude mcp add to-hoot -- node /home/someone/to-hoot/apps/mcp/dist/index.js',
-    );
-  });
-
   it('names the branch only when there is one worth naming', () => {
     // Empty means the Worker should fall back to its own default. Emitting the
     // binding with no value would set it to nothing.

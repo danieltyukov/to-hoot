@@ -68,7 +68,7 @@ hangs off a click handler. Closing the window hides it; Quit is in the tray menu
 **A link opens outside this window.** An anchor in a Tauri window is not a link
 to anywhere: the window is the application, so following one either navigates
 the app away from itself or, under this CSP, does nothing at all. The setup
-steps link to Cloudflare and to Claude, so the shell implements `openUrl` over
+steps link to Cloudflare, Claude and ChatGPT, so the shell implements `openUrl` over
 `tauri-plugin-opener`, which runs the open in Rust through xdg-open. Which URLs
 it will accept is `opener:allow-open-url` in the capability file, not a decision
 made in TypeScript.
@@ -91,6 +91,26 @@ settings. `files` is `tauri-plugin-fs` under the app data directory, for the
 event log and its snapshots: one document rewritten in full on every change is
 the wrong shape for something appended to all day.
 
-The bundle identifier is `com.tohoot.app`, matching the Android app id. Tauri
-warns that an identifier ending in `.app` collides with the macOS bundle
-extension; it matters only if this ever ships a `.app`.
+The bundle identifier is `com.tohoot.app`, matching the Android app id, on
+Linux and Windows. On macOS it is `com.tohoot.desktop`
+(`tauri.macos.conf.json`): an identifier ending in `.app` names the data folder
+in `~/Library/Application Support`, and Finder shows a folder ending in `.app`
+as a broken application. There was no macOS install to upgrade, so nothing was
+lost by changing it there only.
+
+**macOS.** `tauri.macos.conf.json` keeps the native frame with an overlay title
+bar, so the traffic lights sit over the leading end of the app's own bar, and
+the adapter sets `nativeControls: 'leading'` so the app draws no buttons of its
+own there. A click on the Dock icon brings back a window that was closed to the
+menu bar (`RunEvent::Reopen`), the menu bar icon is a template image the system
+tints, and idle time comes from CoreGraphics. The release builds one universal
+DMG, ad-hoc signed: there is no Apple Developer ID, because it costs money, so
+the first launch needs Open Anyway in System Settings, Privacy and Security.
+
+```
+npx tauri build --target universal-apple-darwin --bundles app,dmg   # needs both Rust targets
+```
+
+**Agents.** `src-tauri/src/agents.rs` writes the app's MCP server into each
+agent's own config file. It decides which file an agent id means, and the web
+layer decides what goes in it, so the window cannot name an arbitrary path.

@@ -26,6 +26,7 @@
       "allow": [
         { "url": "https://dash.cloudflare.com/*" },
         { "url": "https://claude.ai/*" },
+        { "url": "https://chatgpt.com/*" },
         { "url": "https://github.com/*" },
         { "url": "https://developers.cloudflare.com/*" },
         { "url": "https://script.google.com/*" },

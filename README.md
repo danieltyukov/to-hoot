@@ -6,11 +6,13 @@
 </picture>
 
 A task list that tracks time against the day you actually had. One list on your
-Linux or Windows desktop and your Android phone, synced through a private GitHub
-repository you own, with your real calendar beside it and the whole thing
-reachable from Claude. Every connection is one button: sign in with GitHub for
-sync, with Google for the calendar, and with Cloudflare for the Claude endpoint.
-The repository is `to-hoot`; the app calls itself ToHoot.
+Linux, Windows or macOS desktop and your Android phone, synced through a private
+GitHub repository you own, with your real calendar beside it and the whole thing
+reachable from any AI agent that speaks MCP: Claude, ChatGPT, Codex, Gemini CLI,
+Cursor, VS Code and others. Every connection is one button: sign in with GitHub
+for sync, with Google for the calendar, and with Cloudflare for the endpoint
+that assistants on the web and on a phone use. The repository is `to-hoot`; the
+app calls itself ToHoot.
 
 Project site: <https://danieltyukov.github.io/to-hoot/>
 
@@ -36,13 +38,33 @@ real ones, straight through the Calendar API with a grant that stays on the
 device. A read-only iCal address and the older Apps Script bridge remain as
 alternatives.
 
-The Claude layer is an MCP server offering fifteen tools over the same event
+The agent layer is an MCP server offering fifteen tools over the same event
 log: `list_tasks`, `search_tasks`, `today`, `add_task`, `update_task`,
 `complete_task`, `start_timer`, `stop_timer`, `log_time`, `list_projects`,
 `add_project`, `update_project`, `list_tags`, `add_tag` and `update_tag`. Tasks
 take project and tag names as well as ids, and a name nothing matches is
-created on the spot. A change made by Claude is indistinguishable from one made
-in the app.
+created on the spot. A change made by an agent is indistinguishable from one
+made in the app.
+
+MCP is an open protocol, so nothing here is tied to one assistant. Agents on
+your computer get the server from Settings, Agents, where one press per agent
+writes the entry into that agent's own config file:
+
+| Agent | Config the app writes |
+|---|---|
+| Claude Code | `~/.claude.json` |
+| Codex | `~/.codex/config.toml` |
+| Gemini CLI | `~/.gemini/settings.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| VS Code | `mcp.json` in VS Code's user folder |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| opencode | `~/.config/opencode/opencode.json` |
+
+The entry points at your endpoint when one is deployed, and otherwise at a
+local server the app downloads for its own version and runs with Node.js 20 or
+newer. Assistants that cannot run anything on your computer, Claude and ChatGPT
+on the web and on a phone, take the endpoint URL as a custom connector, and so
+does any other client that accepts a remote MCP server.
 
 <img src="docs/img/phone.webp" alt="The same app on a phone: today's task list, a running timer, and the tracked total for the day with a fourteen-day consistency strip." width="300">
 
@@ -57,7 +79,7 @@ rather than billing.
 | GitHub Actions | Builds the releases | Free and unmetered on public repositories, standard runners | n/a |
 | GitHub Releases | Hosts the downloads | Unmetered bandwidth, 2 GiB per file | n/a |
 | Google Calendar API v3 | Reading your calendar and writing the log | Free, with no Google Cloud billing account | Quota error |
-| Cloudflare Workers Free | Optional MCP endpoint for Claude web | 100,000 requests per day on `workers.dev` | HTTP error, never a bill |
+| Cloudflare Workers Free | Optional MCP endpoint for assistants on the web | 100,000 requests per day on `workers.dev` | HTTP error, never a bill |
 | Sideloaded APK | Installing on your phone | No Play Console account | n/a |
 
 There is no paid tier to upgrade to, because there is no hosted service. What
@@ -77,6 +99,14 @@ place.
 `sudo apt install ./to-hoot_amd64.deb`. Both are built on Ubuntu 22.04 so they
 run on older systems as well as newer ones.
 
+**macOS.** `ToHoot_universal.dmg` runs on macOS 10.15 or newer, on Apple
+Silicon and Intel alike. Open it and drag ToHoot to Applications. The app is
+not notarized, because that needs a paid Apple Developer account and nothing
+here costs money, so the first launch is refused: open System Settings, Privacy
+and Security, and press Open Anyway, once. Closing the window keeps it running
+in the menu bar, so a timer keeps counting; Quit is in the menu bar icon's
+menu, or Command-Q.
+
 **Windows.** `ToHoot_x64-setup.exe` installs for the current user with no admin
 prompt and fetches the WebView2 runtime itself if the machine lacks it. The
 installer is not code-signed, so SmartScreen asks once: More info, then Run
@@ -87,7 +117,7 @@ If the desktop window opens blank on NVIDIA hardware, the app already sets
 `WEBKIT_DISABLE_DMABUF_RENDERER=1` as well; setting either by hand overrides
 what the app would have chosen.
 
-Everything works with no accounts at all. Sync, calendar and Claude are added
+Everything works with no accounts at all. Sync, calendar and agents are added
 later from Settings, and each one is optional and one button:
 
 - **Sync.** Sign in with GitHub on the device itself. The app finds or creates
@@ -96,10 +126,11 @@ later from Settings, and each one is optional and one button:
   longer use can be forgotten there; its tasks stay.
 - **Calendar.** Sign in with Google. The app reads your calendars and writes
   tracked time to its own "to-hoot log" calendar. Sign out revokes the grant.
-- **Claude.** Sign in and deploy. The app signs in with your free Cloudflare
-  account, uploads the endpoint, revokes the token, and hands you the URL to
-  paste into Claude as a custom connector, which is the one step Claude has no
-  API for. Claude Code needs only a local command.
+- **Agents.** Press Add beside each agent on your computer. For Claude or
+  ChatGPT on the web and on a phone, sign in and deploy: the app signs in with
+  your free Cloudflare account, uploads the endpoint, revokes the token, and
+  hands you the URL to paste in as a custom connector, which is the one step
+  neither assistant has an API for.
 
 `docs/SETUP.md` is the long-form version, including what a fork has to register
 to get the Google sign-in.
@@ -123,12 +154,14 @@ a flat `node_modules`:
 ```
 cd apps/desktop && npm install && npm run build     # deb and AppImage on Linux
 cd apps/desktop && npm install && npx tauri build --bundles nsis,msi   # on Windows
+cd apps/desktop && npm install && npx tauri build --bundles app,dmg    # on macOS
 cd apps/mobile  && npm install && npm run apk:debug # debug APK, self-signed
 ```
 
 The Linux desktop build needs the WebKitGTK toolchain; the exact package list
 is in `CONTRIBUTING.md`. The Windows build needs the Rust toolchain and the
-Visual Studio Build Tools. No keystore is needed to build: debug builds sign
+Visual Studio Build Tools, and the macOS build the Rust toolchain and the Xcode
+command line tools. No keystore is needed to build: debug builds sign
 themselves, and a release build with no signing material stays unsigned rather
 than failing. Sign in with Google needs the Desktop client's secret in
 `packages/ui/.env` as `VITE_GOOGLE_DESKTOP_CLIENT_SECRET`; without it the
@@ -138,10 +171,10 @@ button is disabled and everything else builds and works.
 
     packages/core/     models, event log, merge, tick. No DOM.
     packages/ui/       React 19 and Vite. The entire application.
-    apps/desktop/      Tauri 2 shell, produces the AppImage, the deb and the Windows installers
+    apps/desktop/      Tauri 2 shell, produces the AppImage, the deb, the Windows installers and the DMG
     apps/mobile/       Capacitor 8 shell, produces the APK
-    apps/mcp/          stdio MCP server for Claude Code
-    apps/worker/       Cloudflare Worker, remote MCP for Claude web
+    apps/mcp/          stdio MCP server for agents on your computer
+    apps/worker/       Cloudflare Worker, remote MCP for assistants on the web
     apps/apps-script/  the older Google Calendar bridge, still supported
     google-oauth.json  the Google OAuth client ids both builds read
     site/              the one-page project site
@@ -149,7 +182,7 @@ button is disabled and everything else builds and works.
 
 ## Documentation
 
-- `docs/SETUP.md`, connecting sync, calendar and Claude to your own accounts.
+- `docs/SETUP.md`, connecting sync, calendar and agents to your own accounts.
 - `docs/ARCHITECTURE.md`, the event log, the merge rules and the sync protocol.
 - `CONTRIBUTING.md`, how to run each target and each test suite.
 - `SECURITY.md`, where tokens live and how to report a problem.

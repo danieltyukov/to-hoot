@@ -1,7 +1,8 @@
 name: Release
 
-# On a v* tag: build the signed APK, the .deb and the .AppImage, and attach all
-# three to a GitHub Release on this public repository.
+# On a v* tag: build the signed APK, the Linux, Windows and macOS desktop
+# builds, and the two server bundles, and attach them all to a GitHub Release
+# on this public repository.
 #
 # The release has to be on the public repository. Assets on a private repository
 # are not anonymously downloadable, and the browser on a phone has no GitHub
@@ -30,10 +31,16 @@ env:
   APK_NAME: to-hoot.apk
   DEB_NAME: to-hoot_amd64.deb
   APPIMAGE_NAME: to-hoot_x86_64.AppImage
-  # The Worker, bundled. The app's Claude step downloads this for its own
+  # The Worker, bundled. The app's Agents step downloads this for its own
   # version and uploads it to the person's Cloudflare account, so the endpoint
   # always runs the Worker the app was tested against.
   WORKER_NAME: to-hoot-worker.mjs
+  # The stdio server, bundled into one file. The desktop app downloads this for
+  # its own version and registers it with the agents on that computer, so an
+  # installed app needs no checkout to run a local server.
+  MCP_NAME: to-hoot-mcp.mjs
+  # macOS. One universal image, Apple Silicon and Intel in the same app.
+  DMG_NAME: ToHoot_universal.dmg
   # Windows. The NSIS installer is the one to hand out: it needs no admin
   # rights and fetches the WebView2 runtime itself if the machine lacks it.
   # The MSI is for anyone who deploys with one.
@@ -215,6 +222,81 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  macos:
+    name: macOS disk image
+    # Standard runner, free on a public repository like the others. It is Apple
+    # Silicon; the Intel half of the universal build is cross-compiled.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/desktop/src-tauri/target
+          key: cargo-macos-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-macos-
+
+      - run: npm ci
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # tauri.macos.conf.json is merged on top of tauri.conf.json here: the
+      # product becomes ToHoot, the window keeps its traffic lights over the
+      # app's own title bar, and the bundle is ad-hoc signed. There is no Apple
+      # Developer ID, because it costs money and nothing here does; ad-hoc
+      # signing is what keeps Apple Silicon from calling the app damaged, and
+      # the first launch needs Open Anyway in Privacy and Security.
+      - name: Build the disk image
+        working-directory: apps/desktop
+        env:
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/target/universal-apple-darwin/release/bundle
+          npx tauri build --target universal-apple-darwin --bundles app,dmg
+
+      - name: Collect it under a stable name
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle
+          mkdir -p out
+          dmgs=("$bundle"/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "expected exactly one disk image, found ${#dmgs[@]}" >&2
+            find "$bundle" -maxdepth 2 >&2 || true
+            exit 1
+          fi
+          cp "${dmgs[0]}" "out/$DMG_NAME"
+          # What the signature is, said in the log: ad-hoc, and every slice
+          # present, or the app will not open on one of the two kinds of Mac.
+          app=("$bundle"/macos/*.app)
+          codesign -dv "${app[0]}" 2>&1 | grep -E 'Signature|Identifier' || true
+          lipo -archs "${app[0]}/Contents/MacOS/"*
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
   android:
     name: Signed APK
     runs-on: ubuntu-latest
@@ -320,7 +402,7 @@ jobs:
           if-no-files-found: error
 
   worker:
-    name: Worker bundle
+    name: Server bundles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -350,6 +432,15 @@ jobs:
           cp dist/index.js "../../out/$WORKER_NAME"
           ls -la ../../out
 
+      # The stdio server as one file, which an installed app runs with node.
+      - name: Bundle the stdio server
+        run: |
+          set -euo pipefail
+          npm run bundle -w @to-hoot/mcp
+          head -1 apps/mcp/dist/to-hoot-mcp.mjs | grep -qx '#!/usr/bin/env node'
+          cp apps/mcp/dist/to-hoot-mcp.mjs "out/$MCP_NAME"
+          ls -la out
+
       - uses: actions/upload-artifact@v7
         with:
           name: worker
@@ -359,7 +450,7 @@ jobs:
 
   release:
     name: Publish
-    needs: [desktop, windows, android, worker]
+    needs: [desktop, windows, macos, android, worker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -395,8 +486,16 @@ jobs:
             no admin prompt. The installer is not code-signed, so SmartScreen
             asks once: More info, then Run anyway. `ToHoot_x64.msi` is the same
             build for anyone who deploys with MSI.
-          - `to-hoot-worker.mjs`, the Claude endpoint. The app downloads this
-            one itself when you press Deploy in Settings; nothing to do by hand.
+          - `ToHoot_universal.dmg`, macOS 10.15 or newer, Apple Silicon and
+            Intel. Drag ToHoot to Applications. The app is not notarized, so the
+            first time macOS refuses to open it: open System Settings, Privacy
+            and Security, and press Open Anyway.
+          - `to-hoot-worker.mjs`, the endpoint for assistants on the web and on
+            a phone. The app downloads this itself when you press Sign in and
+            deploy in Settings, Agents; nothing to do by hand.
+          - `to-hoot-mcp.mjs`, the local server for agents on your computer
+            (Claude Code, Codex, Gemini CLI, Cursor, VS Code and others). The
+            desktop app downloads this itself when you press Add.
 
           The desktop builds are made on Ubuntu 22.04, so they run on older
           systems as well as newer ones.
@@ -412,4 +511,6 @@ jobs:
             "assets/$APPIMAGE_NAME" \
             "assets/$EXE_NAME" \
             "assets/$MSI_NAME" \
-            "assets/$WORKER_NAME"
+            "assets/$DMG_NAME" \
+            "assets/$WORKER_NAME" \
+            "assets/$MCP_NAME"

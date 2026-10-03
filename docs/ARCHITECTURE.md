@@ -159,7 +159,7 @@ after another, so a poll that finds three new files costs one round trip.
 The app keeps one engine, and with it the ETag, the blob cache and the resolved
 branch, for as long as the repository settings stay the same. A device on
 screen polls every ten seconds and a hidden one every minute, so a task added
-on another device, or by Claude, is on screen within about ten seconds. An idle
+on another device, or by an agent, is on screen within about ten seconds. An idle
 poll is one free 304; a poll that finds something is three or four requests.
 Well inside the 5,000 per hour primary limit and the 500 per hour
 content-generating secondary limit.
@@ -175,7 +175,7 @@ stops, or after two minutes, whichever comes first. Nothing is at risk while it
 waits: it is on disk, and the total on another device is at most two minutes
 behind a timer that is still running.
 
-The Cloudflare Worker behind the claude.ai connector reads the same repository
+The Cloudflare Worker behind the web connectors reads the same repository
 on a tighter budget: 50 subrequests and 10ms of CPU per request on the free
 tier. It reads `snapshot.json`, and then every `events/<deviceId>/<ulid>.json`
 in the tree when there are at most 32 of them, each blob cached by its SHA so an

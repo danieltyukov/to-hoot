@@ -65,3 +65,12 @@
 .titlebar-sep {
   color: var(--faint);
 }
+
+/*
+ * macOS draws its three buttons over the leading end of the strip: 12px each,
+ * 8px apart, inset 14px (`trafficLightPosition` in tauri.macos.conf.json). The
+ * brand starts clear of them, with the same 14px after the last one.
+ */
+.titlebar[data-native-controls='leading'] {
+  padding-inline-start: 82px;
+}

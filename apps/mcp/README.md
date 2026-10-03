@@ -1,6 +1,7 @@
 # to-hoot MCP server (stdio)
 
-Gives Claude fifteen tools over the same data the app uses, over stdio, against
+Gives any MCP agent (Claude Code, Codex, Gemini CLI, Cursor, VS Code, Windsurf,
+opencode and the rest) fifteen tools over the same data the app uses, over stdio, against
 your own GitHub data repository. Nothing is hardcoded: every account value is
 read from the environment.
 
@@ -24,8 +25,26 @@ of the variable rather than a 401 from GitHub.
 ```
 npm run build -w @to-hoot/core && npm run build -w @to-hoot/mcp
 npx @modelcontextprotocol/inspector node apps/mcp/dist/index.js
-claude mcp add to-hoot -- node "$PWD/apps/mcp/dist/index.js"
 ```
+
+The desktop app registers it with an agent in one press (Settings, Agents),
+using the bundled single-file build the release publishes:
+
+```
+npm run bundle -w @to-hoot/mcp     # dist/to-hoot-mcp.mjs, everything inlined
+```
+
+By hand, an entry is the command, the file, and the environment above. For
+example, for Claude Code:
+
+```
+claude mcp add to-hoot \
+  -e TO_HOOT_GITHUB_OWNER=you -e TO_HOOT_GITHUB_REPO=to-hoot-data \
+  -e TO_HOOT_GITHUB_TOKEN=... -- node "$PWD/apps/mcp/dist/to-hoot-mcp.mjs"
+```
+
+The same three variables go in every other agent's entry; `docs/SETUP.md` lists
+where each agent keeps its config and how it spells one.
 
 stdout carries the protocol and nothing else. Every log line goes to stderr,
 and `console.log`, `.info` and `.debug` are redirected there at startup so a

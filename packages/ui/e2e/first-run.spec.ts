@@ -108,7 +108,7 @@ test('skipping every step leaves a working app, and stays skipped', async ({ pag
 });
 
 test('every control in the wizard carries a name', async ({ page }) => {
-  for (const step of ['local', 'sync', 'calendar', 'claude']) {
+  for (const step of ['local', 'sync', 'calendar', 'agents']) {
     await page.locator(`[data-step="${step}"]`).click();
     const unnamed = await page.evaluate(() => {
       const controls = [...document.querySelectorAll('button, input, select, textarea')];
@@ -209,9 +209,9 @@ test('a master repository round-trips without ever creating a main ref', async (
   expect(seen.some(s => s === 'GET /repos/someone/to-hoot-data')).toBe(true);
   expect(seen.some(s => s.includes('heads/master'))).toBe(true);
 
-  // And the branch it found is what the Claude step then hands to wrangler,
+  // And the branch it found is what the Agents step then hands to wrangler,
   // under the folded-away wrangler path.
-  await page.locator('[data-step="claude"]').click();
+  await page.locator('[data-step="agents"]').click();
   await page.getByRole('button', { name: 'Deploy with wrangler instead' }).click();
   await expect(page.locator('.copyable-text').last()).toContainText('GITHUB_BRANCH      # master');
 });
