@@ -16,6 +16,10 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # A dry run: every artifact is built and kept for a day as a workflow
+  # artifact, and nothing is published. For proving a release builds,
+  # the macOS disk image in particular, before tagging it.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -451,6 +455,8 @@ jobs:
   release:
     name: Publish
     needs: [desktop, windows, macos, android, worker]
+    # Only for a tag. A manual run stops at the artifacts.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
