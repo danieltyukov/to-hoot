@@ -177,22 +177,49 @@ test('the page never scrolls horizontally at 360px', async ({ page }) => {
 
 test('the day opens on now, not on the small hours', async ({ page }) => {
   await page.setViewportSize(NARROW);
-  await page.locator('[data-tab="day"]').click();
 
-  // The chip rather than the .now wrapper: the wrapper is a zero-height anchor
-  // for three absolutely positioned children, so it has no box to be visible.
-  const marker = page.locator('.now-chip');
-  await expect(marker).toBeVisible();
+  // Fixed times, not the wall clock, and loaded at phone width so the day starts
+  // out as a hidden tab. Past the default 9 to 17 workday the grid grows to the
+  // current hour and outgrows the screen. A minute before the hour is the worst
+  // case: the grid then ends at the next hour, so the line sits at the very
+  // bottom, and with the real clock that failed only when CI ran in those
+  // minutes.
+  for (const [hour, minute] of [
+    [20, 10],
+    [21, 59],
+  ] as const) {
+    const at = new Date();
+    at.setHours(hour, minute, 30, 0);
+    await page.clock.setFixedTime(at);
+    await page.reload();
 
-  // Visible is not enough: the grid is up to 24 hours tall, and the complaint
-  // was that the line sits behind the footer with only the small hours on
-  // screen. Assert the marker is inside the grid's own viewport.
-  const [line, grid] = await Promise.all([
-    marker.boundingBox(),
-    page.locator('.timeline-grid').boundingBox(),
-  ]);
-  expect(line!.y).toBeGreaterThanOrEqual(grid!.y);
-  expect(line!.y + line!.height).toBeLessThanOrEqual(grid!.y + grid!.height);
+    // Twice: the first time the tab is shown, and again after leaving it,
+    // since a hidden grid loses its scroll position.
+    for (const pass of ['first visit', 'return']) {
+      if (pass === 'return') await page.locator('[data-tab="tasks"]').click();
+      await page.locator('[data-tab="day"]').click();
+
+      // The chip rather than the .now wrapper: the wrapper is a zero-height anchor
+      // for three absolutely positioned children, so it has no box to be visible.
+      const marker = page.locator('.now-chip');
+      await expect(marker).toBeVisible();
+
+      // Visible is not enough: the grid is up to 24 hours tall, and the complaint
+      // was that the line sits behind the footer with only the small hours on
+      // screen. Assert the marker is inside the grid's own viewport. Retried,
+      // because the scroll lands in the ResizeObserver callback, which can come
+      // a frame after the tab is visible.
+      const label = `${hour}:${minute}, ${pass}`;
+      await expect(async () => {
+        const [line, grid] = await Promise.all([
+          marker.boundingBox(),
+          page.locator('.timeline-grid').boundingBox(),
+        ]);
+        expect(line!.y, label).toBeGreaterThanOrEqual(grid!.y);
+        expect(line!.y + line!.height, label).toBeLessThanOrEqual(grid!.y + grid!.height);
+      }).toPass({ timeout: 2_000 });
+    }
+  }
 });
 
 test('the wordmark is still one word to anything that reads it', async ({ page }) => {

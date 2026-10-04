@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { Timeline } from './Timeline.js';
 import {
+  GRID_PAD_BOTTOM,
   GRID_PAD_TOP,
   HOUR_HEIGHT,
   HOUR_LABEL_OFFSET,
@@ -141,6 +142,17 @@ describe('Timeline', () => {
     // off by the scroll container. The pad has to be the larger of the two.
     expect(Number.parseFloat(first.style.marginTop)).toBe(HOUR_LABEL_OFFSET);
     expect(GRID_PAD_TOP).toBeGreaterThan(Math.abs(HOUR_LABEL_OFFSET));
+  });
+
+  it('pads the bottom so the current-time chip is not clipped', () => {
+    // A minute before the end of the grid's last hour, the line is the bottom
+    // of the body and the chip hangs below it.
+    render(<Timeline dayStartMs={DAY_START} startHour={9} endHour={17} now={at(16, 59)} />);
+    const grid = document.querySelector<HTMLElement>('.timeline-grid')!;
+    const chip = document.querySelector<HTMLElement>('.now-chip')!;
+
+    expect(getComputedStyle(grid).paddingBottom).toBe(`${GRID_PAD_BOTTOM}px`);
+    expect(GRID_PAD_BOTTOM).toBeGreaterThan(-Number.parseFloat(getComputedStyle(chip).top));
   });
 
   it('lays the lanes out gutter, tracked, then events', () => {
