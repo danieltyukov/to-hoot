@@ -8,7 +8,11 @@ publish = false
 
 [lib]
 name = "to_hoot_desktop_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+# Only main.rs links the library. Tauri's template also asks for a cdylib and a
+# staticlib, which its own Android and iOS builds need; the phone app here is
+# Capacitor, so those were two extra copies of every dependency per build, 2.2 GB
+# of a 5.9 GB target/debug.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -40,6 +44,13 @@ x11rb = { version = "0.13", features = ["screensaver"] }
 # screensaver from. Raw bindings only; nothing else from the SDK is needed.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+# Debug and test builds keep file and line numbers for panics and backtraces,
+# but not the variable and type info a debugger reads. Dropping that full info
+# for Tauri, GTK and WebKit's bindings takes a debug build plus the tests from
+# 3.7 GB to 2.4 GB.
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.release]
 codegen-units = 1

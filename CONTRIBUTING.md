@@ -97,6 +97,12 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg   # what the r
 "ToHoot", the identifier is `com.tohoot.desktop`, the window keeps the traffic
 lights over the app's own title bar, and the bundle is ad-hoc signed.
 
+Cargo never prunes `apps/desktop/src-tauri/target`. Each dependency bump and
+each new mix of build flags adds artifacts beside the old ones, so on any
+platform the folder grows by gigabytes over months of work. `cargo clean` in
+`src-tauri` resets it; a debug build plus the tests comes back at about 2.4 GB
+on Linux.
+
 **Mobile.** Needs JDK 21 and the Android SDK:
 
 ```
