@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 
 import { formatDuration, formatHour, formatTimeOfDay, isoDuration } from '../format.js';
 import {
+  GRID_PAD_BOTTOM,
   GRID_PAD_TOP,
   GUTTER_WIDTH,
   HOUR_HEIGHT,
@@ -75,17 +76,39 @@ export function Timeline({
   const openAt = useRef(showNow ? nowTop : null);
   openAt.current = showNow ? nowTop : null;
 
-  // Mount only, deliberately. The grid is up to 24 hours tall and opens at the
-  // top, which on a phone puts the current-time line behind the footer with
-  // nothing on screen but the small hours. Re-running this on every tick would
-  // drag the view back every second and fight anyone trying to scroll.
+  // When the grid comes into view, deliberately not on every tick. The grid is
+  // up to 24 hours tall and opens at the top, which on a phone puts the
+  // current-time line behind the footer with nothing on screen but the small
+  // hours. Re-running this on every tick would drag the view back every second
+  // and fight anyone trying to scroll.
+  //
+  // Not on mount either: on a phone the day is a tab, display: none until it is
+  // chosen, and a box that is not laid out ignores scrollTop. Scrolling then did
+  // nothing unless the app happened to open on the day, and the grid was back at
+  // the top each time the tab came back. Hence a ResizeObserver, acting only
+  // when the height goes from nothing to something.
   useEffect(() => {
     const grid = gridRef.current;
-    const top = openAt.current;
-    if (grid === null || top === null) return;
-    // A third down, so the rest of the day is what fills the screen rather than
-    // the part of it that has already gone.
-    grid.scrollTop = Math.max(0, top + GRID_PAD_TOP - grid.clientHeight / 3);
+    if (grid === null) return;
+    const open = () => {
+      const top = openAt.current;
+      if (top === null) return;
+      // A third down, so the rest of the day is what fills the screen rather than
+      // the part of it that has already gone.
+      grid.scrollTop = Math.max(0, top + GRID_PAD_TOP - grid.clientHeight / 3);
+    };
+    if (typeof ResizeObserver === 'undefined') {
+      open();
+      return;
+    }
+    let shown = false;
+    const observer = new ResizeObserver(() => {
+      const visible = grid.clientHeight > 0;
+      if (visible && !shown) open();
+      shown = visible;
+    });
+    observer.observe(grid);
+    return () => observer.disconnect();
   }, []);
 
   const hours: ReactNode[] = [];
@@ -130,7 +153,11 @@ export function Timeline({
         </p>
       </header>
 
-      <div className="timeline-grid" ref={gridRef} style={{ paddingTop: GRID_PAD_TOP }}>
+      <div
+        className="timeline-grid"
+        ref={gridRef}
+        style={{ paddingTop: GRID_PAD_TOP, paddingBottom: GRID_PAD_BOTTOM }}
+      >
         <div className="timeline-body" style={{ height: bodyHeight }}>
           {hours}
 

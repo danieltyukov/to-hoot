@@ -29,6 +29,14 @@ export const TRACKED_LANE_WIDTH = 16;
  */
 export const GRID_PAD_TOP = 8;
 
+/**
+ * The grid's bottom padding. The current-time chip hangs 9px below its line,
+ * and in the last minutes of the grid's final hour that line is the bottom of
+ * the body. Without room here the chip ends flush with the scroll container's
+ * edge, or a fraction of a pixel past it.
+ */
+export const GRID_PAD_BOTTOM = 16;
+
 /** How far a label rides above its line so it reads as sitting on it. */
 export const HOUR_LABEL_OFFSET = -6;
 
