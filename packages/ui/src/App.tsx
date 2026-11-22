@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  DEFAULT_PROJECT_ID,
   completedPerDay,
   consistency,
   dayStr,
@@ -8,11 +9,14 @@ import {
   taskForCalendarEvent,
   workPeriodsOn,
   trackedToday,
+  type Project,
   type State,
+  type Tag,
   type Task,
 } from '@to-hoot/core';
 
 import { ConsistencyGrid } from './components/ConsistencyGrid.js';
+import { DeleteView } from './components/DeleteView.js';
 import { EMPTY_COPY, EmptyState, TodayState } from './components/EmptyState.js';
 import { IdlePrompt } from './components/IdlePrompt.js';
 import { ProgressRing } from './components/ProgressRing.js';
@@ -98,7 +102,7 @@ export default function App({
   // would open again on every start.
   const store = useMemo(() => injected ?? new Store({ vault: browserStore() }), [injected]);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  const [view, setView] = useState<View>('today');
+  const [chosenView, setView] = useState<View>('today');
   const [pane, setPane] = useState<Pane>('tasks');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -231,6 +235,17 @@ export default function App({
   const projects = Object.values(state.projects).filter(p => !p.isArchived);
   const tags = Object.values(state.tags);
 
+  /*
+   * The view on screen is the one that was chosen only while it still exists.
+   *
+   * A project or a tag can be deleted from here, and from another device while
+   * this one is looking at it. Staying on it would leave a list with no name
+   * whose composer files the next task under an id nothing answers to, where
+   * no list in the app would show it again. Derived rather than corrected in
+   * an effect, so there is no render in between that draws the dead view.
+   */
+  const view = viewExists(chosenView, projects, tags) ? chosenView : 'today';
+
   const visible = tasksFor(view, state.tasks, () => todayTasks(state, now));
   const open = visible.filter(t => !t.isDone);
   const done = visible.filter(t => t.isDone);
@@ -333,6 +348,7 @@ export default function App({
         : runningTask.id;
 
   const heading = view === 'today' ? 'Today' : titleOf(view, state);
+  const deletion = deletionFor(view, heading, visible.length);
   const selected = selectedId === null ? undefined : state.tasks[selectedId];
 
   const select = (taskId: string): void => {
@@ -450,6 +466,23 @@ export default function App({
               onStop={() => store.stop()}
               onSelect={select}
               onAdd={title => store.addTask(title, defaultsFor(view, today))}
+              headAction={
+                deletion === null ? null : (
+                  // Keyed by the view, so a question left open on one list is
+                  // not still open on the next one.
+                  <DeleteView
+                    key={view}
+                    noun={deletion.noun}
+                    title={heading}
+                    question={deletion.question}
+                    onDelete={() => {
+                      if (deletion.noun === 'project') store.deleteProject(deletion.id);
+                      else store.deleteTag(deletion.id);
+                      setView('today');
+                    }}
+                  />
+                )
+              }
               notice={
                 snapshot.idleGap !== null ? (
                   <IdlePrompt
@@ -582,6 +615,51 @@ function titleOf(view: View, state: State): string {
   if (kind === 'project') return state.projects[id]?.title ?? 'Project';
   if (kind === 'tag') return state.tags[id]?.title ?? 'Tag';
   return 'Tasks';
+}
+
+/** Whether the project or the tag a view names is still one the sidebar lists. */
+function viewExists(view: View, projects: Project[], tags: Tag[]): boolean {
+  const [kind, id] = splitView(view);
+  if (kind === 'project') return projects.some(p => p.id === id);
+  if (kind === 'tag') return tags.some(t => t.id === id);
+  return true;
+}
+
+interface Deletion {
+  noun: 'project' | 'tag';
+  id: string;
+  /** What the app asks before it deletes, with what goes and what stays. */
+  question: string;
+}
+
+/**
+ * What deleting the view on screen would mean, or null where it cannot be
+ * deleted: Today is computed rather than stored, and the built-in project is
+ * where every task without a project is filed.
+ *
+ * The two questions differ because the two deletions do. A project takes its
+ * tasks with it and a tag does not, and saying so here is the only warning
+ * there is.
+ */
+function deletionFor(view: View, title: string, taskCount: number): Deletion | null {
+  const [kind, id] = splitView(view);
+  const tasks = taskCount === 1 ? '1 task' : `${taskCount} tasks`;
+  if (kind === 'project') {
+    if (id === DEFAULT_PROJECT_ID) return null;
+    const question =
+      taskCount === 0
+        ? `Delete ${title}? It has no tasks.`
+        : `Delete ${title} and its ${tasks}? The time tracked on them is deleted too.`;
+    return { noun: 'project', id, question };
+  }
+  if (kind === 'tag') {
+    const question =
+      taskCount === 0
+        ? `Delete the tag ${title}? No task carries it.`
+        : `Delete the tag ${title}? Its ${tasks} stay, without the tag.`;
+    return { noun: 'tag', id, question };
+  }
+  return null;
 }
 
 /** Today has its own message, from TodayState, which knows whether it is done. */

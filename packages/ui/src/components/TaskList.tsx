@@ -28,6 +28,11 @@ export interface TaskListProps {
    * where the next task would have been, not after the ones already done.
    */
   notice?: ReactNode;
+  /**
+   * A control for the list itself, at the end of the header. Deleting the
+   * project or the tag on screen is the one there is; Today has none.
+   */
+  headAction?: ReactNode;
 }
 
 /**
@@ -51,6 +56,7 @@ export function TaskList({
   onAdd,
   empty,
   notice,
+  headAction,
 }: TaskListProps) {
   const present = new Set(tasks.map(t => t.id));
   // Subtasks render under their parent when the parent is on this list, and as
@@ -86,6 +92,7 @@ export function TaskList({
         <header className="list-head" data-window-drag="">
           <h2>{heading}</h2>
           <span className="micro">{open.length} left</span>
+          {headAction}
         </header>
       )}
 

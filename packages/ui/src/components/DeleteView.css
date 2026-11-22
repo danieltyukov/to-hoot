@@ -1,0 +1,68 @@
+/* Sits in the list header beside the count, and stays as quiet as the count
+   until the pointer is on it. 22px, which is under the height of the heading:
+   a taller control would make a project's header a fraction taller than
+   Today's, and the rule under it would stop meeting the one under the day's. */
+.view-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-control);
+  color: var(--faint);
+  transition:
+    color var(--dur-quick) var(--ease),
+    background-color var(--dur-quick) var(--ease);
+}
+
+.view-delete:hover {
+  color: var(--danger);
+  background-color: var(--hover);
+}
+
+/* A full row of its own under the heading. The header wraps, and a basis of
+   100% is what sends this to the next line instead of squeezing the heading. */
+.view-delete-ask {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.view-delete-question {
+  flex: 1 1 240px;
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.view-delete-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Two classes, to outrank `.button`: that rule sets its own colour, and which
+   of two single-class rules wins is decided by the order the sheets happen to
+   load in. */
+.button.view-delete-confirm,
+.button.view-delete-confirm:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* A finger needs more than 22px to land on. The negative margin hands the
+   extra back, so the header keeps its height and the glyph keeps its place. */
+@media (pointer: coarse) {
+  .view-delete {
+    width: 36px;
+    height: 36px;
+    margin: -7px;
+  }
+
+  .view-delete-actions .button {
+    min-height: 36px;
+    padding-inline: 14px;
+  }
+}

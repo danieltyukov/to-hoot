@@ -295,6 +295,70 @@ test('a whole day can be planned and tracked without leaving the app', async ({ 
   await expect(page.locator('.foot-value')).toContainText('of 1h 30m');
 });
 
+test('a project is deleted from its own header, and stays deleted', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  const todayHead = await page.locator('.pane-tasks .list-head').boundingBox();
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByLabel('New project name').fill('Radio');
+  await page.getByLabel('New project name').press('Enter');
+  await addTask(page, 'Solder the preamp');
+  await addTask(page, 'Order the enclosure');
+
+  // The control costs the header nothing: a project's header is the height
+  // Today's is, so the rule under it still meets the one under the day's.
+  const projectHead = await page.locator('.pane-tasks .list-head').boundingBox();
+  expect(projectHead!.height).toBe(todayHead!.height);
+
+  await page.getByRole('button', { name: 'Delete project Radio' }).click();
+  await expect(page.getByText('Delete Radio and its 2 tasks?')).toBeVisible();
+  // The safe answer has the focus, so Enter on its own deletes nothing.
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await page.getByRole('button', { name: 'Delete project', exact: true }).click();
+
+  await expect(page.locator('.pane-tasks .list-head h2')).toHaveText('Today');
+  await expect(page.locator('.sidebar [data-view^="project:"]')).toHaveCount(0);
+
+  // From the log, not from memory: a deletion that only held until the next
+  // start would bring the project back with every task in it.
+  await page.reload();
+  await expect(page.getByLabel('New task')).toBeVisible();
+  await expect(page.locator('.sidebar [data-view^="project:"]')).toHaveCount(0);
+  await expect(page.getByText('No projects yet.')).toBeVisible();
+});
+
+test('the question about deleting a list fits a 360px phone', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.locator('[data-tab="lists"]').click();
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByLabel('New project name').fill('A project with a name long enough to wrap');
+  await page.getByLabel('New project name').press('Enter');
+  // Making a project leaves a phone on the sidebar, where the next one can be
+  // made. Its list is a tab away.
+  await page.locator('[data-tab="tasks"]').click();
+  await addTask(page, 'Solder the preamp');
+
+  // The count and the control stay on the heading's first line however long
+  // the heading is; only the question takes a row of its own.
+  const control = page.getByRole('button', { name: /^Delete project A project/ });
+  const [head, bin] = await Promise.all([
+    page.locator('.pane-tasks .list-head').boundingBox(),
+    control.boundingBox(),
+  ]);
+  expect(bin!.x + bin!.width).toBeLessThanOrEqual(head!.x + head!.width);
+  expect(bin!.x + bin!.width).toBeGreaterThan(head!.x + head!.width - 24);
+
+  await control.click();
+  for (const name of ['Cancel', 'Delete project']) {
+    const box = await page.getByRole('button', { name, exact: true }).boundingBox();
+    expect(box!.x, `${name} starts off screen`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${name} runs off screen`).toBeLessThanOrEqual(NARROW.width);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    'the question overflows at 360px',
+  ).toBe(true);
+});
+
 test('the UI never offers to nest a third level of subtask', async ({ page }) => {
   // Core rejects it, so an offer here would be an action that looks like it
   // worked and silently did nothing.
