@@ -1,5 +1,7 @@
-/* Sits in the list header beside the count, and stays as quiet as the count
-   until the pointer is on it. 22px, which is under the height of the heading:
+/* Sits in the list header beside the count, in the count's own colour, and
+   stays that quiet until the pointer is on it. Not the fainter grey the add
+   controls use: this is the only way to delete a list, and it has to be found
+   by someone who is looking for it. 22px, which is under the height of the heading:
    a taller control would make a project's header a fraction taller than
    Today's, and the rule under it would stop meeting the one under the day's. */
 .view-delete {
@@ -10,7 +12,7 @@
   width: 22px;
   height: 22px;
   border-radius: var(--r-control);
-  color: var(--faint);
+  color: var(--muted);
   transition:
     color var(--dur-quick) var(--ease),
     background-color var(--dur-quick) var(--ease);

@@ -456,6 +456,44 @@ describe('App', () => {
     expect(store.getSnapshot().state.tasks).toEqual({});
   });
 
+  it('leaves Settings when a list is chosen in the sidebar', async () => {
+    const { user, container } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(container.querySelector('.settings')).not.toBeNull();
+
+    // Settings sits where the list does. Left in front, the sidebar would move
+    // its highlight and show nothing, and the only way out is a control at the
+    // top of a screen that has usually been scrolled.
+    await user.click(screen.getByRole('button', { name: 'Radio' }));
+    expect(container.querySelector('.settings')).toBeNull();
+    expect(listHeading(container)).toHaveTextContent('Radio');
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('leaves Settings for the list that is already current, too', async () => {
+    const { user, container } = setup();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+
+    // Today is still the current view behind Settings, so nothing about the
+    // view changes on this press. It still has to bring the list back.
+    await user.click(screen.getByRole('button', { name: /^Today/ }));
+    expect(container.querySelector('.settings')).toBeNull();
+    expect(listHeading(container)).toHaveTextContent('Today');
+  });
+
+  it('leaves Settings for a project made while it was open', async () => {
+    const { user, container } = setup();
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+
+    // Making a project moves to it, and "to it" is its list.
+    expect(container.querySelector('.settings')).toBeNull();
+    expect(listHeading(container)).toHaveTextContent('Radio');
+  });
+
   it('offers no way to delete Today', () => {
     setup();
     expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
