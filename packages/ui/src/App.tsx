@@ -398,13 +398,21 @@ export default function App({
             projects={projects}
             tags={tags}
             active={view}
+            // Choosing a list leaves Settings as well as an open task. Settings
+            // sits where the list does, so left in front the sidebar would move
+            // its highlight and show nothing, and the way out of Settings is a
+            // control at the top of a screen that has usually been scrolled.
             onSelect={next => {
               setView(next);
               setSelectedId(null);
+              setShowSettings(false);
               setPane('tasks');
             }}
             counts={counts}
-            onAddProject={title => setView(`project:${store.addProject(title)}`)}
+            onAddProject={title => {
+              setView(`project:${store.addProject(title)}`);
+              setShowSettings(false);
+            }}
             onAddTag={title => store.addTag(title)}
             footer={
               <div className="sidebar-tools">
