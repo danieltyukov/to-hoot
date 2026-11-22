@@ -6,13 +6,23 @@
   overflow-y: auto;
 }
 
+/* Wraps, so the question that deleting a list asks can take a row of its own
+   under the heading. Nothing else in here ever reaches a second line: the
+   heading starts from a basis of zero and takes whatever the count and the
+   control beside it leave, so a long title wraps inside itself instead of
+   pushing them down. */
 .list-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px 12px;
   padding: 14px 10px 10px;
   border-bottom: 1px solid var(--border);
+}
+
+.list-head h2 {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .list-group {

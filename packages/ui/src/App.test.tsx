@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { Http } from '@to-hoot/core';
+import { newEvent, type Http } from '@to-hoot/core';
 
 import App, { TICK_MS, type AppProps } from './App.js';
 import { memoryStore } from './platform/browser.js';
@@ -63,6 +63,10 @@ function setup(
 const addTask = async (user: ReturnType<typeof userEvent.setup>, title: string): Promise<void> => {
   await user.type(screen.getByLabelText('New task'), `${title}{Enter}`);
 };
+
+/** The task list's own heading. The day pane has one too, and it also reads "Today". */
+const listHeading = (container: HTMLElement): HTMLElement =>
+  container.querySelector<HTMLElement>('.pane-tasks .list-head h2')!;
 
 afterEach(() => {
   delete document.documentElement.dataset['theme'];
@@ -450,6 +454,170 @@ describe('App', () => {
 
     expect(container.querySelector('.detail')).toBeNull();
     expect(store.getSnapshot().state.tasks).toEqual({});
+  });
+
+  it('offers no way to delete Today', () => {
+    setup();
+    expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
+  });
+
+  it('deletes a project and the tasks filed in it, then goes back to Today', async () => {
+    const { user, store, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await addTask(user, 'Order the enclosure');
+
+    await user.click(screen.getByRole('button', { name: 'Delete project Radio' }));
+    // The question says what goes with the project, so the count is read
+    // before the press rather than discovered after it.
+    expect(screen.getByText(/Delete Radio and its 1 task\?/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete project' }));
+
+    const { state } = store.getSnapshot();
+    expect(state.projects).toEqual({});
+    expect(Object.values(state.tasks).map(t => t.title)).toEqual(['Rewire the bench']);
+    expect(listHeading(container)).toHaveTextContent('Today');
+  });
+
+  it('keeps the project when the question is answered with Cancel', async () => {
+    const { user, store, container } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await addTask(user, 'Order the enclosure');
+
+    await user.click(screen.getByRole('button', { name: 'Delete project Radio' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const { state } = store.getSnapshot();
+    expect(Object.values(state.projects).map(p => p.title)).toEqual(['Radio']);
+    expect(Object.values(state.tasks)).toHaveLength(1);
+    expect(listHeading(container)).toHaveTextContent('Radio');
+  });
+
+  it('stops the timer when a deleted project takes the running task with it', async () => {
+    const { user, store, advance } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await addTask(user, 'Order the enclosure');
+    await user.click(screen.getByRole('button', { name: /^Start timer/ }));
+    advance(5000);
+
+    await user.click(screen.getByRole('button', { name: 'Delete project Radio' }));
+    await user.click(screen.getByRole('button', { name: 'Delete project' }));
+
+    // A timer left running against a task that no longer exists would keep
+    // counting into nothing, and the next start would bank it onto a ghost.
+    expect(store.getSnapshot().runningTaskId).toBeNull();
+    expect(store.getSnapshot().state.tasks).toEqual({});
+  });
+
+  it('deletes a tag and keeps the tasks that carried it', async () => {
+    const { user, store, container } = setup();
+    await addTask(user, 'Rewire the bench');
+    await user.click(screen.getByRole('button', { name: 'New tag' }));
+    await user.type(screen.getByLabelText('New tag name'), 'errand{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Rewire the bench' }));
+    await user.click(screen.getByRole('button', { name: 'errand tag' }));
+
+    await user.click(screen.getByRole('button', { name: 'errand' }));
+    await user.click(screen.getByRole('button', { name: 'Delete tag errand' }));
+    expect(screen.getByText(/Delete the tag errand\?/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete tag' }));
+
+    const { state } = store.getSnapshot();
+    expect(state.tags).toEqual({});
+    expect(Object.values(state.tasks).map(t => t.title)).toEqual(['Rewire the bench']);
+    expect(listHeading(container)).toHaveTextContent('Today');
+    // The row is still there and no longer draws a label for a tag that is gone.
+    expect(container.querySelector('.row-tag')).toBeNull();
+  });
+
+  it('goes back to Today when the project on screen is deleted on another device', async () => {
+    const { user, store, container } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    const projectId = Object.keys(store.getSnapshot().state.projects)[0]!;
+
+    act(() => {
+      store.merge([
+        newEvent({
+          deviceId: 'phone',
+          type: 'delete',
+          entity: 'project',
+          entityId: projectId,
+          payload: {},
+          ts: NOW + 60_000,
+        }),
+      ]);
+    });
+
+    // Left on the project, the composer would file the next task under an id
+    // nothing answers to, where no list in the app would ever show it.
+    expect(listHeading(container)).toHaveTextContent('Today');
+    expect(screen.getByLabelText('New task')).toHaveAttribute('placeholder', 'Add a task for today');
+  });
+
+  it('says so when the project being deleted has no tasks to take with it', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+
+    await user.click(screen.getByRole('button', { name: 'Delete project Radio' }));
+    expect(screen.getByText('Delete Radio? It has no tasks.')).toBeInTheDocument();
+  });
+
+  it('does not carry an open question from one list to the next', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'House{Enter}');
+
+    await user.click(screen.getByRole('button', { name: 'Delete project House' }));
+    await user.click(screen.getByRole('button', { name: 'Radio' }));
+
+    // Still open, it would be asking about Radio with a press that was made on
+    // House, one Enter away from deleting the wrong project.
+    expect(screen.queryByRole('button', { name: 'Delete project' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete project Radio' })).toBeInTheDocument();
+  });
+
+  it('never offers to delete the built-in project, and refuses if asked anyway', async () => {
+    const { user, store } = setup();
+    await addTask(user, 'Rewire the bench');
+    // The Inbox is usually implicit. A stored one is listed like any project,
+    // and it is where every task added from Today is filed.
+    act(() => {
+      store.merge([
+        newEvent({
+          deviceId: 'phone',
+          type: 'create',
+          entity: 'project',
+          entityId: 'inbox',
+          payload: { title: 'Inbox', color: '#4a6670', isArchived: false },
+          ts: NOW + 60_000,
+        }),
+      ]);
+    });
+
+    await user.click(screen.getByRole('button', { name: /^Inbox/ }));
+    expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
+
+    act(() => store.deleteProject('inbox'));
+    const { state } = store.getSnapshot();
+    expect(Object.keys(state.projects)).toEqual(['inbox']);
+    expect(Object.values(state.tasks).map(t => t.title)).toEqual(['Rewire the bench']);
+  });
+
+  it('gives every control in the shell an accessible name, on a project as well as on Today', async () => {
+    const { container, user } = setup();
+    await user.click(screen.getByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('New project name'), 'Radio{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Delete project Radio' }));
+    for (const control of container.querySelectorAll('button, input, [role="checkbox"]')) {
+      expect(control, control.outerHTML).toHaveAccessibleName();
+    }
   });
 
   it('gives every control in the shell an accessible name', () => {

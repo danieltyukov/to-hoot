@@ -173,6 +173,22 @@ export function TagGlyph(props: GlyphProps) {
   );
 }
 
+/** A bin: lid, handle and two ribs. The control around it says what gets deleted. */
+export function BinGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M3.5 4.6 H12.5 M6.4 4.6 V3.3 H9.6 V4.6 M4.7 4.6 L5.2 12.2 A1 1 0 0 0 6.2 13.1 H9.8 A1 1 0 0 0 10.8 12.2 L11.3 4.6 M6.9 7.1 V10.6 M9.1 7.1 V10.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Glyph>
+  );
+}
+
 export function GearGlyph(props: GlyphProps) {
   return (
     <Glyph {...props}>

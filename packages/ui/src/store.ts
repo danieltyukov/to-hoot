@@ -633,6 +633,46 @@ export class Store {
     return id;
   }
 
+  /**
+   * Deletes a project and every task filed in it.
+   *
+   * The tasks go with it because nothing would show them again. A task whose
+   * project is gone has no list of its own in the app, so one left behind is an
+   * open task nobody can reach to finish or to delete.
+   *
+   * A running timer on one of them is stopped first, as `deleteTask` does.
+   *
+   * The built-in project is refused: it is where every task added from Today is
+   * filed, so deleting it would take most of the tasks in the app.
+   */
+  deleteProject(projectId: string): void {
+    if (projectId === DEFAULT_PROJECT_ID) return;
+    const filed = Object.values(this.snapshot.state.tasks).filter(t => t.projectId === projectId);
+    const running = this.snapshot.runningTaskId;
+    const stopping = running !== null && filed.some(t => t.id === running);
+    const stopped = stopping ? this.stopEvents() : [];
+    this.commit(
+      [
+        ...stopped,
+        ...filed.map(t => this.event('delete', 'task', t.id, {})),
+        this.event('delete', 'project', projectId, {}),
+      ],
+      stopping ? { runningTaskId: null } : {},
+    );
+  }
+
+  /**
+   * Deletes a tag and leaves every task that carried it.
+   *
+   * One event, and no rewrite of each task's `tagIds`. Every reader already
+   * skips a tag id nothing answers to, and `tagIds` is last-write-wins on the
+   * whole array, so rewriting it here could undo a tag another device put on
+   * the same task in the meantime.
+   */
+  deleteTag(tagId: string): void {
+    this.commit([this.event('delete', 'tag', tagId, {})]);
+  }
+
   private stopEvents(): Event[] {
     const events = this.tracker.stop();
     this.flushedAt = null;
